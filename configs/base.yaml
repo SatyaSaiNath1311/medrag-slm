@@ -10,7 +10,7 @@ models:
     dtype: float16
   - name: gemma3-4b
     id: google/gemma-3-4b-it
-    dtype: float16      # if the smoke test reports non-finite logits, change to float32 (needs GPU T4 x2)
+    dtype: float32      # float16 overflows on T4 (smoke test: NaN logits). float32 uses both T4 GPUs.
     loader: gemma3
   - name: phi4-mini
     id: microsoft/Phi-4-mini-instruct
@@ -27,3 +27,55 @@ tiny_model:
   name: qwen3-0.6b
   id: Qwen/Qwen3-0.6B
   dtype: float32
+
+# ---------------- Phase 1: datasets ----------------
+data:
+  medqa_hf: GBaker/MedQA-USMLE-4-options
+  pubmedqa_hf: qiaojin/PubMedQA
+  pubmedqa_config: pqa_labeled
+  sizes:      {medqa_test: 500, medqa_val: 200, pubmedqa_test: 500, pubmedqa_val: 200, unans_test: 150, unans_val: 50}
+  tiny_sizes: {medqa_test: 10, medqa_val: 5, pubmedqa_test: 10, pubmedqa_val: 5, unans_test: 5, unans_val: 3}
+
+# ---------------- Phase 2: knowledge base ----------------
+corpus:
+  hf: MedRAG/textbooks
+  min_words: 20
+  min_docs: 100000        # full corpus has ~125k snippets; fewer means the download went wrong
+  tiny_rows: 2000
+  tiny_min_docs: 500
+
+# ---------------- Phase 3: indexing ----------------
+index:
+  max_words: 350
+  overlap_words: 50
+  article_encoder: ncbi/MedCPT-Article-Encoder
+  query_encoder: ncbi/MedCPT-Query-Encoder
+  article_max_length: 512
+  query_max_length: 512
+  batch_size: 64
+
+# ---------------- Phase 6: retrieval ----------------
+retrieval:
+  include_options: true
+  dense_k: 50
+  bm25_k: 50
+  rrf_k: 60
+  top_k: 20
+
+# ---------------- Phase 7: reranking ----------------
+rerank:
+  cross_encoder: ncbi/MedCPT-Cross-Encoder
+  max_length: 512
+  batch_size: 32
+  top_k: 5
+
+# ---------------- Phases 4, 5, 8: question answering ----------------
+qa:
+  batch_size: 8
+  max_new_tokens_baseline: 16
+  max_new_tokens_rag: 40
+  passage_max_chars: 1200
+  check_questions: 20
+  min_parse_rate: 0.9
+  tiny_min_parse_rate: 0.5
+  tiny_questions: 3

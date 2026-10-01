@@ -1,21 +1,29 @@
-"""Thin Kaggle runner: download the code from GitHub, install, run one step.
-All real logic lives in the GitHub repo, never in this file."""
+"""Kaggle runner B: question answering with the 5 models (Phases 4, 5, 8).
+Input: output of runner A (medrag-build), attached as a notebook input.
+Change MODE to "smoke" to re-run the setup smoke test instead."""
+import glob
 import os
 import subprocess
 import sys
 
-REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm"  # <- edit once
-STEP = ["-m", "src.smoke_test", "--config", "configs/base.yaml", "--out", "/kaggle/working/outputs/smoke"]
-
+REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm.git"
 CODE_DIR = "/tmp/medrag-slm"
+WORK = "/kaggle/working/work"
+MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
+TINY = os.environ.get("TINY", "0").lower() in ("1", "true", "yes")  # True to run tiny check on Kaggle
+MODELS = []                                # e.g. ["gemma3-4b"] or empty for all; or set env var MODELS="qwen3-4b"
+
+# Override from env var if provided
+if "MODELS" in os.environ and not MODELS:
+    MODELS = [m.strip() for m in os.environ["MODELS"].split(",") if m.strip()]
 
 
-def run(cmd, **kw):
+def run(cmd):
     print(">>", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True, **kw)
+    subprocess.run(cmd, check=True)
 
 
-# 1. Hugging Face token from Kaggle Secrets (attach it once: Add-ons -> Secrets -> HF_TOKEN)
+# 1. Hugging Face token from Kaggle Secrets
 try:
     from kaggle_secrets import UserSecretsClient
     os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
@@ -27,10 +35,56 @@ except Exception as e:  # noqa: BLE001
 run(["rm", "-rf", CODE_DIR])
 run(["git", "clone", "--depth", "1", REPO_URL, CODE_DIR])
 os.chdir(CODE_DIR)
-run(["git", "log", "-1", "--oneline"])  # records exactly which code version ran
-
-# 3. Install (torch is already on Kaggle and is NOT reinstalled)
+run(["git", "log", "-1", "--oneline"])
 run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
 
-# 4. Run the step
-run([sys.executable, *STEP])
+# Check for kaggle_runner/models.txt if MODELS is still empty
+models_file = "kaggle_runner/models.txt"
+if not MODELS and os.path.exists(models_file):
+    with open(models_file) as f:
+        MODELS = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+if MODELS:
+    print(f"Selected models to run: {MODELS}")
+if TINY:
+    print("TINY mode enabled: running on tiny scale")
+
+# Save environment freeze and nvidia-smi
+ENV_DIR = os.path.join(WORK, "env")
+os.makedirs(ENV_DIR, exist_ok=True)
+try:
+    with open(os.path.join(ENV_DIR, "environment.txt"), "w") as f:
+        subprocess.run([sys.executable, "-m", "pip", "freeze"], stdout=f, check=True)
+except Exception as e:
+    print(f"Warning writing pip freeze: {e}")
+
+try:
+    with open(os.path.join(ENV_DIR, "nvidia_smi.txt"), "w") as f:
+        subprocess.run(["nvidia-smi"], stdout=f, check=True)
+except Exception as e:
+    print(f"Warning writing nvidia-smi: {e}")
+
+if MODE == "smoke":
+    run([sys.executable, "-m", "src.smoke_test", "--config", "configs/base.yaml",
+         "--out", "/kaggle/working/outputs/smoke"])
+    sys.exit(0)
+
+# 3. Link runner A's output (phase1 ... phase7) into the work folder
+hits = glob.glob("/kaggle/input/**/phase7/evidence.jsonl", recursive=True)
+if not hits:
+    sys.exit("ERROR: medrag-build output not found. Attach it: Add Input -> Your Work -> medrag-build")
+build_dir = os.path.dirname(os.path.dirname(hits[0]))
+print("Using build output from:", build_dir)
+os.makedirs(WORK, exist_ok=True)
+for n in (1, 2, 3, 6, 7):
+    src_dir, dst = os.path.join(build_dir, f"phase{n}"), os.path.join(WORK, f"phase{n}")
+    if os.path.isdir(src_dir) and not os.path.exists(dst):
+        os.symlink(src_dir, dst)
+
+# 4. Run phases 4, 5, 8
+cmd = [sys.executable, "-m", "src.qa_pipeline", "--config", "configs/base.yaml", "--work", WORK]
+if TINY:
+    cmd.append("--tiny")
+if MODELS:
+    cmd += ["--models", *MODELS]
+run(cmd)
+print("\nRUNNER B COMPLETE: phases 4, 5, 8")

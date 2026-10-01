@@ -1,0 +1,7 @@
+# List model names from configs/base.yaml to run (one per line).
+# Leave all commented out (or file empty) to run all 5 models.
+# qwen3-1.7b
+# gemma3-4b
+# phi4-mini
+# qwen3-4b
+# smollm3-3b

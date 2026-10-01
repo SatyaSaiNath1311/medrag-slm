@@ -1,6 +1,6 @@
 {
-  "id": "satyasainath1311/medrag-slm-runner",
-  "title": "medrag-slm-runner",
+  "id": "satyasainath1311/medrag-build",
+  "title": "medrag-build",
   "code_file": "runner.py",
   "language": "python",
   "kernel_type": "script",
@@ -9,7 +9,5 @@
   "enable_internet": true,
   "dataset_sources": [],
   "competition_sources": [],
-  "kernel_sources": [
-    "satyasainath1311/medrag-build"
-  ]
+  "kernel_sources": []
 }
