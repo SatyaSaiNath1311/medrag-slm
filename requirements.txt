@@ -1,0 +1,7 @@
+# torch is PREINSTALLED on Kaggle - never add it here (reinstalling it is the #1 cause of setup errors).
+# Locally, install torch separately first (see README step 2).
+transformers>=4.56
+accelerate>=1.0
+huggingface_hub>=0.30
+pyyaml
+packaging

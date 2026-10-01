@@ -1,0 +1,29 @@
+# Single source of truth for the whole project. Every number lives here.
+seed: 42
+
+smoke_test:
+  max_new_tokens: 32
+
+models:
+  - name: qwen3-1.7b
+    id: Qwen/Qwen3-1.7B
+    dtype: float16
+  - name: gemma3-4b
+    id: google/gemma-3-4b-it
+    dtype: float16      # if the smoke test reports non-finite logits, change to float32 (needs GPU T4 x2)
+    loader: gemma3
+  - name: phi4-mini
+    id: microsoft/Phi-4-mini-instruct
+    dtype: float16
+  - name: qwen3-4b
+    id: Qwen/Qwen3-4B
+    dtype: float16
+  - name: smollm3-3b
+    id: HuggingFaceTB/SmolLM3-3B
+    dtype: float16
+
+# Used only for quick local checks on your laptop (CPU), never for results.
+tiny_model:
+  name: qwen3-0.6b
+  id: Qwen/Qwen3-0.6B
+  dtype: float32
