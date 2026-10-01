@@ -162,6 +162,7 @@ def main():
     ap.add_argument("--models", nargs="*", help="Only these model names")
     ap.add_argument("--keep-cache", action="store_true", help="Do not delete model files after use")
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
+    ap.add_argument("--dry-run", action="store_true", help="Print selected models and exit without running")
     args = ap.parse_args()
     cfg = load_config(args.config)
     set_seed(cfg["seed"])
@@ -177,9 +178,21 @@ def main():
     if missing:
         raise AssertionError(f"[CHECK FAILED] {len(missing)} questions have no Phase 7 evidence")
 
-    models = [cfg["tiny_model"]] if args.tiny else cfg["models"]
+    all_models = {m["name"]: m for m in cfg["models"] + [cfg["tiny_model"]]}
     if args.models:
-        models = [m for m in models if m["name"] in args.models]
+        unknown = [name for name in args.models if name not in all_models]
+        if unknown:
+            raise ValueError(f"Unknown model name(s): {unknown}. Available models: {list(all_models.keys())}")
+        models = [all_models[name] for name in args.models]
+    elif args.tiny:
+        models = [cfg["tiny_model"]]
+    else:
+        models = cfg["models"]
+
+    if args.dry_run:
+        print(f"Selected {len(models)} model(s): {[m['name'] for m in models]}")
+        return
+
     threshold = qcfg["tiny_min_parse_rate"] if args.tiny else qcfg["min_parse_rate"]
     if args.tiny:
         test = sample_stratified_tiny(test, qcfg["tiny_questions"], cfg["seed"])

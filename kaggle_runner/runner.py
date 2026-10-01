@@ -10,11 +10,13 @@ REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm.git"
 CODE_DIR = "/tmp/medrag-slm"
 WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
-TINY = os.environ.get("TINY", "0").lower() in ("1", "true", "yes")  # True to run tiny check on Kaggle
-MODELS = []                                # e.g. ["gemma3-4b"] or empty for all; or set env var MODELS="qwen3-4b"
+TINY = True                                # set to True for tiny check on Kaggle
+MODELS = ["qwen3-1.7b", "gemma3-4b", "phi4-mini", "qwen3-4b", "smollm3-3b"]
 
 # Override from env var if provided
-if "MODELS" in os.environ and not MODELS:
+if "TINY" in os.environ:
+    TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
+if "MODELS" in os.environ:
     MODELS = [m.strip() for m in os.environ["MODELS"].split(",") if m.strip()]
 
 
