@@ -136,11 +136,13 @@ def format_check(llm, val, evidence, qcfg, n, threshold):
                                      qcfg[f"max_new_tokens_{mode}"])
         parsed = [parse_answer(r["raw_output"], q["options"]) is not None for q, r in zip(sample, res)]
         rate = sum(parsed) / len(parsed)
+        fallback_count = sum(not p and r.get("letter_probs") is not None for p, r in zip(parsed, res))
         report[mode] = {"parse_rate": round(rate, 3),
+                        "fallback_count": fallback_count,
                         "letter_prob_rate": round(sum(r["letter_probs"] is not None for r in res) / len(res), 3),
-                        "examples": [r["raw_output"][:150] for r in res[:3]],
+                        "examples": [r["raw_output"][:150] for r in res[:2]],
                         "unparsed_examples": [r["raw_output"][:150] for r, p in zip(res, parsed) if not p][:3]}
-        print(f"  check {mode}: parse rate {rate:.0%}, examples: {report[mode]['examples'][:2]}")
+        print(f"  check {mode}: parse rate {rate:.0%}, fallback count {fallback_count}, examples: {report[mode]['examples'][:2]}")
     report["passed"] = all(report[m]["parse_rate"] >= threshold for m in ("baseline", "rag"))
     return report
 
@@ -163,6 +165,7 @@ def main():
     ap.add_argument("--keep-cache", action="store_true", help="Do not delete model files after use")
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
     ap.add_argument("--dry-run", action="store_true", help="Print selected models and exit without running")
+    ap.add_argument("--check-only", action="store_true", help="Run only Phase 4 format check for selected models and exit")
     args = ap.parse_args()
     cfg = load_config(args.config)
     set_seed(cfg["seed"])
@@ -190,31 +193,40 @@ def main():
         models = cfg["models"]
 
     if args.dry_run:
-        print(f"Selected {len(models)} model(s): {[m['name'] for m in models]}")
+        mode_str = " (check-only)" if args.check_only else ""
+        print(f"Selected {len(models)} model(s){mode_str}: {[m['name'] for m in models]}")
         return
 
-    threshold = qcfg["tiny_min_parse_rate"] if args.tiny else qcfg["min_parse_rate"]
+    if args.check_only:
+        n_check = qcfg["check_questions"]
+        threshold = qcfg["min_parse_rate"]
+    else:
+        n_check = 5 if args.tiny else qcfg["check_questions"]
+        threshold = qcfg["tiny_min_parse_rate"] if args.tiny else qcfg["min_parse_rate"]
+
     if args.tiny:
         test = sample_stratified_tiny(test, qcfg["tiny_questions"], cfg["seed"])
         val = sample_stratified_tiny(val, qcfg["tiny_questions"], cfg["seed"] + 1)
         questions = test + val
 
     status = {}
+    check_reports = {}
     for m in models:
         banner(f"MODEL {m['name']} ({m['id']}, {m['dtype']}) on {device}")
         try:
             t0 = time.time()
             llm = LLM(m, device)
             print(f"  loaded in {time.time() - t0:.0f}s")
-            n_check = 5 if args.tiny else qcfg["check_questions"]
             check = format_check(llm, val, evidence, qcfg, n_check, threshold)
+            check_reports[m["name"]] = check
             (p4 / f"{m['name']}.json").write_text(json.dumps(check, indent=2))
             if not check["passed"]:
                 status[m["name"]] = "FAILED format check (see phase4/%s.json)" % m["name"]
                 print(f"  !! {status[m['name']]}")
             else:
-                run_mode(llm, "baseline", questions, evidence, qcfg, p5 / f"{m['name']}.jsonl")
-                run_mode(llm, "rag", questions, evidence, qcfg, p8 / f"{m['name']}.jsonl")
+                if not args.check_only:
+                    run_mode(llm, "baseline", questions, evidence, qcfg, p5 / f"{m['name']}.jsonl")
+                    run_mode(llm, "rag", questions, evidence, qcfg, p8 / f"{m['name']}.jsonl")
                 status[m["name"]] = "DONE"
             llm.close()
         except Exception as e:  # noqa: BLE001 - one broken model must not stop the others
@@ -223,6 +235,36 @@ def main():
             status[m["name"]] = f"ERROR: {type(e).__name__}: {str(e)[:200]}"
         if device == "cuda" and not args.keep_cache:
             delete_from_cache(m["id"])
+
+    if args.check_only:
+        banner("PHASE 4 FORMAT CHECK SUMMARY")
+        print(f"{'model':<14}{'baseline parse':<16}{'RAG parse':<12}{'fallback count':<16}{'status':<10}")
+        print("-" * 68)
+        for m in models:
+            name = m["name"]
+            chk = check_reports.get(name, {})
+            b_pr = str(chk.get("baseline", {}).get("parse_rate", "-"))
+            r_pr = str(chk.get("rag", {}).get("parse_rate", "-"))
+            b_fb = chk.get("baseline", {}).get("fallback_count", 0)
+            r_fb = chk.get("rag", {}).get("fallback_count", 0)
+            total_fb = f"{b_fb}/{r_fb}" if (b_fb or r_fb) else "0"
+            st = "PASS" if chk.get("passed") else ("FAIL" if name in check_reports else "ERROR")
+            print(f"{name:<14}{b_pr:<16}{r_pr:<12}{total_fb:<16}{st:<10}")
+            if name in check_reports:
+                print("  Baseline example outputs:")
+                for ex in chk.get("baseline", {}).get("examples", [])[:2]:
+                    print(f"    - {ex!r}")
+                print("  RAG example outputs:")
+                for ex in chk.get("rag", {}).get("examples", [])[:2]:
+                    print(f"    - {ex!r}")
+                print()
+        write_manifest(p4, {"phase": 4, "tiny": args.tiny, "check_only": True, "device": device,
+                            "status": status, "settings": qcfg})
+        ok = all(v == "DONE" for v in status.values())
+        print(f"\nPHASE 4 FORMAT CHECK {'COMPLETE' if ok else 'FINISHED WITH PROBLEMS'}")
+        if args.strict and not ok:
+            raise SystemExit(1)
+        return
 
     banner("RESULTS SO FAR (test set)")
     summary = {}

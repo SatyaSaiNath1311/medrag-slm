@@ -10,10 +10,13 @@ REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm.git"
 CODE_DIR = "/tmp/medrag-slm"
 WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
-TINY = False
-MODELS = ["qwen3-1.7b"]
+CHECK_ONLY = True                          # when True, run only Phase 4 format check
+TINY = False                               # set to True for tiny check on Kaggle
+MODELS = ["qwen3-1.7b", "gemma3-4b", "phi4-mini", "qwen3-4b", "smollm3-3b"]
 
 # Override from env var if provided
+if "CHECK_ONLY" in os.environ:
+    CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
 if "TINY" in os.environ:
     TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
 if "MODELS" in os.environ:
@@ -84,9 +87,11 @@ for n in (1, 2, 3, 6, 7):
 
 # 4. Run phases 4, 5, 8
 cmd = [sys.executable, "-m", "src.qa_pipeline", "--config", "configs/base.yaml", "--work", WORK]
+if CHECK_ONLY:
+    cmd.append("--check-only")
 if TINY:
     cmd.append("--tiny")
 if MODELS:
     cmd += ["--models", *MODELS]
 run(cmd)
-print("\nRUNNER B COMPLETE: phases 4, 5, 8")
+print("\nRUNNER B COMPLETE: " + ("phase 4 format check" if CHECK_ONLY else "phases 4, 5, 8"))
