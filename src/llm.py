@@ -30,6 +30,16 @@ def rag_prompt(q, passages, max_chars):
             f"Question: {q['question']}\nOptions:\n{_options_block(q)}\n\n{FORMAT_RAG}")
 
 
+def context_prompt(q, max_chars=None):
+    """PubMedQA standard context prompt: single evidence passage containing the abstract."""
+    abstract = q.get("context") or ""
+    if max_chars is not None and len(abstract) > max_chars:
+        abstract = abstract[:max_chars]
+    ev = f"[1] (Abstract) {abstract}"
+    return (f"{PROMPT_HEAD} Use the numbered evidence passages.\n\nEvidence:\n{ev}\n\n"
+            f"Question: {q['question']}\nOptions:\n{_options_block(q)}\n\n{FORMAT_RAG}")
+
+
 # ---------- parsing ----------
 def parse_answer(text, options):
     t = re.sub(r"</?\s*(?:letter|answer)\s*>", " ", text, flags=re.I).strip()

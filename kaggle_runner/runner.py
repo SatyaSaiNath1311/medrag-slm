@@ -12,8 +12,8 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["gemma3-4b"]
-MODES = ["rag"]                            # modes to run: "baseline", "rag", or both
+MODELS = ["qwen3-1.7b", "phi4-mini", "qwen3-4b", "smollm3-3b"]
+MODES = ["context"]
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
@@ -123,4 +123,4 @@ if MODELS:
 if MODES:
     cmd += ["--modes", *MODES]
 run(cmd)
-print("\nRUNNER B COMPLETE: " + ("phase 4 format check" if CHECK_ONLY else "phases 4, 5, 8"))
+print("\nRUNNER B COMPLETE: " + ("phase 4 format check" if CHECK_ONLY else f"modes {MODES}"))

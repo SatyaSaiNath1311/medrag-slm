@@ -65,16 +65,36 @@ def load_medqa(cfg, stats):
     return out
 
 
+def format_pubmedqa_context(c):
+    """Format PubMedQA context paragraphs with section labels."""
+    if not c:
+        return ""
+    ctxs = c.get("contexts", [])
+    lbls = c.get("labels", [])
+    parts = []
+    for i, t in enumerate(ctxs):
+        t = norm_space(t) if t else ""
+        if not t:
+            continue
+        if lbls and i < len(lbls) and lbls[i]:
+            parts.append(f"{lbls[i].strip()}: {t}")
+        else:
+            parts.append(t)
+    return "\n\n".join(parts)
+
+
 def load_pubmedqa(cfg, stats):
     ds = load_dataset(cfg["data"]["pubmedqa_hf"], cfg["data"]["pubmedqa_config"], split="train")
     mapping = {"yes": "A", "no": "B", "maybe": "C"}
     rows = []
     for r in ds:
+        ctx = format_pubmedqa_context(r.get("context"))
         rows.append({"id": f"pubmedqa-{r['pubid']}", "dataset": "pubmedqa",
                      "question": norm_space(r["question"]),
                      "options": {"A": "yes", "B": "no", "C": "maybe"},
                      "answer": mapping.get(str(r["final_decision"]).strip().lower()),
-                     "should_abstain": False, "source_id": None})
+                     "should_abstain": False, "source_id": str(r["pubid"]),
+                     "context": ctx})
     stats["pubmedqa_raw"] = len(rows)
     return clean_mcq(rows, 3, stats, "pubmedqa")
 
@@ -144,6 +164,8 @@ def main():
           "every answerable question has a valid answer letter")
     check(all(r["answer"] is None and len(r["options"]) == 3 for r in unans_test + unans_val),
           "every unanswerable question has no answer and 3 options")
+    check(all(bool(r.get("context")) for r in all_rows if r["dataset"] == "pubmedqa"),
+          "every PubMedQA question has non-empty context")
 
     write_jsonl(out / "test.jsonl", test)
     write_jsonl(out / "validation.jsonl", val)
