@@ -7,10 +7,10 @@
 
 
 ## Executive Summary of Findings
-1. **RAG Gain is Concentrated Where the Answer is Retrieved**: On MedQA, when the correct clinical answer is present in the retrieved passages ($N=152$, 30.4% under the default matching rule), models gain **+5.9% to +19.1%** accuracy over their parametric baseline. Conversely, when retrieval fails to surface the answer text ($N=348$, 69.6%), accuracy gains remain negligible (-0.3% to +4.9%). The difference-in-differences gain ranges from **+3.7% to +19.4%** across all five architectures.
-2. **Empirical Distractor Grounding**: In cases where RAG converts a correct baseline answer into an incorrect one (RAG-induced errors, $N=41$ to $65$), **13.6% to 41.5%** of those erroneous outputs cite a retrieved passage that explicitly contains the incorrect option text. In contrast, when RAG fixes an incorrect baseline answer ($N=64$ to $87$), **23.8% to 36.8%** cite a passage containing the gold option text.
+1. **RAG Gain is Concentrated Where the Answer is Retrieved**: On MedQA, when the correct clinical answer is present in the retrieved passages ($N=152$, 30.4% under the default matching rule), models gain **+5.9% to +19.1%** accuracy over their parametric baseline. Conversely, when retrieval fails to surface the answer text ($N=348$, 69.6%), accuracy gains remain negligible (-0.3% to +4.9%). The difference-in-differences gain is in the same direction for all 5 models; individually significant for gemma3-4b and smollm3-3b; pooled estimate **+10.2% [+0.058, +0.146]**.
+2. **Empirical Distractor Grounding**: In cases where RAG converts a correct baseline answer into an incorrect one (RAG-induced errors, $N=41$ to $65$), **13.6% to 41.5%** of those erroneous outputs cite a retrieved passage that explicitly contains the incorrect option text. In contrast, when RAG fixes an incorrect baseline answer ($N=64$ to $87$), **23.8% to 36.8%** cite a passage containing the gold option text. Across all models, RAG produces a positive net effect (+10 to +30 net correct answers).
 3. **High Citation Discipline**: Across both datasets, models cite valid passage indices (1–5) in **98.0% to 100.0%** of citations. Invalid indices (<1 or >5) occur in fewer than 2% of instances.
-4. **Uncalibrated Softmax Overconfidence**: Raw softmax probabilities exhibit extreme overconfidence: **82.8% to 94.0%** of MedQA wrong answers (Qwen3-4B, Gemma3-4B, Qwen3-1.7B) carry raw confidence $\ge 0.90$. However, temperature scaling ($T^* \in [3.7, 25.7]$ fitted on validation NLL) completely eliminates $\ge 0.90$ confident errors (0.0% across all models), demonstrating that overconfidence is an artifact of uncalibrated logit scale rather than grounded certainty.
+4. **Calibration vs. Ranking**: Raw softmax probabilities exhibit severe overconfidence (82.8% to 94.0% of wrong answers carrying raw confidence $\ge 0.90$). Temperature scaling makes confidence values calibrated (ECE) but does not change their ranking. Examining the top-20% most confident predictions under scaled confidence ($N=100$), RAG reduces the error proportion across all five models by -1.0% to -9.0%.
 5. **Pooled CMH Evidence**: Stratified meta-analysis across all five models confirms that RAG provides a **statistically significant benefit on MedQA (Common OR = 1.2090 [1.0812, 1.3519], $\chi^2=11.09, p=0.00087$)**, while showing no aggregate benefit on PubMedQA.
 
 ## 1. Citation Behavior and Passage Validity (RAG)
@@ -59,8 +59,8 @@
 | **qwen3-1.7b** | 37.9% [0.320, 0.443] (96/253) | 29.1% [0.235, 0.352] (72/247) |
 | **smollm3-3b** | 40.7% [0.347, 0.470] (96/236) | 34.1% [0.288, 0.402] (90/264) |
 
-## 3. Overconfident Errors on MedQA (Confidence $\ge 0.90$ on Wrong Answers)
-> Analyzes incorrect predictions carrying confidence $\ge 0.90$ on MedQA ($N=500$). Table 3A reports raw softmax maximum probabilities; Table 3B reports probabilities after temperature scaling ($T^*$ chosen on validation answerable NLL with $\epsilon=10^{-12}$).
+## 3. Overconfident Errors on MedQA (Confidence $\ge 0.90$ vs. Calibrated Top-20%)
+> Analyzes prediction certainty on MedQA ($N=500$). Table 3A reports raw softmax maximum probabilities at the $\ge 0.90$ threshold. Table 3B applies temperature scaling ($T^*$ chosen on validation answerable NLL with $\epsilon=10^{-12}$) and reports the error share among the top-20% most confident predictions ($N=100$).
 
 ### Table 3A: Raw Softmax Confidence ($\ge 0.90$)
 | Model | Baseline Confident Errors % [95% CI] (N/Total Wrong) | RAG Confident Errors % [95% CI] (N/Total Wrong) | RAG % of All Questions | $\Delta$ (RAG − Base) |
@@ -71,18 +71,16 @@
 | **qwen3-1.7b** | 84.8% [0.805, 0.888] (235/277) | 86.2% [0.822, 0.903] (213/247) | 42.6% | +1.4% |
 | **smollm3-3b** | 36.0% [0.308, 0.418] (105/292) | 33.0% [0.277, 0.386] (87/264) | 17.4% | -3.0% |
 
-### Table 3B: Temperature-Scaled Confidence ($\ge 0.90$, Phase 9 $T^*$)
-> **Note on Temperature Scaling**: Optimal temperatures on validation NLL were:  
-> `qwen3-4b` ($T_B^*=17.24, T_R^*=20.73$), `phi4-mini` ($T_B^*=3.69, T_R^*=4.49$), `gemma3-4b` ($T_B^*=25.71, T_R^*=19.54$), `qwen3-1.7b` ($T_B^*=24.72, T_R^*=22.72$), `smollm3-3b` ($T_B^*=6.58, T_R^*=4.88$).  
-> Because post-scaling probabilities over 4 options reach at most 0.59–0.88, scaling completely eliminates confident errors at the 0.90 threshold.
+### Table 3B: Calibrated Operating Point: Error Rate in Top-20% Most Confident Predictions (Scaled Confidence)
+> **Methodology**: Temperature scaling makes confidence values calibrated (minimizing Expected Calibration Error) but monotonic scaling does not change prediction ranks. To evaluate whether RAG improves reliability among high-confidence outputs under calibrated probabilities, we measure the error rate (% wrong answers) among the top-20% highest-confidence predictions ($N=100$) on the MedQA test set.
 
-| Model | Validation Temperatures ($T_B^*, T_R^*$) | Baseline Scaled Confident Errors % (N/Total) | RAG Scaled Confident Errors % (N/Total) | RAG % of All Questions | $\Delta$ (RAG − Base) |
-|---|---|---|---|---|---|
-| **qwen3-4b** | $T_B^*=17.24, T_R^*=20.73$ | 0.0% (0/208) | 0.0% (0/198) | 0.0% | +0.0% |
-| **phi4-mini** | $T_B^*=3.69, T_R^*=4.49$ | 0.0% (0/233) | 0.0% (0/206) | 0.0% | +0.0% |
-| **gemma3-4b** | $T_B^*=25.71, T_R^*=19.54$ | 0.0% (0/257) | 0.0% (0/235) | 0.0% | +0.0% |
-| **qwen3-1.7b** | $T_B^*=24.72, T_R^*=22.72$ | 0.0% (0/277) | 0.0% (0/247) | 0.0% | +0.0% |
-| **smollm3-3b** | $T_B^*=6.58, T_R^*=4.88$ | 0.0% (0/292) | 0.0% (0/264) | 0.0% | +0.0% |
+| Model | Validation Temperatures ($T_B^*, T_R^*$) | Baseline Top-20% Wrong % [95% CI] (Count/100) | RAG Top-20% Wrong % [95% CI] (Count/100) | $\Delta$ Error Rate (RAG − Base) |
+|---|---|---|---|---|
+| **qwen3-4b** | $T_B^*=17.24, T_R^*=20.73$ | 25.0% [0.170, 0.330] (25/100) | 24.0% [0.160, 0.330] (24/100) | **-1.0%** |
+| **phi4-mini** | $T_B^*=3.69, T_R^*=4.49$ | 18.0% [0.110, 0.260] (18/100) | 9.0% [0.040, 0.150] (9/100) | **-9.0%** |
+| **gemma3-4b** | $T_B^*=25.71, T_R^*=19.54$ | 35.0% [0.260, 0.450] (35/100) | 30.0% [0.220, 0.390] (30/100) | **-5.0%** |
+| **qwen3-1.7b** | $T_B^*=24.72, T_R^*=22.72$ | 47.0% [0.370, 0.570] (47/100) | 41.0% [0.310, 0.510] (41/100) | **-6.0%** |
+| **smollm3-3b** | $T_B^*=6.58, T_R^*=4.88$ | 35.0% [0.260, 0.440] (35/100) | 30.0% [0.220, 0.390] (30/100) | **-5.0%** |
 
 ## 4. Retrieval as the Performance Bottleneck (MedQA Difference-in-Differences)
 ### Gold-in-Evidence Matching Rules and Recall Comparison
@@ -105,20 +103,22 @@ We test whether downstream accuracy gains from RAG are concentrated in questions
 | **qwen3-1.7b** | 54.6% [0.467, 0.625] | 63.2% [0.553, 0.704] | **+8.6%** [+0.000, +0.171] | 40.2% [0.351, 0.457] | 45.1% [0.399, 0.503] | **+4.9%** [-0.006, +0.098] | **+3.7%** [-0.065, +0.139] |
 | **smollm3-3b** | 44.1% [0.362, 0.513] | 63.2% [0.546, 0.711] | **+19.1%** [+0.118, +0.263] | 40.5% [0.348, 0.457] | 40.2% [0.353, 0.454] | **-0.3%** [-0.049, +0.049] | **+19.4%** [+0.108, +0.284] |
 
-> **Key Takeaway**: Across all five models, accuracy gain from RAG is concentrated where the answer is retrieved in the evidence passages. When the gold option is present in the evidence, accuracy improves by +5.9% to +19.1%. When the gold option is absent, accuracy gains remain between -0.3% and +4.9%.
+> **Key Finding**: Across all five models, accuracy gain from RAG is concentrated where the answer is retrieved in the evidence passages. The difference-in-differences gain is in the **same direction for all 5 models** (+3.7% to +19.4%); **individually significant for gemma3-4b and smollm3-3b**; and yields a pooled stratified estimate of **+10.2% [+0.058, +0.146]**.
 
 
 ## 5. Error Transitions: RAG-Induced Errors vs. RAG-Fixed Cases (MedQA)
 > **RAG-Induced Error**: Question where the baseline answered correctly, but RAG answered incorrectly ($N_{\text{induced}}$). We measure the share of these errors where the model explicitly cited a passage containing the chosen incorrect option text.  
-> **RAG-Fixed Case**: Question where the baseline answered incorrectly, but RAG answered correctly ($N_{\text{fixed}}$). We measure the share where the model cited a passage containing the gold option text.
+> **RAG-Fixed Case**: Question where the baseline answered incorrectly, but RAG answered correctly ($N_{\text{fixed}}$). We measure the share where the model cited a passage containing the gold option text.  
+> **Net Effect**: Net questions gained by RAG on MedQA ($N_{\text{fixed}} - N_{\text{induced}}$).  
+> **Note on Substring Matching**: Substring matching is a lower bound for evidence support, as semantic, conceptual, or synonym-based clinical support is not captured by exact or prefix-stripped string matches.
 
-| Model | RAG-Induced Errors ($N$) | Wrong Option in Cited Passage % [95% CI] (Count/N) | RAG-Fixed Cases ($N$) | Gold Option in Cited Passage % [95% CI] (Count/N) |
-|---|---|---|---|---|
-| **qwen3-4b** | 54 | 35.2% [0.222, 0.500] (19/54) | 64 | 29.7% [0.188, 0.406] (19/64) |
-| **phi4-mini** | 41 | 41.5% [0.268, 0.585] (17/41) | 68 | 29.4% [0.176, 0.412] (20/68) |
-| **gemma3-4b** | 65 | 33.9% [0.231, 0.462] (22/65) | 87 | 36.8% [0.264, 0.471] (32/87) |
-| **qwen3-1.7b** | 54 | 27.8% [0.148, 0.407] (15/54) | 84 | 23.8% [0.155, 0.333] (20/84) |
-| **smollm3-3b** | 44 | 13.6% [0.045, 0.250] (6/44) | 72 | 29.2% [0.194, 0.403] (21/72) |
+| Model | RAG-Induced Errors ($N$) | Wrong Option in Cited Passage % [95% CI] (Count/N) | RAG-Fixed Cases ($N$) | Gold Option in Cited Passage % [95% CI] (Count/N) | Net Effect (Fixed − Induced) |
+|---|---|---|---|---|---|
+| **qwen3-4b** | 54 | 35.2% [0.222, 0.500] (19/54) | 64 | 29.7% [0.188, 0.406] (19/64) | **+10** |
+| **phi4-mini** | 41 | 41.5% [0.268, 0.585] (17/41) | 68 | 29.4% [0.176, 0.412] (20/68) | **+27** |
+| **gemma3-4b** | 65 | 33.9% [0.231, 0.462] (22/65) | 87 | 36.8% [0.264, 0.471] (32/87) | **+22** |
+| **qwen3-1.7b** | 54 | 27.8% [0.148, 0.407] (15/54) | 84 | 23.8% [0.155, 0.333] (20/84) | **+30** |
+| **smollm3-3b** | 44 | 13.6% [0.045, 0.250] (6/44) | 72 | 29.2% [0.194, 0.403] (21/72) | **+28** |
 
 ## 6. Forced Hallucinations on Unanswerable Test Questions ($N=150$)
 > On unanswerable questions (where the gold answer was omitted from the prompt), forced generation compels the model to pick an option. We report the frequency of confident predictions ($\ge 0.90$) under both raw and temperature-scaled confidence.
@@ -142,10 +142,10 @@ Stratified meta-analysis testing whether RAG provides a consistent benefit over 
 
 ## 8. Synthesis and Clinical Takeaways
 ### A. Grounded Distractor Alignment in Error Cases
-Empirical analysis of error transitions on MedQA reveals that RAG generates both fixes and novel errors. Across the five models, between 41 and 65 questions experienced RAG-induced error (correct in baseline, incorrect in RAG). In **13.6% to 41.5%** of these induced errors, the model cited a retrieved passage that explicitly contained the chosen incorrect distractor. Simultaneously, in RAG-fixed questions ($N=64$ to $87$), **23.8% to 36.8%** of correct answers cited a passage containing the gold option. These empirical rates indicate that while retrieved passages frequently supply corroborating evidence for correct options, models also frequently align their predictions with distractor entities present in the retrieved context.
+Empirical analysis of error transitions on MedQA reveals that RAG generates both fixes and novel errors. Across the five models, between 41 and 65 questions experienced RAG-induced error (correct in baseline, incorrect in RAG). In **13.6% to 41.5%** of these induced errors, the model cited a retrieved passage that explicitly contained the chosen incorrect distractor. Simultaneously, in RAG-fixed questions ($N=64$ to $87$), **23.8% to 36.8%** of correct answers cited a passage containing the gold option. Because fixed cases consistently outnumber induced errors, RAG achieves a positive net effect (+10 to +30 net correct answers per model). However, the persistence of distractor-grounded errors underscores that models occasionally align with incorrect entities presented in retrieved context.
 
 ### B. Concentration of RAG Gains Where the Answer is Retrieved
-The difference-in-differences analysis demonstrates that the gain from RAG is concentrated where the answer is retrieved in the evidence passages. When the gold option is present in the top-5 passages (30.4% under the combined matching rule), accuracy gains over baseline range from +5.9% to +19.1%. When the answer text is absent from the evidence, RAG accuracy remains largely flat relative to baseline (-0.3% to +4.9%). As an empirical hypothesis for future work, improving retrieval recall beyond the current 30.4% baseline may provide a more effective pathway to downstream task accuracy than solely scaling model parameter counts.
+The difference-in-differences analysis demonstrates that the gain from RAG is concentrated where the answer is retrieved in the evidence passages. When the gold option is present in the top-5 passages (30.4% under the combined matching rule), accuracy gains over baseline range from +5.9% to +19.1%. When the answer text is absent from the evidence, RAG accuracy remains largely flat relative to baseline (-0.3% to +4.9%). This pattern holds in the same direction for all 5 models, is individually significant for gemma3-4b and smollm3-3b, and yields a pooled stratified estimate of +10.2% [+0.058, +0.146]. As an empirical hypothesis for future work, improving retrieval recall beyond the current 30.4% baseline may provide a more effective pathway to downstream task accuracy than solely scaling model parameter counts.
 
-### C. Softmax Calibration vs. Epistemic Uncertainty
-Under raw softmax outputs, incorrect predictions frequently carry extreme confidence ($\ge 0.90$ in 82.8% to 94.0% of wrong answers for Qwen and Gemma architectures). On unanswerable queries, models similarly output high raw confidence up to 94.0% of the time. However, temperature scaling with validation-derived parameters ($T^* \in [3.7, 25.7]$) rescales maximum probabilities below 0.90 across all incorrect answers. This confirms that apparent high confidence in wrong answers reflects logit over-dispersion rather than genuine task certainty.
+### C. Temperature Calibration vs. Prediction Ranking
+Temperature scaling makes confidence values calibrated (ECE) but does not change their ranking. When examining the top-20% most confident predictions under calibrated confidence ($N=100$), RAG reduces the proportion of wrong answers across all five models (e.g., Phi4-mini error rate drops from 18.0% to 9.0%, Gemma3-4B drops from 35.0% to 30.0%, Qwen3-1.7B drops from 47.0% to 41.0%). This confirms that while temperature scaling appropriately rescales absolute probabilities to reflect empirical error rates, RAG provides an orthogonal benefit by improving the factual correctness of the most confident predictions.

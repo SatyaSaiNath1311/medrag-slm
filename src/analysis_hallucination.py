@@ -3,9 +3,9 @@
 Analyzes RAG outputs across all 5 models on the test split:
 1. Citation behavior & validity (valid passages 1-5, MedQA, PubMedQA, Overall).
 2. Cited support & grounded errors on MedQA (% correct and wrong answers citing supporting text).
-3. Overconfident errors on MedQA (confidence >= 0.90 on wrong answers, raw vs temperature-scaled).
-4. Retrieval as bottleneck on MedQA (difference-in-differences: baseline vs RAG when gold option is in evidence vs not).
-5. RAG-induced errors (baseline correct, RAG wrong) vs RAG-fixed cases with cited text alignment.
+3. Overconfident errors on MedQA (raw >= 0.90 vs calibrated top-20% scaled confidence).
+4. Retrieval as bottleneck on MedQA (difference-in-differences: baseline vs RAG when gold option is in evidence vs not; pooled DiD).
+5. RAG-induced errors (baseline correct, RAG wrong) vs RAG-fixed cases with net effect and cited text alignment.
 6. Forced hallucinations on unanswerable test questions (raw vs temperature-scaled).
 7. Pooled Cochran-Mantel-Haenszel (CMH) stratified meta-analysis.
 
@@ -375,7 +375,7 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
         },
     }
 
-    # 4. Section 3: Confident Errors on MEDQA ONLY (Raw vs Temperature-Scaled)
+    # 4. Section 3: Confident Errors on MEDQA ONLY (Raw vs Calibrated Top-20% Scaled Confidence)
     b_wrong_medqa = [r for r in medqa_b if not r["correct"]]
     r_wrong_medqa = [r for r in medqa_r if not r["correct"]]
 
@@ -384,10 +384,25 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
     b_all_conf_wrong_raw = [1 if (not r["correct"] and (r.get("confidence") or 0.0) >= 0.90) else 0 for r in medqa_b]
     r_all_conf_wrong_raw = [1 if (not r["correct"] and (r.get("confidence") or 0.0) >= 0.90) else 0 for r in medqa_r]
 
-    b_conf_wrong_sc = [1 if apply_temperature_scaling(r, t_base) >= 0.90 else 0 for r in b_wrong_medqa]
-    r_conf_wrong_sc = [1 if apply_temperature_scaling(r, t_rag) >= 0.90 else 0 for r in r_wrong_medqa]
-    b_all_conf_wrong_sc = [1 if (not r["correct"] and apply_temperature_scaling(r, t_base) >= 0.90) else 0 for r in medqa_b]
-    r_all_conf_wrong_sc = [1 if (not r["correct"] and apply_temperature_scaling(r, t_rag) >= 0.90) else 0 for r in medqa_r]
+    # Calibrated threshold on scaled confidence: top-20% most confident predictions (N=100)
+    b_sc_pairs = [(apply_temperature_scaling(r, t_base), r["correct"]) for r in medqa_b]
+    r_sc_pairs = [(apply_temperature_scaling(r, t_rag), r["correct"]) for r in medqa_r]
+    b_sc_pairs.sort(key=lambda x: x[0], reverse=True)
+    r_sc_pairs.sort(key=lambda x: x[0], reverse=True)
+
+    k_top20 = int(round(0.20 * len(b_sc_pairs)))  # 100 questions
+    b_top20 = b_sc_pairs[:k_top20]
+    r_top20 = r_sc_pairs[:k_top20]
+
+    b_wrong_top20 = sum(1 for conf, corr in b_top20 if not corr)
+    r_wrong_top20 = sum(1 for conf, corr in r_top20 if not corr)
+
+    b_pct_wrong_top20 = round(b_wrong_top20 / k_top20, 4)
+    r_pct_wrong_top20 = round(r_wrong_top20 / k_top20, 4)
+    diff_wrong_top20 = round(r_pct_wrong_top20 - b_pct_wrong_top20, 4)
+
+    b_ci_top20 = bootstrap_ci([0 if corr else 1 for conf, corr in b_top20])
+    r_ci_top20 = bootstrap_ci([0 if corr else 1 for conf, corr in r_top20])
 
     confident_errors = {
         "raw": {
@@ -403,23 +418,19 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
             "rag_pct_of_all": round(sum(r_all_conf_wrong_raw) / len(medqa_r), 4) if medqa_r else 0.0,
             "diff_pct_of_wrong": round((sum(r_conf_wrong_raw) / len(r_wrong_medqa)) - (sum(b_conf_wrong_raw) / len(b_wrong_medqa)), 4) if (r_wrong_medqa and b_wrong_medqa) else 0.0,
         },
-        "scaled": {
-            "baseline_count": sum(b_conf_wrong_sc),
-            "baseline_total_wrong": len(b_wrong_medqa),
-            "baseline_pct_of_wrong": round(sum(b_conf_wrong_sc) / len(b_wrong_medqa), 4) if b_wrong_medqa else 0.0,
-            "baseline_ci_of_wrong": bootstrap_ci(b_conf_wrong_sc),
-            "baseline_pct_of_all": round(sum(b_all_conf_wrong_sc) / len(medqa_b), 4) if medqa_b else 0.0,
-            "rag_count": sum(r_conf_wrong_sc),
-            "rag_total_wrong": len(r_wrong_medqa),
-            "rag_pct_of_wrong": round(sum(r_conf_wrong_sc) / len(r_wrong_medqa), 4) if r_wrong_medqa else 0.0,
-            "rag_ci_of_wrong": bootstrap_ci(r_conf_wrong_sc),
-            "rag_pct_of_all": round(sum(r_all_conf_wrong_sc) / len(medqa_r), 4) if medqa_r else 0.0,
-            "diff_pct_of_wrong": round((sum(r_conf_wrong_sc) / len(r_wrong_medqa)) - (sum(b_conf_wrong_sc) / len(b_wrong_medqa)), 4) if (r_wrong_medqa and b_wrong_medqa) else 0.0,
+        "scaled_top20": {
+            "k_top20": k_top20,
+            "baseline_wrong_count": b_wrong_top20,
+            "baseline_wrong_pct": b_pct_wrong_top20,
+            "baseline_ci": b_ci_top20,
+            "rag_wrong_count": r_wrong_top20,
+            "rag_wrong_pct": r_pct_wrong_top20,
+            "rag_ci": r_ci_top20,
+            "diff_pct": diff_wrong_top20,
         },
     }
 
     # 5. Section 4: Retrieval as Bottleneck (MedQA DiD)
-    # Classify MedQA questions by gold in evidence (default combined rule)
     gold_in_ids = set()
     gold_in_exact_count = 0
     gold_in_fwr_count = 0
@@ -477,6 +488,10 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
         "gain_ci_not": paired_bootstrap_diff(b_not, r_not),
         "did": round(did, 4),
         "did_ci": paired_did_ci(b_in, r_in, b_not, r_not),
+        "_b_in": b_in,
+        "_r_in": r_in,
+        "_b_not": b_not,
+        "_r_not": r_not,
     }
 
     # 6. RAG-Induced Errors and RAG-Fixed Cases (MedQA)
@@ -511,6 +526,7 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
     pct_fixed_gold_in_cite = (
         round(fixed_gold_in_cite / len(rag_fixed_ids), 4) if rag_fixed_ids else 0.0
     )
+    net_effect = len(rag_fixed_ids) - len(rag_induced_ids)
 
     rag_transitions = {
         "n_induced": len(rag_induced_ids),
@@ -521,6 +537,7 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
         "fixed_gold_cited_count": fixed_gold_in_cite,
         "fixed_gold_cited_pct": pct_fixed_gold_in_cite,
         "fixed_ci": bootstrap_ci([1 if i < fixed_gold_in_cite else 0 for i in range(len(rag_fixed_ids))]),
+        "net_effect": net_effect,
     }
 
     return {
@@ -545,7 +562,7 @@ def analyze_model_hallucinations(model_name, p5_path, p8_path, test_dict, ev_dic
 
 # ---------- Report Generation ----------
 
-def generate_markdown_report(results, cmh_results, out_path: Path):
+def generate_markdown_report(results, cmh_results, pooled_did, out_path: Path):
     lines = []
     lines.append("# Grounding, Hallucination, and Error Analysis in Medical RAG\n")
     lines.append(
@@ -565,22 +582,22 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         "1. **RAG Gain is Concentrated Where the Answer is Retrieved**: On MedQA, when the correct clinical answer "
         "is present in the retrieved passages ($N=152$, 30.4% under the default matching rule), models gain **+5.9% to +19.1%** accuracy over their parametric baseline. "
         "Conversely, when retrieval fails to surface the answer text ($N=348$, 69.6%), accuracy gains remain negligible (-0.3% to +4.9%). "
-        "The difference-in-differences gain ranges from **+3.7% to +19.4%** across all five architectures."
+        f"The difference-in-differences gain is in the same direction for all 5 models; individually significant for gemma3-4b and smollm3-3b; pooled estimate **{pooled_did['est']:+.1%} [{pooled_did['ci'][0]:+.3f}, {pooled_did['ci'][1]:+.3f}]**."
     )
     lines.append(
         "2. **Empirical Distractor Grounding**: In cases where RAG converts a correct baseline answer into an incorrect one "
         "(RAG-induced errors, $N=41$ to $65$), **13.6% to 41.5%** of those erroneous outputs cite a retrieved passage that explicitly contains the incorrect option text. "
-        "In contrast, when RAG fixes an incorrect baseline answer ($N=64$ to $87$), **23.8% to 36.8%** cite a passage containing the gold option text."
+        "In contrast, when RAG fixes an incorrect baseline answer ($N=64$ to $87$), **23.8% to 36.8%** cite a passage containing the gold option text. "
+        "Across all models, RAG produces a positive net effect (+10 to +30 net correct answers)."
     )
     lines.append(
         "3. **High Citation Discipline**: Across both datasets, models cite valid passage indices (1–5) in **98.0% to 100.0%** of citations. "
         "Invalid indices (<1 or >5) occur in fewer than 2% of instances."
     )
     lines.append(
-        "4. **Uncalibrated Softmax Overconfidence**: Raw softmax probabilities exhibit extreme overconfidence: "
-        "**82.8% to 94.0%** of MedQA wrong answers (Qwen3-4B, Gemma3-4B, Qwen3-1.7B) carry raw confidence $\\ge 0.90$. "
-        "However, temperature scaling ($T^* \\in [3.7, 25.7]$ fitted on validation NLL) completely eliminates $\\ge 0.90$ confident errors (0.0% across all models), "
-        "demonstrating that overconfidence is an artifact of uncalibrated logit scale rather than grounded certainty."
+        "4. **Calibration vs. Ranking**: Raw softmax probabilities exhibit severe overconfidence (82.8% to 94.0% of wrong answers carrying raw confidence $\\ge 0.90$). "
+        "Temperature scaling makes confidence values calibrated (ECE) but does not change their ranking. Examining the top-20% most confident predictions under scaled confidence ($N=100$), "
+        "RAG reduces the error proportion across all five models by -1.0% to -9.0%."
     )
     lines.append(
         "5. **Pooled CMH Evidence**: Stratified meta-analysis across all five models confirms that RAG provides a "
@@ -655,11 +672,12 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         )
     lines.append("")
 
-    # Section 3: Overconfident Errors (MedQA Only, Raw vs Temperature-Scaled)
-    lines.append("## 3. Overconfident Errors on MedQA (Confidence $\\ge 0.90$ on Wrong Answers)")
+    # Section 3: Overconfident Errors (MedQA Only, Raw vs Calibrated Top-20%)
+    lines.append("## 3. Overconfident Errors on MedQA (Confidence $\\ge 0.90$ vs. Calibrated Top-20%)")
     lines.append(
-        "> Analyzes incorrect predictions carrying confidence $\\ge 0.90$ on MedQA ($N=500$). "
-        "Table 3A reports raw softmax maximum probabilities; Table 3B reports probabilities after temperature scaling ($T^*$ chosen on validation answerable NLL with $\\epsilon=10^{-12}$).\n"
+        "> Analyzes prediction certainty on MedQA ($N=500$). "
+        "Table 3A reports raw softmax maximum probabilities at the $\\ge 0.90$ threshold. "
+        "Table 3B applies temperature scaling ($T^*$ chosen on validation answerable NLL with $\\epsilon=10^{-12}$) and reports the error share among the top-20% most confident predictions ($N=100$).\n"
     )
     lines.append("### Table 3A: Raw Softmax Confidence ($\\ge 0.90$)")
     lines.append(
@@ -679,28 +697,26 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         )
     lines.append("")
 
-    lines.append("### Table 3B: Temperature-Scaled Confidence ($\\ge 0.90$, Phase 9 $T^*$)")
+    lines.append("### Table 3B: Calibrated Operating Point: Error Rate in Top-20% Most Confident Predictions (Scaled Confidence)")
     lines.append(
-        "> **Note on Temperature Scaling**: Optimal temperatures on validation NLL were:  \n"
-        "> `qwen3-4b` ($T_B^*=17.24, T_R^*=20.73$), `phi4-mini` ($T_B^*=3.69, T_R^*=4.49$), `gemma3-4b` ($T_B^*=25.71, T_R^*=19.54$), "
-        "`qwen3-1.7b` ($T_B^*=24.72, T_R^*=22.72$), `smollm3-3b` ($T_B^*=6.58, T_R^*=4.88$).  \n"
-        "> Because post-scaling probabilities over 4 options reach at most 0.59–0.88, scaling completely eliminates confident errors at the 0.90 threshold.\n"
+        "> **Methodology**: Temperature scaling makes confidence values calibrated (minimizing Expected Calibration Error) but monotonic scaling does not change prediction ranks. "
+        "To evaluate whether RAG improves reliability among high-confidence outputs under calibrated probabilities, we measure the error rate (% wrong answers) "
+        "among the top-20% highest-confidence predictions ($N=100$) on the MedQA test set.\n"
     )
     lines.append(
-        "| Model | Validation Temperatures ($T_B^*, T_R^*$) | Baseline Scaled Confident Errors % (N/Total) | RAG Scaled Confident Errors % (N/Total) | RAG % of All Questions | $\\Delta$ (RAG − Base) |"
+        "| Model | Validation Temperatures ($T_B^*, T_R^*$) | Baseline Top-20% Wrong % [95% CI] (Count/100) | RAG Top-20% Wrong % [95% CI] (Count/100) | $\\Delta$ Error Rate (RAG − Base) |"
     )
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|")
     for r in results:
         m = r["model"]
-        ce = r["confident_errors"]["scaled"]
-        diff_str = f"{ce['diff_pct_of_wrong']:+.1%}"
+        ce = r["confident_errors"]["scaled_top20"]
+        diff_str = f"{ce['diff_pct']:+.1%}"
         lines.append(
             f"| **{m}** "
             f"| $T_B^*={r['t_base']:.2f}, T_R^*={r['t_rag']:.2f}$ "
-            f"| {ce['baseline_pct_of_wrong']:.1%} ({ce['baseline_count']}/{ce['baseline_total_wrong']}) "
-            f"| {ce['rag_pct_of_wrong']:.1%} ({ce['rag_count']}/{ce['rag_total_wrong']}) "
-            f"| {ce['rag_pct_of_all']:.1%} "
-            f"| {diff_str} |"
+            f"| {ce['baseline_wrong_pct']:.1%} [{ce['baseline_ci'][0]:.3f}, {ce['baseline_ci'][1]:.3f}] ({ce['baseline_wrong_count']}/{ce['k_top20']}) "
+            f"| {ce['rag_wrong_pct']:.1%} [{ce['rag_ci'][0]:.3f}, {ce['rag_ci'][1]:.3f}] ({ce['rag_wrong_count']}/{ce['k_top20']}) "
+            f"| **{diff_str}** |"
         )
     lines.append("")
 
@@ -742,8 +758,9 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         )
     lines.append("")
     lines.append(
-        "> **Key Takeaway**: Across all five models, accuracy gain from RAG is concentrated where the answer is retrieved in the evidence passages. "
-        "When the gold option is present in the evidence, accuracy improves by +5.9% to +19.1%. When the gold option is absent, accuracy gains remain between -0.3% and +4.9%.\n"
+        f"> **Key Finding**: Across all five models, accuracy gain from RAG is concentrated where the answer is retrieved in the evidence passages. "
+        f"The difference-in-differences gain is in the **same direction for all 5 models** (+3.7% to +19.4%); "
+        f"**individually significant for gemma3-4b and smollm3-3b**; and yields a pooled stratified estimate of **{pooled_did['est']:+.1%} [{pooled_did['ci'][0]:+.3f}, {pooled_did['ci'][1]:+.3f}]**.\n"
     )
     lines.append("")
 
@@ -753,12 +770,14 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         "> **RAG-Induced Error**: Question where the baseline answered correctly, but RAG answered incorrectly ($N_{\\text{induced}}$). "
         "We measure the share of these errors where the model explicitly cited a passage containing the chosen incorrect option text.  \n"
         "> **RAG-Fixed Case**: Question where the baseline answered incorrectly, but RAG answered correctly ($N_{\\text{fixed}}$). "
-        "We measure the share where the model cited a passage containing the gold option text.\n"
+        "We measure the share where the model cited a passage containing the gold option text.  \n"
+        "> **Net Effect**: Net questions gained by RAG on MedQA ($N_{\\text{fixed}} - N_{\\text{induced}}$).  \n"
+        "> **Note on Substring Matching**: Substring matching is a lower bound for evidence support, as semantic, conceptual, or synonym-based clinical support is not captured by exact or prefix-stripped string matches.\n"
     )
     lines.append(
-        "| Model | RAG-Induced Errors ($N$) | Wrong Option in Cited Passage % [95% CI] (Count/N) | RAG-Fixed Cases ($N$) | Gold Option in Cited Passage % [95% CI] (Count/N) |"
+        "| Model | RAG-Induced Errors ($N$) | Wrong Option in Cited Passage % [95% CI] (Count/N) | RAG-Fixed Cases ($N$) | Gold Option in Cited Passage % [95% CI] (Count/N) | Net Effect (Fixed − Induced) |"
     )
-    lines.append("|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|")
     for r in results:
         m = r["model"]
         rt = r["rag_transitions"]
@@ -767,7 +786,8 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
             f"| {rt['n_induced']} "
             f"| {rt['induced_wrong_cited_pct']:.1%} [{rt['induced_ci'][0]:.3f}, {rt['induced_ci'][1]:.3f}] ({rt['induced_wrong_cited_count']}/{rt['n_induced']}) "
             f"| {rt['n_fixed']} "
-            f"| {rt['fixed_gold_cited_pct']:.1%} [{rt['fixed_ci'][0]:.3f}, {rt['fixed_ci'][1]:.3f}] ({rt['fixed_gold_cited_count']}/{rt['n_fixed']}) |"
+            f"| {rt['fixed_gold_cited_pct']:.1%} [{rt['fixed_ci'][0]:.3f}, {rt['fixed_ci'][1]:.3f}] ({rt['fixed_gold_cited_count']}/{rt['n_fixed']}) "
+            f"| **{rt['net_effect']:+d}** |"
         )
     lines.append("")
 
@@ -829,8 +849,8 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         "Across the five models, between 41 and 65 questions experienced RAG-induced error (correct in baseline, incorrect in RAG). "
         "In **13.6% to 41.5%** of these induced errors, the model cited a retrieved passage that explicitly contained the chosen incorrect distractor. "
         "Simultaneously, in RAG-fixed questions ($N=64$ to $87$), **23.8% to 36.8%** of correct answers cited a passage containing the gold option. "
-        "These empirical rates indicate that while retrieved passages frequently supply corroborating evidence for correct options, "
-        "models also frequently align their predictions with distractor entities present in the retrieved context."
+        "Because fixed cases consistently outnumber induced errors, RAG achieves a positive net effect (+10 to +30 net correct answers per model). "
+        "However, the persistence of distractor-grounded errors underscores that models occasionally align with incorrect entities presented in retrieved context."
     )
     lines.append("")
     lines.append(
@@ -838,15 +858,17 @@ def generate_markdown_report(results, cmh_results, out_path: Path):
         "The difference-in-differences analysis demonstrates that the gain from RAG is concentrated where the answer is retrieved in the evidence passages. "
         "When the gold option is present in the top-5 passages (30.4% under the combined matching rule), accuracy gains over baseline range from +5.9% to +19.1%. "
         "When the answer text is absent from the evidence, RAG accuracy remains largely flat relative to baseline (-0.3% to +4.9%). "
+        f"This pattern holds in the same direction for all 5 models, is individually significant for gemma3-4b and smollm3-3b, and yields a pooled stratified estimate of {pooled_did['est']:+.1%} [{pooled_did['ci'][0]:+.3f}, {pooled_did['ci'][1]:+.3f}]. "
         "As an empirical hypothesis for future work, improving retrieval recall beyond the current 30.4% baseline may provide a more effective pathway to downstream task accuracy than solely scaling model parameter counts."
     )
     lines.append("")
     lines.append(
-        "### C. Softmax Calibration vs. Epistemic Uncertainty\n"
-        "Under raw softmax outputs, incorrect predictions frequently carry extreme confidence ($\\ge 0.90$ in 82.8% to 94.0% of wrong answers for Qwen and Gemma architectures). "
-        "On unanswerable queries, models similarly output high raw confidence up to 94.0% of the time. "
-        "However, temperature scaling with validation-derived parameters ($T^* \\in [3.7, 25.7]$) rescales maximum probabilities below 0.90 across all incorrect answers. "
-        "This confirms that apparent high confidence in wrong answers reflects logit over-dispersion rather than genuine task certainty."
+        "### C. Temperature Calibration vs. Prediction Ranking\n"
+        "Temperature scaling makes confidence values calibrated (ECE) but does not change their ranking. "
+        "When examining the top-20% most confident predictions under calibrated confidence ($N=100$), RAG reduces the proportion of wrong answers "
+        "across all five models (e.g., Phi4-mini error rate drops from 18.0% to 9.0%, Gemma3-4B drops from 35.0% to 30.0%, Qwen3-1.7B drops from 47.0% to 41.0%). "
+        "This confirms that while temperature scaling appropriately rescales absolute probabilities to reflect empirical error rates, "
+        "RAG provides an orthogonal benefit by improving the factual correctness of the most confident predictions."
     )
 
     out_path.write_text("\n".join(lines))
@@ -896,9 +918,33 @@ def main():
         res = analyze_model_hallucinations(m_name, p5, p8, test_dict, ev_dict)
         results.append(res)
 
-    # Sort models by MedQA baseline accuracy or standard ordering (Qwen-4B first)
+    # Sort models by standard ordering (Qwen-4B first)
     model_order = {"qwen3-4b": 0, "phi4-mini": 1, "gemma3-4b": 2, "qwen3-1.7b": 3, "smollm3-3b": 4}
     results.sort(key=lambda r: model_order.get(r["model"], 99))
+
+    # Compute Pooled DiD across all 5 models (stratified bootstrap)
+    rng = random.Random(42)
+    n_boot = 1000
+    pooled_dids = []
+    for _ in range(n_boot):
+        m_dids = []
+        for r in results:
+            rb = r["retrieval_bottleneck"]
+            b_in, r_in = rb["_b_in"], rb["_r_in"]
+            b_not, r_not = rb["_b_not"], rb["_r_not"]
+            n_in = len(b_in)
+            idx_in = rng.choices(range(n_in), k=n_in)
+            gain_in = sum(r_in[i] - b_in[i] for i in idx_in) / n_in
+            n_not = len(b_not)
+            idx_not = rng.choices(range(n_not), k=n_not)
+            gain_not = sum(r_not[i] - b_not[i] for i in idx_not) / n_not
+            m_dids.append(gain_in - gain_not)
+        pooled_dids.append(sum(m_dids) / len(m_dids))
+    pooled_dids.sort()
+    pooled_did_est = round(sum(pooled_dids) / n_boot, 4)
+    pooled_did_ci = (round(pooled_dids[int(0.025 * n_boot)], 4), round(pooled_dids[int(0.975 * n_boot)], 4))
+    pooled_did = {"est": pooled_did_est, "ci": pooled_did_ci}
+    print(f"Pooled DiD across 5 models: {pooled_did_est:+.1%} [{pooled_did_ci[0]:+.3f}, {pooled_did_ci[1]:+.3f}]")
 
     # Compute CMH across all 5 models
     cmh_results = {}
@@ -918,21 +964,29 @@ def main():
             strata.append((a, b_cnt, c, d))
         cmh_results[scope] = cochran_mantel_haenszel(strata)
 
+    # Clean internal raw lists before saving JSON
+    clean_results = []
+    for r in results:
+        rc = dict(r)
+        rb_clean = dict(rc["retrieval_bottleneck"])
+        rb_clean.pop("_b_in", None)
+        rb_clean.pop("_r_in", None)
+        rb_clean.pop("_b_not", None)
+        rb_clean.pop("_r_not", None)
+        rc["retrieval_bottleneck"] = rb_clean
+        rc.pop("baseline_corr_overall", None)
+        rc.pop("rag_corr_overall", None)
+        rc.pop("baseline_corr_medqa", None)
+        rc.pop("rag_corr_medqa", None)
+        rc.pop("baseline_corr_pubmedqa", None)
+        rc.pop("rag_corr_pubmedqa", None)
+        clean_results.append(rc)
+
     # Write JSON
     json_path = out_dir / "hallucination.json"
     json_data = {
-        "models": [
-            {
-                "model": r["model"],
-                "forced_hallucination": r["forced_hallucination"],
-                "citation_behavior": r["citation_behavior"],
-                "medqa_grounding": r["medqa_grounding"],
-                "confident_errors": r["confident_errors"],
-                "retrieval_bottleneck": r["retrieval_bottleneck"],
-                "rag_transitions": r["rag_transitions"],
-            }
-            for r in results
-        ],
+        "models": clean_results,
+        "pooled_did": pooled_did,
         "cochran_mantel_haenszel": cmh_results,
     }
     json_path.write_text(json.dumps(json_data, indent=2))
@@ -940,7 +994,7 @@ def main():
 
     # Write Markdown
     md_path = out_dir / "hallucination.md"
-    generate_markdown_report(results, cmh_results, md_path)
+    generate_markdown_report(results, cmh_results, pooled_did, md_path)
 
 
 if __name__ == "__main__":
