@@ -12,7 +12,7 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = True                          # when True, run only Phase 4 format check
 TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["qwen3-1.7b", "gemma3-4b", "phi4-mini", "qwen3-4b", "smollm3-3b"]
+MODELS = ["gemma3-4b"]
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
@@ -21,6 +21,28 @@ if "TINY" in os.environ:
     TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
 if "MODELS" in os.environ:
     MODELS = [m.strip() for m in os.environ["MODELS"].split(",") if m.strip()]
+
+
+def print_kaggle_input_configs(max_depth=7):
+    base = "/kaggle/input"
+    if not os.path.exists(base):
+        print(f"{base} does not exist", flush=True)
+        return
+    print(f"Scanning {base} for config.json (max depth {max_depth}):", flush=True)
+    base_depth = base.rstrip(os.path.sep).count(os.path.sep)
+    found = []
+    for root, dirs, files in os.walk(base):
+        cur_depth = root.count(os.path.sep) - base_depth
+        if cur_depth >= max_depth:
+            dirs.clear()
+        if "config.json" in files:
+            found.append(root)
+            print(f"  found config.json: {root}", flush=True)
+    if not found:
+        print("  no config.json found under /kaggle/input", flush=True)
+
+
+print_kaggle_input_configs()
 
 
 def run(cmd):

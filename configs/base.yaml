@@ -13,6 +13,7 @@ models:
     dtype: float32      # float16 overflows on T4 (smoke test: NaN logits). float32 uses both T4 GPUs.
     loader: gemma3
     kaggle_path_glob: "/kaggle/input/gemma-3/transformers/gemma-3-4b-it/*"
+    kaggle_handle: "google/gemma-3/transformers/gemma-3-4b-it"
   - name: phi4-mini
     id: microsoft/Phi-4-mini-instruct
     dtype: float16

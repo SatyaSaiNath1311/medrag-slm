@@ -72,14 +72,69 @@ class LLM:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch, self.cfg, self.device = torch, mcfg, device
 
-        load_path = mcfg["id"]
-        load_source = f"hf {mcfg['id']}"
+        load_path = None
+        load_source = None
+
         if mcfg.get("kaggle_path_glob"):
-            matches = [p for p in glob.glob(mcfg["kaggle_path_glob"])
+            # a. the glob
+            pattern = mcfg["kaggle_path_glob"]
+            print(f"  attempting glob: {pattern}", flush=True)
+            matches = [p for p in glob.glob(pattern)
                        if os.path.isdir(p) and os.path.exists(os.path.join(p, "config.json"))]
             if matches:
                 load_path = matches[0]
                 load_source = f"kaggle-models {load_path}"
+                print(f"    found via glob: {load_path}", flush=True)
+            else:
+                print("    glob did not match any directory containing config.json", flush=True)
+
+            # b. a recursive search of /kaggle/input for a directory with config.json whose path contains "gemma-3-4b-it" (case-insensitive)
+            if load_path is None and os.path.exists("/kaggle/input"):
+                print("  attempting recursive search in /kaggle/input for 'gemma-3-4b-it' with config.json...", flush=True)
+                for root, dirs, files in os.walk("/kaggle/input"):
+                    if "gemma-3-4b-it" in root.lower() and "config.json" in files:
+                        load_path = root
+                        load_source = f"kaggle-models {load_path}"
+                        print(f"    found via recursive search: {load_path}", flush=True)
+                        break
+                if load_path is None:
+                    print("    recursive search found no matching directory with config.json", flush=True)
+
+            # c. if running on Kaggle (/kaggle/input exists): path = kagglehub.model_download(...)
+            if load_path is None and os.path.exists("/kaggle/input"):
+                handle = mcfg.get("kaggle_handle", "google/gemma-3/transformers/gemma-3-4b-it")
+                print(f"  attempting kagglehub.model_download({handle!r})...", flush=True)
+                try:
+                    import kagglehub
+                    hub_dir = kagglehub.model_download(handle)
+                    if hub_dir and os.path.isdir(hub_dir):
+                        if os.path.exists(os.path.join(hub_dir, "config.json")):
+                            load_path = hub_dir
+                        else:
+                            for root, dirs, files in os.walk(hub_dir):
+                                if "config.json" in files:
+                                    load_path = root
+                                    break
+                    if load_path:
+                        load_source = f"kagglehub {load_path}"
+                        print(f"    loaded via kagglehub: {load_path}", flush=True)
+                    else:
+                        print(f"    kagglehub downloaded to {hub_dir} but no config.json found", flush=True)
+                except Exception as e:
+                    print(f"    kagglehub.model_download failed: {e}", flush=True)
+
+            # d. otherwise HF with token; if no HF_TOKEN either, fail immediately
+            if load_path is None:
+                hf_token = os.environ.get("HF_TOKEN")
+                print("  attempting HF fallback...", flush=True)
+                if not hf_token:
+                    raise RuntimeError("Gemma not available from Kaggle Models (mount/kagglehub) and no HF token")
+                load_path = mcfg["id"]
+                load_source = f"hf {mcfg['id']}"
+        else:
+            load_path = mcfg["id"]
+            load_source = f"hf {mcfg['id']}"
+
         print(f"  source: {load_source}", flush=True)
         self.load_source = load_source
 
