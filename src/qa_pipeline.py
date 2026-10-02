@@ -15,12 +15,56 @@ Usage:
 """
 import json
 import random
+import threading
 import time
 from pathlib import Path
+
+import psutil
+import torch
 
 from src.common import (append_jsonl, banner, get_device, load_config, phase_args, phase_dir, read_jsonl,
                         set_seed, write_manifest)
 from src.llm import LLM, baseline_prompt, context_prompt, parse_answer, parse_citations, rag_prompt
+
+
+class RSSProfiler:
+    def __init__(self, interval_sec: float = 0.2):
+        self.interval_sec = interval_sec
+        self.process = psutil.Process()
+        self.peak_rss = self.process.memory_info().rss
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def _poll(self):
+        while not self._stop_event.is_set():
+            try:
+                rss = self.process.memory_info().rss
+                if rss > self.peak_rss:
+                    self.peak_rss = rss
+            except Exception:
+                pass
+            self._stop_event.wait(self.interval_sec)
+
+    def start(self):
+        try:
+            self.peak_rss = self.process.memory_info().rss
+        except Exception:
+            self.peak_rss = 0
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=1.0)
+        try:
+            rss = self.process.memory_info().rss
+            if rss > self.peak_rss:
+                self.peak_rss = rss
+        except Exception:
+            pass
+        return self.peak_rss
 
 
 def sample_stratified_tiny(rows, n_per_group, seed):
@@ -247,11 +291,131 @@ def delete_from_cache(model_id):
         print(f"  (cache cleanup skipped: {e})")
 
 
+def run_profiling(models, cfg, qcfg, questions, evidence, work_dir, device, keep_cache=False):
+    banner("PROFILING BENCHMARK")
+    profile_dir = Path(work_dir) / "profile"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    out_path = profile_dir / "profiling.json"
+
+    # Sample 20 test questions: 10 MedQA + 10 PubMedQA, fixed seed
+    rng = random.Random(42)
+    test_medqa = sorted(
+        [q for q in questions if q.get("split") == "test" and q.get("dataset") == "medqa" and not q.get("should_abstain")],
+        key=lambda q: q["id"],
+    )
+    test_pubmedqa = sorted(
+        [q for q in questions if q.get("split") == "test" and q.get("dataset") == "pubmedqa" and not q.get("should_abstain")],
+        key=lambda q: q["id"],
+    )
+    sample_medqa = rng.sample(test_medqa, min(10, len(test_medqa)))
+    sample_pubmedqa = rng.sample(test_pubmedqa, min(10, len(test_pubmedqa)))
+    questions_20 = sample_medqa + sample_pubmedqa
+
+    print(f"Profiling sample: {len(sample_medqa)} MedQA + {len(sample_pubmedqa)} PubMedQA = {len(questions_20)} total questions (seed 42)")
+
+    profiling_results = {}
+    if out_path.exists():
+        try:
+            profiling_results = json.loads(out_path.read_text())
+        except Exception:
+            pass
+
+    rss_profiler = RSSProfiler(interval_sec=0.2)
+
+    for m in models:
+        banner(f"PROFILING MODEL: {m['name']} ({m['id']}, {m['dtype']}) on {device}")
+        m_profile = {"model_id": m["id"], "modes": {}}
+
+        # Measure model load time
+        t_load0 = time.time()
+        llm = LLM(m, device)
+        load_time = time.time() - t_load0
+        m_profile["model_load_time_sec"] = round(load_time, 3)
+        print(f"  Model loaded in {load_time:.2f}s")
+
+        # Run modes: baseline, rag, context (PubMedQA only)
+        for mode in ("baseline", "rag", "context"):
+            if mode == "baseline":
+                mode_questions = questions_20
+                prompts = {q["id"]: baseline_prompt(q) for q in mode_questions}
+                bs = m.get("batch_size_baseline") or qcfg["batch_size"]
+                max_new = qcfg.get("max_new_tokens_baseline") or qcfg["max_new_tokens_rag"]
+            elif mode == "rag":
+                mode_questions = questions_20
+                prompts = {q["id"]: rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in mode_questions}
+                bs = m.get("batch_size_rag") or qcfg["batch_size"]
+                max_new = qcfg.get("max_new_tokens_rag") or qcfg["max_new_tokens_rag"]
+            elif mode == "context":
+                mode_questions = sample_pubmedqa  # PubMedQA only
+                max_chars = qcfg["passage_max_chars"] * 3
+                prompts = {q["id"]: context_prompt(q, max_chars) for q in mode_questions}
+                bs = m.get("batch_size_rag") or qcfg["batch_size"]
+                max_new = qcfg.get("max_new_tokens_context") or qcfg["max_new_tokens_rag"]
+
+            sorted_questions = sorted(mode_questions, key=lambda q: -len(prompts[q["id"]]))
+
+            # Reset peak memory stats before each mode
+            if torch.cuda.is_available():
+                for dev_idx in range(torch.cuda.device_count()):
+                    torch.cuda.reset_peak_memory_stats(dev_idx)
+
+            rss_profiler.start()
+            t_mode0 = time.time()
+
+            for s in range(0, len(sorted_questions), bs):
+                batch = sorted_questions[s:s + bs]
+                batch_prompts = [prompts[q["id"]] for q in batch]
+                batch_options = [list(q["options"]) for q in batch]
+                llm.generate_safe(batch_prompts, batch_options, max_new)
+
+            mode_duration = time.time() - t_mode0
+            peak_rss = rss_profiler.stop()
+            mean_s_per_q = mode_duration / len(sorted_questions) if sorted_questions else 0.0
+
+            # Record CUDA memory per GPU
+            cuda_mem = {}
+            if torch.cuda.is_available():
+                for dev_idx in range(torch.cuda.device_count()):
+                    alloc_bytes = torch.cuda.max_memory_allocated(dev_idx)
+                    res_bytes = torch.cuda.max_memory_reserved(dev_idx)
+                    cuda_mem[f"cuda:{dev_idx}"] = {
+                        "max_memory_allocated_bytes": alloc_bytes,
+                        "max_memory_allocated_mb": round(alloc_bytes / (1024 * 1024), 2),
+                        "max_memory_reserved_bytes": res_bytes,
+                        "max_memory_reserved_mb": round(res_bytes / (1024 * 1024), 2),
+                    }
+
+            m_profile["modes"][mode] = {
+                "num_questions": len(sorted_questions),
+                "mean_seconds_per_question": round(mean_s_per_q, 4),
+                "total_seconds": round(mode_duration, 2),
+                "peak_process_rss_bytes": peak_rss,
+                "peak_process_rss_mb": round(peak_rss / (1024 * 1024), 2),
+                "cuda_memory": cuda_mem,
+            }
+
+            vram_summary = ", ".join(f"{k}: {v['max_memory_reserved_mb']:.1f}MB" for k, v in cuda_mem.items()) or "N/A (CPU)"
+            print(f"  [{mode}] {len(sorted_questions)} questions in {mode_duration:.2f}s "
+                  f"({mean_s_per_q:.3f} s/q) | Peak RSS: {peak_rss / (1024*1024):.1f} MB | VRAM: {vram_summary}", flush=True)
+
+        llm.close()
+        if device == "cuda" and not keep_cache:
+            delete_from_cache(m["id"])
+
+        profiling_results[m["name"]] = m_profile
+        out_path.write_text(json.dumps(profiling_results, indent=2))
+        print(f"Updated {out_path} with profile for {m['name']}")
+
+    banner("PROFILING COMPLETE")
+    print(f"Saved profiling benchmark results to: {out_path}")
+
+
 def main():
     ap = phase_args("Phases 4, 5, 8, 10: model check, baseline QA, RAG QA, context QA")
     ap.add_argument("--models", nargs="*", help="Only these model names")
     ap.add_argument("--modes", nargs="+", choices=["baseline", "rag", "context"], default=None,
                     help="Which QA modes to run (choices: baseline, rag, context; default: baseline rag).")
+    ap.add_argument("--profile", action="store_true", help="Run profiling benchmark and write work/profile/profiling.json")
     ap.add_argument("--keep-cache", action="store_true", help="Do not delete model files after use")
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
     ap.add_argument("--dry-run", action="store_true", help="Print selected models and exit without running")
@@ -282,7 +446,7 @@ def main():
         models = cfg["models"]
 
     if args.dry_run:
-        mode_str = " (check-only)" if args.check_only else ""
+        mode_str = " (profile)" if args.profile else (" (check-only)" if args.check_only else "")
         print(f"Selected {len(models)} model(s){mode_str}: {[m['name'] for m in models]}")
         print(f"QA modes: {run_modes}" + ("  [skip Phase 4 + Phase 5]" if skip_checks else ""))
         return
@@ -294,17 +458,23 @@ def main():
     ensure_pubmedqa_contexts(questions, cfg)
     val_pool = list(val)
 
-    if "rag" in run_modes or args.check_only:
+    if "rag" in run_modes or args.check_only or args.profile:
         p7 = phase_dir(args.work, 7)
         if (p7 / "evidence.jsonl").exists():
             evidence = {r["id"]: r for r in read_jsonl(p7 / "evidence.jsonl")}
             missing = [q["id"] for q in questions if q["id"] not in evidence]
-            if missing:
+            if missing and not args.profile:
                 raise AssertionError(f"[CHECK FAILED] {len(missing)} questions have no Phase 7 evidence")
         else:
-            raise AssertionError(f"[CHECK FAILED] Phase 7 evidence not found at {p7 / 'evidence.jsonl'}")
+            if not args.profile:
+                raise AssertionError(f"[CHECK FAILED] Phase 7 evidence not found at {p7 / 'evidence.jsonl'}")
+            evidence = {}
     else:
         evidence = {}
+
+    if args.profile:
+        run_profiling(models, cfg, qcfg, questions, evidence, args.work, device, keep_cache=args.keep_cache)
+        return
 
     threshold = qcfg["tiny_min_parse_rate"] if (args.tiny and not args.check_only) else qcfg["min_parse_rate"]
 

@@ -11,13 +11,16 @@ CODE_DIR = "/tmp/medrag-slm"
 WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
+PROFILE = True
 TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["gemma3-4b"]
+MODELS = ["qwen3-4b", "phi4-mini", "gemma3-4b", "qwen3-1.7b", "smollm3-3b"]
 MODES = ["context"]
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
     CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
+if "PROFILE" in os.environ:
+    PROFILE = os.environ["PROFILE"].lower() in ("1", "true", "yes")
 if "TINY" in os.environ:
     TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
 if "MODELS" in os.environ:
@@ -77,6 +80,8 @@ if MODELS:
     print(f"Selected models to run: {MODELS}")
 if MODES:
     print(f"Selected modes to run: {MODES}")
+if PROFILE:
+    print("PROFILE mode enabled: running profiling benchmarks")
 if TINY:
     print("TINY mode enabled: running on tiny scale")
 
@@ -116,6 +121,8 @@ for n in (1, 2, 3, 6, 7):
 cmd = [sys.executable, "-m", "src.qa_pipeline", "--config", "configs/base.yaml", "--work", WORK]
 if CHECK_ONLY:
     cmd.append("--check-only")
+if PROFILE:
+    cmd.append("--profile")
 if TINY:
     cmd.append("--tiny")
 if MODELS:
@@ -123,4 +130,4 @@ if MODELS:
 if MODES:
     cmd += ["--modes", *MODES]
 run(cmd)
-print("\nRUNNER B COMPLETE: " + ("phase 4 format check" if CHECK_ONLY else f"modes {MODES}"))
+print("\nRUNNER B COMPLETE: " + ("profiling benchmark" if PROFILE else ("phase 4 format check" if CHECK_ONLY else f"modes {MODES}")))
