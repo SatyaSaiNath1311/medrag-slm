@@ -4,29 +4,50 @@
       "model": "qwen3-4b",
       "forced_hallucination": {
         "n_unanswerable": 150,
-        "baseline_count_conf90": 124,
-        "baseline_pct_conf90": 0.8267,
-        "baseline_ci": [
-          0.7667,
-          0.8867
-        ],
-        "rag_count_conf90": 132,
-        "rag_pct_conf90": 0.88,
-        "rag_ci": [
-          0.8267,
-          0.9267
-        ],
-        "diff": 0.0533,
-        "diff_ci": [
-          -0.0267,
-          0.1333
-        ]
+        "t_base": 17.24,
+        "t_rag": 20.73,
+        "raw": {
+          "baseline_count": 124,
+          "baseline_pct": 0.8267,
+          "baseline_ci": [
+            0.7667,
+            0.8867
+          ],
+          "rag_count": 132,
+          "rag_pct": 0.88,
+          "rag_ci": [
+            0.8267,
+            0.9267
+          ],
+          "diff": 0.0533,
+          "diff_ci": [
+            -0.0267,
+            0.1333
+          ]
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_pct": 0.0,
+          "baseline_ci": [
+            0.0,
+            0.0
+          ],
+          "rag_count": 0,
+          "rag_pct": 0.0,
+          "rag_ci": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "diff_ci": [
+            0.0,
+            0.0
+          ]
+        }
       },
-      "datasets": {
+      "citation_behavior": {
         "medqa": {
           "n_total": 500,
-          "n_correct": 302,
-          "n_wrong": 198,
           "any_citation": {
             "count": 500,
             "pct": 1.0,
@@ -39,59 +60,10 @@
             "total_raw": 1345,
             "valid_count": 1345,
             "pct": 1.0
-          },
-          "cited_support": {
-            "correct_count": 96,
-            "correct_pct": 0.3179,
-            "correct_ci": [
-              0.2682,
-              0.3742
-            ],
-            "wrong_count": 60,
-            "wrong_pct": 0.303,
-            "wrong_ci": [
-              0.2374,
-              0.3687
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 105,
-            "correct_pct": 0.3477,
-            "correct_ci": [
-              0.2947,
-              0.404
-            ],
-            "wrong_count": 65,
-            "wrong_pct": 0.3283,
-            "wrong_ci": [
-              0.2677,
-              0.3939
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 172,
-            "baseline_total_wrong": 208,
-            "baseline_pct_of_wrong": 0.8269,
-            "baseline_ci_of_wrong": [
-              0.774,
-              0.8798
-            ],
-            "baseline_pct_of_all": 0.344,
-            "rag_count": 164,
-            "rag_total_wrong": 198,
-            "rag_pct_of_wrong": 0.8283,
-            "rag_ci_of_wrong": [
-              0.7727,
-              0.8788
-            ],
-            "rag_pct_of_all": 0.328,
-            "diff_pct_of_wrong": 0.0014
           }
         },
         "pubmedqa": {
           "n_total": 500,
-          "n_correct": 242,
-          "n_wrong": 258,
           "any_citation": {
             "count": 499,
             "pct": 0.998,
@@ -104,59 +76,10 @@
             "total_raw": 1373,
             "valid_count": 1366,
             "pct": 0.9949
-          },
-          "cited_support": {
-            "correct_count": 241,
-            "correct_pct": 0.9959,
-            "correct_ci": [
-              0.9876,
-              1.0
-            ],
-            "wrong_count": 258,
-            "wrong_pct": 1.0,
-            "wrong_ci": [
-              1.0,
-              1.0
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 242,
-            "correct_pct": 1.0,
-            "correct_ci": [
-              1.0,
-              1.0
-            ],
-            "wrong_count": 258,
-            "wrong_pct": 1.0,
-            "wrong_ci": [
-              1.0,
-              1.0
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 214,
-            "baseline_total_wrong": 238,
-            "baseline_pct_of_wrong": 0.8992,
-            "baseline_ci_of_wrong": [
-              0.8571,
-              0.937
-            ],
-            "baseline_pct_of_all": 0.428,
-            "rag_count": 240,
-            "rag_total_wrong": 258,
-            "rag_pct_of_wrong": 0.9302,
-            "rag_ci_of_wrong": [
-              0.8953,
-              0.9612
-            ],
-            "rag_pct_of_all": 0.48,
-            "diff_pct_of_wrong": 0.0311
           }
         },
         "overall": {
           "n_total": 1000,
-          "n_correct": 544,
-          "n_wrong": 456,
           "any_citation": {
             "count": 999,
             "pct": 0.999,
@@ -169,73 +92,137 @@
             "total_raw": 2718,
             "valid_count": 2711,
             "pct": 0.9974
-          },
-          "cited_support": {
-            "correct_count": 337,
-            "correct_pct": 0.6195,
-            "correct_ci": [
-              0.579,
-              0.6618
-            ],
-            "wrong_count": 318,
-            "wrong_pct": 0.6974,
-            "wrong_ci": [
-              0.6535,
-              0.739
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 347,
-            "correct_pct": 0.6379,
-            "correct_ci": [
-              0.5974,
-              0.6783
-            ],
-            "wrong_count": 323,
-            "wrong_pct": 0.7083,
-            "wrong_ci": [
-              0.6645,
-              0.75
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 386,
-            "baseline_total_wrong": 446,
-            "baseline_pct_of_wrong": 0.8655,
-            "baseline_ci_of_wrong": [
-              0.8318,
-              0.8969
-            ],
-            "baseline_pct_of_all": 0.386,
-            "rag_count": 404,
-            "rag_total_wrong": 456,
-            "rag_pct_of_wrong": 0.886,
-            "rag_ci_of_wrong": [
-              0.8575,
-              0.9145
-            ],
-            "rag_pct_of_all": 0.404,
-            "diff_pct_of_wrong": 0.0205
           }
         }
       },
+      "medqa_grounding": {
+        "n_total": 500,
+        "n_correct": 302,
+        "n_wrong": 198,
+        "cited_support": {
+          "correct_count": 96,
+          "correct_pct": 0.3179,
+          "correct_ci": [
+            0.2682,
+            0.3742
+          ],
+          "wrong_count": 60,
+          "wrong_pct": 0.303,
+          "wrong_ci": [
+            0.2374,
+            0.3687
+          ]
+        },
+        "evidence_support": {
+          "correct_count": 105,
+          "correct_pct": 0.3477,
+          "correct_ci": [
+            0.2947,
+            0.404
+          ],
+          "wrong_count": 65,
+          "wrong_pct": 0.3283,
+          "wrong_ci": [
+            0.2677,
+            0.3939
+          ]
+        }
+      },
+      "confident_errors": {
+        "raw": {
+          "baseline_count": 172,
+          "baseline_total_wrong": 208,
+          "baseline_pct_of_wrong": 0.8269,
+          "baseline_ci_of_wrong": [
+            0.774,
+            0.8798
+          ],
+          "baseline_pct_of_all": 0.344,
+          "rag_count": 164,
+          "rag_total_wrong": 198,
+          "rag_pct_of_wrong": 0.8283,
+          "rag_ci_of_wrong": [
+            0.7727,
+            0.8788
+          ],
+          "rag_pct_of_all": 0.328,
+          "diff_pct_of_wrong": 0.0014
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_total_wrong": 208,
+          "baseline_pct_of_wrong": 0.0,
+          "baseline_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "baseline_pct_of_all": 0.0,
+          "rag_count": 0,
+          "rag_total_wrong": 198,
+          "rag_pct_of_wrong": 0.0,
+          "rag_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "rag_pct_of_all": 0.0,
+          "diff_pct_of_wrong": 0.0
+        }
+      },
       "retrieval_bottleneck": {
-        "n_gold_in_evidence": 152,
-        "acc_gold_in_evidence": 0.6908,
-        "ci_gold_in_evidence": [
+        "gold_in_exact_count": 94,
+        "gold_in_fwr_count": 114,
+        "n_gold_in": 152,
+        "base_acc_in": 0.6316,
+        "base_ci_in": [
+          0.5526,
+          0.7105
+        ],
+        "rag_acc_in": 0.6908,
+        "rag_ci_in": [
           0.6118,
           0.7632
         ],
-        "n_gold_not_in_evidence": 348,
-        "acc_gold_not_in_evidence": 0.5661,
-        "ci_gold_not_in_evidence": [
+        "gain_in": 0.0592,
+        "gain_ci_in": [
+          -0.0132,
+          0.1382
+        ],
+        "n_gold_not": 348,
+        "base_acc_not": 0.5632,
+        "base_ci_not": [
+          0.5115,
+          0.6121
+        ],
+        "rag_acc_not": 0.5661,
+        "rag_ci_not": [
           0.5115,
           0.6178
         ],
-        "diff": 0.1247,
-        "diff_ci": [
-          0.0388,
-          0.2168
+        "gain_not": 0.0029,
+        "gain_ci_not": [
+          -0.0489,
+          0.0603
+        ],
+        "did": 0.0563,
+        "did_ci": [
+          -0.0357,
+          0.1454
+        ]
+      },
+      "rag_transitions": {
+        "n_induced": 54,
+        "induced_wrong_cited_count": 19,
+        "induced_wrong_cited_pct": 0.3519,
+        "induced_ci": [
+          0.2222,
+          0.5
+        ],
+        "n_fixed": 64,
+        "fixed_gold_cited_count": 19,
+        "fixed_gold_cited_pct": 0.2969,
+        "fixed_ci": [
+          0.1875,
+          0.4062
         ]
       }
     },
@@ -243,29 +230,50 @@
       "model": "phi4-mini",
       "forced_hallucination": {
         "n_unanswerable": 150,
-        "baseline_count_conf90": 49,
-        "baseline_pct_conf90": 0.3267,
-        "baseline_ci": [
-          0.26,
-          0.4067
-        ],
-        "rag_count_conf90": 50,
-        "rag_pct_conf90": 0.3333,
-        "rag_ci": [
-          0.2533,
-          0.4067
-        ],
-        "diff": 0.0067,
-        "diff_ci": [
-          -0.1,
-          0.1067
-        ]
+        "t_base": 3.69,
+        "t_rag": 4.49,
+        "raw": {
+          "baseline_count": 49,
+          "baseline_pct": 0.3267,
+          "baseline_ci": [
+            0.26,
+            0.4067
+          ],
+          "rag_count": 50,
+          "rag_pct": 0.3333,
+          "rag_ci": [
+            0.2533,
+            0.4067
+          ],
+          "diff": 0.0067,
+          "diff_ci": [
+            -0.1,
+            0.1067
+          ]
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_pct": 0.0,
+          "baseline_ci": [
+            0.0,
+            0.0
+          ],
+          "rag_count": 1,
+          "rag_pct": 0.0067,
+          "rag_ci": [
+            0.0,
+            0.02
+          ],
+          "diff": 0.0067,
+          "diff_ci": [
+            0.0,
+            0.02
+          ]
+        }
       },
-      "datasets": {
+      "citation_behavior": {
         "medqa": {
           "n_total": 500,
-          "n_correct": 294,
-          "n_wrong": 206,
           "any_citation": {
             "count": 500,
             "pct": 1.0,
@@ -278,59 +286,10 @@
             "total_raw": 968,
             "valid_count": 968,
             "pct": 1.0
-          },
-          "cited_support": {
-            "correct_count": 84,
-            "correct_pct": 0.2857,
-            "correct_ci": [
-              0.2347,
-              0.3401
-            ],
-            "wrong_count": 50,
-            "wrong_pct": 0.2427,
-            "wrong_ci": [
-              0.1893,
-              0.301
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 106,
-            "correct_pct": 0.3605,
-            "correct_ci": [
-              0.3061,
-              0.415
-            ],
-            "wrong_count": 72,
-            "wrong_pct": 0.3495,
-            "wrong_ci": [
-              0.2864,
-              0.4126
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 44,
-            "baseline_total_wrong": 233,
-            "baseline_pct_of_wrong": 0.1888,
-            "baseline_ci_of_wrong": [
-              0.1416,
-              0.2361
-            ],
-            "baseline_pct_of_all": 0.088,
-            "rag_count": 45,
-            "rag_total_wrong": 206,
-            "rag_pct_of_wrong": 0.2184,
-            "rag_ci_of_wrong": [
-              0.165,
-              0.2767
-            ],
-            "rag_pct_of_all": 0.09,
-            "diff_pct_of_wrong": 0.0296
           }
         },
         "pubmedqa": {
           "n_total": 500,
-          "n_correct": 225,
-          "n_wrong": 275,
           "any_citation": {
             "count": 498,
             "pct": 0.996,
@@ -343,59 +302,10 @@
             "total_raw": 1233,
             "valid_count": 1215,
             "pct": 0.9854
-          },
-          "cited_support": {
-            "correct_count": 224,
-            "correct_pct": 0.9956,
-            "correct_ci": [
-              0.9867,
-              1.0
-            ],
-            "wrong_count": 274,
-            "wrong_pct": 0.9964,
-            "wrong_ci": [
-              0.9855,
-              1.0
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 225,
-            "correct_pct": 1.0,
-            "correct_ci": [
-              1.0,
-              1.0
-            ],
-            "wrong_count": 275,
-            "wrong_pct": 1.0,
-            "wrong_ci": [
-              1.0,
-              1.0
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 56,
-            "baseline_total_wrong": 263,
-            "baseline_pct_of_wrong": 0.2129,
-            "baseline_ci_of_wrong": [
-              0.1673,
-              0.2662
-            ],
-            "baseline_pct_of_all": 0.112,
-            "rag_count": 77,
-            "rag_total_wrong": 275,
-            "rag_pct_of_wrong": 0.28,
-            "rag_ci_of_wrong": [
-              0.2291,
-              0.3345
-            ],
-            "rag_pct_of_all": 0.154,
-            "diff_pct_of_wrong": 0.0671
           }
         },
         "overall": {
           "n_total": 1000,
-          "n_correct": 519,
-          "n_wrong": 481,
           "any_citation": {
             "count": 998,
             "pct": 0.998,
@@ -408,73 +318,137 @@
             "total_raw": 2201,
             "valid_count": 2183,
             "pct": 0.9918
-          },
-          "cited_support": {
-            "correct_count": 308,
-            "correct_pct": 0.5934,
-            "correct_ci": [
-              0.5511,
-              0.6358
-            ],
-            "wrong_count": 324,
-            "wrong_pct": 0.6736,
-            "wrong_ci": [
-              0.632,
-              0.7152
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 331,
-            "correct_pct": 0.6378,
-            "correct_ci": [
-              0.5954,
-              0.6802
-            ],
-            "wrong_count": 347,
-            "wrong_pct": 0.7214,
-            "wrong_ci": [
-              0.6819,
-              0.763
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 100,
-            "baseline_total_wrong": 496,
-            "baseline_pct_of_wrong": 0.2016,
-            "baseline_ci_of_wrong": [
-              0.1653,
-              0.2359
-            ],
-            "baseline_pct_of_all": 0.1,
-            "rag_count": 122,
-            "rag_total_wrong": 481,
-            "rag_pct_of_wrong": 0.2536,
-            "rag_ci_of_wrong": [
-              0.2162,
-              0.2952
-            ],
-            "rag_pct_of_all": 0.122,
-            "diff_pct_of_wrong": 0.052
           }
         }
       },
+      "medqa_grounding": {
+        "n_total": 500,
+        "n_correct": 294,
+        "n_wrong": 206,
+        "cited_support": {
+          "correct_count": 84,
+          "correct_pct": 0.2857,
+          "correct_ci": [
+            0.2347,
+            0.3401
+          ],
+          "wrong_count": 50,
+          "wrong_pct": 0.2427,
+          "wrong_ci": [
+            0.1893,
+            0.301
+          ]
+        },
+        "evidence_support": {
+          "correct_count": 106,
+          "correct_pct": 0.3605,
+          "correct_ci": [
+            0.3061,
+            0.415
+          ],
+          "wrong_count": 72,
+          "wrong_pct": 0.3495,
+          "wrong_ci": [
+            0.2864,
+            0.4126
+          ]
+        }
+      },
+      "confident_errors": {
+        "raw": {
+          "baseline_count": 44,
+          "baseline_total_wrong": 233,
+          "baseline_pct_of_wrong": 0.1888,
+          "baseline_ci_of_wrong": [
+            0.1416,
+            0.2361
+          ],
+          "baseline_pct_of_all": 0.088,
+          "rag_count": 45,
+          "rag_total_wrong": 206,
+          "rag_pct_of_wrong": 0.2184,
+          "rag_ci_of_wrong": [
+            0.165,
+            0.2767
+          ],
+          "rag_pct_of_all": 0.09,
+          "diff_pct_of_wrong": 0.0296
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_total_wrong": 233,
+          "baseline_pct_of_wrong": 0.0,
+          "baseline_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "baseline_pct_of_all": 0.0,
+          "rag_count": 0,
+          "rag_total_wrong": 206,
+          "rag_pct_of_wrong": 0.0,
+          "rag_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "rag_pct_of_all": 0.0,
+          "diff_pct_of_wrong": 0.0
+        }
+      },
       "retrieval_bottleneck": {
-        "n_gold_in_evidence": 152,
-        "acc_gold_in_evidence": 0.6974,
-        "ci_gold_in_evidence": [
+        "gold_in_exact_count": 94,
+        "gold_in_fwr_count": 114,
+        "n_gold_in": 152,
+        "base_acc_in": 0.5921,
+        "base_ci_in": [
+          0.5132,
+          0.6711
+        ],
+        "rag_acc_in": 0.6974,
+        "rag_ci_in": [
           0.625,
           0.7697
         ],
-        "n_gold_not_in_evidence": 348,
-        "acc_gold_not_in_evidence": 0.5402,
-        "ci_gold_not_in_evidence": [
+        "gain_in": 0.1053,
+        "gain_ci_in": [
+          0.0329,
+          0.1776
+        ],
+        "n_gold_not": 348,
+        "base_acc_not": 0.5086,
+        "base_ci_not": [
+          0.454,
+          0.5603
+        ],
+        "rag_acc_not": 0.5402,
+        "rag_ci_not": [
           0.4914,
           0.592
         ],
-        "diff": 0.1572,
-        "diff_ci": [
-          0.0717,
-          0.2459
+        "gain_not": 0.0316,
+        "gain_ci_not": [
+          -0.0172,
+          0.0805
+        ],
+        "did": 0.0737,
+        "did_ci": [
+          -0.0163,
+          0.1645
+        ]
+      },
+      "rag_transitions": {
+        "n_induced": 41,
+        "induced_wrong_cited_count": 17,
+        "induced_wrong_cited_pct": 0.4146,
+        "induced_ci": [
+          0.2683,
+          0.5854
+        ],
+        "n_fixed": 68,
+        "fixed_gold_cited_count": 20,
+        "fixed_gold_cited_pct": 0.2941,
+        "fixed_ci": [
+          0.1765,
+          0.4118
         ]
       }
     },
@@ -482,29 +456,50 @@
       "model": "gemma3-4b",
       "forced_hallucination": {
         "n_unanswerable": 150,
-        "baseline_count_conf90": 143,
-        "baseline_pct_conf90": 0.9533,
-        "baseline_ci": [
-          0.9133,
-          0.9867
-        ],
-        "rag_count_conf90": 141,
-        "rag_pct_conf90": 0.94,
-        "rag_ci": [
-          0.9,
-          0.9733
-        ],
-        "diff": -0.0133,
-        "diff_ci": [
-          -0.0667,
-          0.04
-        ]
+        "t_base": 25.71,
+        "t_rag": 19.54,
+        "raw": {
+          "baseline_count": 143,
+          "baseline_pct": 0.9533,
+          "baseline_ci": [
+            0.9133,
+            0.9867
+          ],
+          "rag_count": 141,
+          "rag_pct": 0.94,
+          "rag_ci": [
+            0.9,
+            0.9733
+          ],
+          "diff": -0.0133,
+          "diff_ci": [
+            -0.0667,
+            0.04
+          ]
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_pct": 0.0,
+          "baseline_ci": [
+            0.0,
+            0.0
+          ],
+          "rag_count": 0,
+          "rag_pct": 0.0,
+          "rag_ci": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "diff_ci": [
+            0.0,
+            0.0
+          ]
+        }
       },
-      "datasets": {
+      "citation_behavior": {
         "medqa": {
           "n_total": 500,
-          "n_correct": 265,
-          "n_wrong": 235,
           "any_citation": {
             "count": 500,
             "pct": 1.0,
@@ -517,59 +512,10 @@
             "total_raw": 1154,
             "valid_count": 1153,
             "pct": 0.9991
-          },
-          "cited_support": {
-            "correct_count": 97,
-            "correct_pct": 0.366,
-            "correct_ci": [
-              0.3019,
-              0.4226
-            ],
-            "wrong_count": 63,
-            "wrong_pct": 0.2681,
-            "wrong_ci": [
-              0.2085,
-              0.3234
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 107,
-            "correct_pct": 0.4038,
-            "correct_ci": [
-              0.3396,
-              0.4604
-            ],
-            "wrong_count": 78,
-            "wrong_pct": 0.3319,
-            "wrong_ci": [
-              0.2723,
-              0.3915
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 245,
-            "baseline_total_wrong": 257,
-            "baseline_pct_of_wrong": 0.9533,
-            "baseline_ci_of_wrong": [
-              0.9261,
-              0.9767
-            ],
-            "baseline_pct_of_all": 0.49,
-            "rag_count": 220,
-            "rag_total_wrong": 235,
-            "rag_pct_of_wrong": 0.9362,
-            "rag_ci_of_wrong": [
-              0.9021,
-              0.966
-            ],
-            "rag_pct_of_all": 0.44,
-            "diff_pct_of_wrong": -0.0171
           }
         },
         "pubmedqa": {
           "n_total": 500,
-          "n_correct": 251,
-          "n_wrong": 249,
           "any_citation": {
             "count": 493,
             "pct": 0.986,
@@ -582,59 +528,10 @@
             "total_raw": 1198,
             "valid_count": 1152,
             "pct": 0.9616
-          },
-          "cited_support": {
-            "correct_count": 247,
-            "correct_pct": 0.9841,
-            "correct_ci": [
-              0.9681,
-              0.996
-            ],
-            "wrong_count": 246,
-            "wrong_pct": 0.988,
-            "wrong_ci": [
-              0.9719,
-              1.0
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 251,
-            "correct_pct": 1.0,
-            "correct_ci": [
-              1.0,
-              1.0
-            ],
-            "wrong_count": 249,
-            "wrong_pct": 1.0,
-            "wrong_ci": [
-              1.0,
-              1.0
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 248,
-            "baseline_total_wrong": 254,
-            "baseline_pct_of_wrong": 0.9764,
-            "baseline_ci_of_wrong": [
-              0.9567,
-              0.9921
-            ],
-            "baseline_pct_of_all": 0.496,
-            "rag_count": 235,
-            "rag_total_wrong": 249,
-            "rag_pct_of_wrong": 0.9438,
-            "rag_ci_of_wrong": [
-              0.9157,
-              0.9719
-            ],
-            "rag_pct_of_all": 0.47,
-            "diff_pct_of_wrong": -0.0326
           }
         },
         "overall": {
           "n_total": 1000,
-          "n_correct": 516,
-          "n_wrong": 484,
           "any_citation": {
             "count": 993,
             "pct": 0.993,
@@ -647,73 +544,137 @@
             "total_raw": 2352,
             "valid_count": 2305,
             "pct": 0.98
-          },
-          "cited_support": {
-            "correct_count": 344,
-            "correct_pct": 0.6667,
-            "correct_ci": [
-              0.624,
-              0.7112
-            ],
-            "wrong_count": 309,
-            "wrong_pct": 0.6384,
-            "wrong_ci": [
-              0.595,
-              0.6777
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 358,
-            "correct_pct": 0.6938,
-            "correct_ci": [
-              0.655,
-              0.7364
-            ],
-            "wrong_count": 327,
-            "wrong_pct": 0.6756,
-            "wrong_ci": [
-              0.6322,
-              0.7169
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 493,
-            "baseline_total_wrong": 511,
-            "baseline_pct_of_wrong": 0.9648,
-            "baseline_ci_of_wrong": [
-              0.9491,
-              0.9785
-            ],
-            "baseline_pct_of_all": 0.493,
-            "rag_count": 455,
-            "rag_total_wrong": 484,
-            "rag_pct_of_wrong": 0.9401,
-            "rag_ci_of_wrong": [
-              0.9194,
-              0.9587
-            ],
-            "rag_pct_of_all": 0.455,
-            "diff_pct_of_wrong": -0.0247
           }
         }
       },
+      "medqa_grounding": {
+        "n_total": 500,
+        "n_correct": 265,
+        "n_wrong": 235,
+        "cited_support": {
+          "correct_count": 97,
+          "correct_pct": 0.366,
+          "correct_ci": [
+            0.3019,
+            0.4226
+          ],
+          "wrong_count": 63,
+          "wrong_pct": 0.2681,
+          "wrong_ci": [
+            0.2085,
+            0.3234
+          ]
+        },
+        "evidence_support": {
+          "correct_count": 107,
+          "correct_pct": 0.4038,
+          "correct_ci": [
+            0.3396,
+            0.4604
+          ],
+          "wrong_count": 78,
+          "wrong_pct": 0.3319,
+          "wrong_ci": [
+            0.2723,
+            0.3915
+          ]
+        }
+      },
+      "confident_errors": {
+        "raw": {
+          "baseline_count": 245,
+          "baseline_total_wrong": 257,
+          "baseline_pct_of_wrong": 0.9533,
+          "baseline_ci_of_wrong": [
+            0.9261,
+            0.9767
+          ],
+          "baseline_pct_of_all": 0.49,
+          "rag_count": 220,
+          "rag_total_wrong": 235,
+          "rag_pct_of_wrong": 0.9362,
+          "rag_ci_of_wrong": [
+            0.9021,
+            0.966
+          ],
+          "rag_pct_of_all": 0.44,
+          "diff_pct_of_wrong": -0.0171
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_total_wrong": 257,
+          "baseline_pct_of_wrong": 0.0,
+          "baseline_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "baseline_pct_of_all": 0.0,
+          "rag_count": 0,
+          "rag_total_wrong": 235,
+          "rag_pct_of_wrong": 0.0,
+          "rag_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "rag_pct_of_all": 0.0,
+          "diff_pct_of_wrong": 0.0
+        }
+      },
       "retrieval_bottleneck": {
-        "n_gold_in_evidence": 152,
-        "acc_gold_in_evidence": 0.7039,
-        "ci_gold_in_evidence": [
+        "gold_in_exact_count": 94,
+        "gold_in_fwr_count": 114,
+        "n_gold_in": 152,
+        "base_acc_in": 0.5526,
+        "base_ci_in": [
+          0.4737,
+          0.6382
+        ],
+        "rag_acc_in": 0.7039,
+        "rag_ci_in": [
           0.6316,
           0.7763
         ],
-        "n_gold_not_in_evidence": 348,
-        "acc_gold_not_in_evidence": 0.454,
-        "ci_gold_not_in_evidence": [
+        "gain_in": 0.1513,
+        "gain_ci_in": [
+          0.0592,
+          0.2434
+        ],
+        "n_gold_not": 348,
+        "base_acc_not": 0.4569,
+        "base_ci_not": [
+          0.4052,
+          0.5144
+        ],
+        "rag_acc_not": 0.454,
+        "rag_ci_not": [
           0.4023,
           0.5086
         ],
-        "diff": 0.2499,
-        "diff_ci": [
-          0.1599,
-          0.3391
+        "gain_not": -0.0029,
+        "gain_ci_not": [
+          -0.0603,
+          0.0546
+        ],
+        "did": 0.1542,
+        "did_ci": [
+          0.042,
+          0.2508
+        ]
+      },
+      "rag_transitions": {
+        "n_induced": 65,
+        "induced_wrong_cited_count": 22,
+        "induced_wrong_cited_pct": 0.3385,
+        "induced_ci": [
+          0.2308,
+          0.4615
+        ],
+        "n_fixed": 87,
+        "fixed_gold_cited_count": 32,
+        "fixed_gold_cited_pct": 0.3678,
+        "fixed_ci": [
+          0.2644,
+          0.4713
         ]
       }
     },
@@ -721,29 +682,50 @@
       "model": "qwen3-1.7b",
       "forced_hallucination": {
         "n_unanswerable": 150,
-        "baseline_count_conf90": 132,
-        "baseline_pct_conf90": 0.88,
-        "baseline_ci": [
-          0.8267,
-          0.9333
-        ],
-        "rag_count_conf90": 133,
-        "rag_pct_conf90": 0.8867,
-        "rag_ci": [
-          0.8333,
-          0.9333
-        ],
-        "diff": 0.0067,
-        "diff_ci": [
-          -0.0667,
-          0.08
-        ]
+        "t_base": 24.72,
+        "t_rag": 22.72,
+        "raw": {
+          "baseline_count": 132,
+          "baseline_pct": 0.88,
+          "baseline_ci": [
+            0.8267,
+            0.9333
+          ],
+          "rag_count": 133,
+          "rag_pct": 0.8867,
+          "rag_ci": [
+            0.8333,
+            0.9333
+          ],
+          "diff": 0.0067,
+          "diff_ci": [
+            -0.0667,
+            0.08
+          ]
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_pct": 0.0,
+          "baseline_ci": [
+            0.0,
+            0.0
+          ],
+          "rag_count": 0,
+          "rag_pct": 0.0,
+          "rag_ci": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "diff_ci": [
+            0.0,
+            0.0
+          ]
+        }
       },
-      "datasets": {
+      "citation_behavior": {
         "medqa": {
           "n_total": 500,
-          "n_correct": 253,
-          "n_wrong": 247,
           "any_citation": {
             "count": 305,
             "pct": 0.61,
@@ -756,59 +738,10 @@
             "total_raw": 783,
             "valid_count": 783,
             "pct": 1.0
-          },
-          "cited_support": {
-            "correct_count": 60,
-            "correct_pct": 0.2372,
-            "correct_ci": [
-              0.1897,
-              0.2925
-            ],
-            "wrong_count": 45,
-            "wrong_pct": 0.1822,
-            "wrong_ci": [
-              0.1336,
-              0.2348
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 96,
-            "correct_pct": 0.3794,
-            "correct_ci": [
-              0.3202,
-              0.4427
-            ],
-            "wrong_count": 72,
-            "wrong_pct": 0.2915,
-            "wrong_ci": [
-              0.2348,
-              0.3522
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 235,
-            "baseline_total_wrong": 277,
-            "baseline_pct_of_wrong": 0.8484,
-            "baseline_ci_of_wrong": [
-              0.8051,
-              0.8881
-            ],
-            "baseline_pct_of_all": 0.47,
-            "rag_count": 213,
-            "rag_total_wrong": 247,
-            "rag_pct_of_wrong": 0.8623,
-            "rag_ci_of_wrong": [
-              0.8219,
-              0.9028
-            ],
-            "rag_pct_of_all": 0.426,
-            "diff_pct_of_wrong": 0.014
           }
         },
         "pubmedqa": {
           "n_total": 500,
-          "n_correct": 226,
-          "n_wrong": 274,
           "any_citation": {
             "count": 474,
             "pct": 0.948,
@@ -821,59 +754,10 @@
             "total_raw": 1164,
             "valid_count": 1153,
             "pct": 0.9905
-          },
-          "cited_support": {
-            "correct_count": 218,
-            "correct_pct": 0.9646,
-            "correct_ci": [
-              0.9381,
-              0.9867
-            ],
-            "wrong_count": 256,
-            "wrong_pct": 0.9343,
-            "wrong_ci": [
-              0.9051,
-              0.9635
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 226,
-            "correct_pct": 1.0,
-            "correct_ci": [
-              1.0,
-              1.0
-            ],
-            "wrong_count": 274,
-            "wrong_pct": 1.0,
-            "wrong_ci": [
-              1.0,
-              1.0
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 236,
-            "baseline_total_wrong": 261,
-            "baseline_pct_of_wrong": 0.9042,
-            "baseline_ci_of_wrong": [
-              0.8659,
-              0.9387
-            ],
-            "baseline_pct_of_all": 0.472,
-            "rag_count": 255,
-            "rag_total_wrong": 274,
-            "rag_pct_of_wrong": 0.9307,
-            "rag_ci_of_wrong": [
-              0.9015,
-              0.9599
-            ],
-            "rag_pct_of_all": 0.51,
-            "diff_pct_of_wrong": 0.0264
           }
         },
         "overall": {
           "n_total": 1000,
-          "n_correct": 479,
-          "n_wrong": 521,
           "any_citation": {
             "count": 779,
             "pct": 0.779,
@@ -886,73 +770,137 @@
             "total_raw": 1947,
             "valid_count": 1936,
             "pct": 0.9944
-          },
-          "cited_support": {
-            "correct_count": 278,
-            "correct_pct": 0.5804,
-            "correct_ci": [
-              0.5386,
-              0.6284
-            ],
-            "wrong_count": 301,
-            "wrong_pct": 0.5777,
-            "wrong_ci": [
-              0.5355,
-              0.6238
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 322,
-            "correct_pct": 0.6722,
-            "correct_ci": [
-              0.6347,
-              0.7119
-            ],
-            "wrong_count": 346,
-            "wrong_pct": 0.6641,
-            "wrong_ci": [
-              0.6238,
-              0.7063
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 471,
-            "baseline_total_wrong": 538,
-            "baseline_pct_of_wrong": 0.8755,
-            "baseline_ci_of_wrong": [
-              0.8476,
-              0.9015
-            ],
-            "baseline_pct_of_all": 0.471,
-            "rag_count": 468,
-            "rag_total_wrong": 521,
-            "rag_pct_of_wrong": 0.8983,
-            "rag_ci_of_wrong": [
-              0.8714,
-              0.9232
-            ],
-            "rag_pct_of_all": 0.468,
-            "diff_pct_of_wrong": 0.0228
           }
         }
       },
+      "medqa_grounding": {
+        "n_total": 500,
+        "n_correct": 253,
+        "n_wrong": 247,
+        "cited_support": {
+          "correct_count": 60,
+          "correct_pct": 0.2372,
+          "correct_ci": [
+            0.1897,
+            0.2925
+          ],
+          "wrong_count": 45,
+          "wrong_pct": 0.1822,
+          "wrong_ci": [
+            0.1336,
+            0.2348
+          ]
+        },
+        "evidence_support": {
+          "correct_count": 96,
+          "correct_pct": 0.3794,
+          "correct_ci": [
+            0.3202,
+            0.4427
+          ],
+          "wrong_count": 72,
+          "wrong_pct": 0.2915,
+          "wrong_ci": [
+            0.2348,
+            0.3522
+          ]
+        }
+      },
+      "confident_errors": {
+        "raw": {
+          "baseline_count": 235,
+          "baseline_total_wrong": 277,
+          "baseline_pct_of_wrong": 0.8484,
+          "baseline_ci_of_wrong": [
+            0.8051,
+            0.8881
+          ],
+          "baseline_pct_of_all": 0.47,
+          "rag_count": 213,
+          "rag_total_wrong": 247,
+          "rag_pct_of_wrong": 0.8623,
+          "rag_ci_of_wrong": [
+            0.8219,
+            0.9028
+          ],
+          "rag_pct_of_all": 0.426,
+          "diff_pct_of_wrong": 0.014
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_total_wrong": 277,
+          "baseline_pct_of_wrong": 0.0,
+          "baseline_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "baseline_pct_of_all": 0.0,
+          "rag_count": 0,
+          "rag_total_wrong": 247,
+          "rag_pct_of_wrong": 0.0,
+          "rag_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "rag_pct_of_all": 0.0,
+          "diff_pct_of_wrong": 0.0
+        }
+      },
       "retrieval_bottleneck": {
-        "n_gold_in_evidence": 152,
-        "acc_gold_in_evidence": 0.6316,
-        "ci_gold_in_evidence": [
+        "gold_in_exact_count": 94,
+        "gold_in_fwr_count": 114,
+        "n_gold_in": 152,
+        "base_acc_in": 0.5461,
+        "base_ci_in": [
+          0.4671,
+          0.625
+        ],
+        "rag_acc_in": 0.6316,
+        "rag_ci_in": [
           0.5526,
           0.7039
         ],
-        "n_gold_not_in_evidence": 348,
-        "acc_gold_not_in_evidence": 0.4511,
-        "ci_gold_not_in_evidence": [
+        "gain_in": 0.0855,
+        "gain_ci_in": [
+          0.0,
+          0.1711
+        ],
+        "n_gold_not": 348,
+        "base_acc_not": 0.4023,
+        "base_ci_not": [
+          0.3506,
+          0.4569
+        ],
+        "rag_acc_not": 0.4511,
+        "rag_ci_not": [
           0.3994,
           0.5029
         ],
-        "diff": 0.1805,
-        "diff_ci": [
-          0.0911,
-          0.2823
+        "gain_not": 0.0489,
+        "gain_ci_not": [
+          -0.0057,
+          0.0977
+        ],
+        "did": 0.0367,
+        "did_ci": [
+          -0.0653,
+          0.1391
+        ]
+      },
+      "rag_transitions": {
+        "n_induced": 54,
+        "induced_wrong_cited_count": 15,
+        "induced_wrong_cited_pct": 0.2778,
+        "induced_ci": [
+          0.1481,
+          0.4074
+        ],
+        "n_fixed": 84,
+        "fixed_gold_cited_count": 20,
+        "fixed_gold_cited_pct": 0.2381,
+        "fixed_ci": [
+          0.1548,
+          0.3333
         ]
       }
     },
@@ -960,29 +908,50 @@
       "model": "smollm3-3b",
       "forced_hallucination": {
         "n_unanswerable": 150,
-        "baseline_count_conf90": 72,
-        "baseline_pct_conf90": 0.48,
-        "baseline_ci": [
-          0.4,
-          0.5733
-        ],
-        "rag_count_conf90": 61,
-        "rag_pct_conf90": 0.4067,
-        "rag_ci": [
-          0.3333,
-          0.48
-        ],
-        "diff": -0.0733,
-        "diff_ci": [
-          -0.1733,
-          0.0333
-        ]
+        "t_base": 6.58,
+        "t_rag": 4.88,
+        "raw": {
+          "baseline_count": 72,
+          "baseline_pct": 0.48,
+          "baseline_ci": [
+            0.4,
+            0.5733
+          ],
+          "rag_count": 61,
+          "rag_pct": 0.4067,
+          "rag_ci": [
+            0.3333,
+            0.48
+          ],
+          "diff": -0.0733,
+          "diff_ci": [
+            -0.1733,
+            0.0333
+          ]
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_pct": 0.0,
+          "baseline_ci": [
+            0.0,
+            0.0
+          ],
+          "rag_count": 0,
+          "rag_pct": 0.0,
+          "rag_ci": [
+            0.0,
+            0.0
+          ],
+          "diff": 0.0,
+          "diff_ci": [
+            0.0,
+            0.0
+          ]
+        }
       },
-      "datasets": {
+      "citation_behavior": {
         "medqa": {
           "n_total": 500,
-          "n_correct": 236,
-          "n_wrong": 264,
           "any_citation": {
             "count": 500,
             "pct": 1.0,
@@ -995,59 +964,10 @@
             "total_raw": 530,
             "valid_count": 530,
             "pct": 1.0
-          },
-          "cited_support": {
-            "correct_count": 61,
-            "correct_pct": 0.2585,
-            "correct_ci": [
-              0.2034,
-              0.3136
-            ],
-            "wrong_count": 48,
-            "wrong_pct": 0.1818,
-            "wrong_ci": [
-              0.1364,
-              0.2311
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 96,
-            "correct_pct": 0.4068,
-            "correct_ci": [
-              0.3475,
-              0.4703
-            ],
-            "wrong_count": 90,
-            "wrong_pct": 0.3409,
-            "wrong_ci": [
-              0.2879,
-              0.4015
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 105,
-            "baseline_total_wrong": 292,
-            "baseline_pct_of_wrong": 0.3596,
-            "baseline_ci_of_wrong": [
-              0.3082,
-              0.4178
-            ],
-            "baseline_pct_of_all": 0.21,
-            "rag_count": 87,
-            "rag_total_wrong": 264,
-            "rag_pct_of_wrong": 0.3295,
-            "rag_ci_of_wrong": [
-              0.2765,
-              0.3864
-            ],
-            "rag_pct_of_all": 0.174,
-            "diff_pct_of_wrong": -0.03
           }
         },
         "pubmedqa": {
           "n_total": 500,
-          "n_correct": 263,
-          "n_wrong": 237,
           "any_citation": {
             "count": 498,
             "pct": 0.996,
@@ -1060,59 +980,10 @@
             "total_raw": 654,
             "valid_count": 631,
             "pct": 0.9648
-          },
-          "cited_support": {
-            "correct_count": 262,
-            "correct_pct": 0.9962,
-            "correct_ci": [
-              0.9886,
-              1.0
-            ],
-            "wrong_count": 236,
-            "wrong_pct": 0.9958,
-            "wrong_ci": [
-              0.9873,
-              1.0
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 263,
-            "correct_pct": 1.0,
-            "correct_ci": [
-              1.0,
-              1.0
-            ],
-            "wrong_count": 237,
-            "wrong_pct": 1.0,
-            "wrong_ci": [
-              1.0,
-              1.0
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 156,
-            "baseline_total_wrong": 236,
-            "baseline_pct_of_wrong": 0.661,
-            "baseline_ci_of_wrong": [
-              0.6017,
-              0.7203
-            ],
-            "baseline_pct_of_all": 0.312,
-            "rag_count": 114,
-            "rag_total_wrong": 237,
-            "rag_pct_of_wrong": 0.481,
-            "rag_ci_of_wrong": [
-              0.4177,
-              0.5443
-            ],
-            "rag_pct_of_all": 0.228,
-            "diff_pct_of_wrong": -0.18
           }
         },
         "overall": {
           "n_total": 1000,
-          "n_correct": 499,
-          "n_wrong": 501,
           "any_citation": {
             "count": 998,
             "pct": 0.998,
@@ -1125,73 +996,137 @@
             "total_raw": 1184,
             "valid_count": 1161,
             "pct": 0.9806
-          },
-          "cited_support": {
-            "correct_count": 323,
-            "correct_pct": 0.6473,
-            "correct_ci": [
-              0.6052,
-              0.6914
-            ],
-            "wrong_count": 284,
-            "wrong_pct": 0.5669,
-            "wrong_ci": [
-              0.525,
-              0.6088
-            ]
-          },
-          "evidence_support": {
-            "correct_count": 359,
-            "correct_pct": 0.7194,
-            "correct_ci": [
-              0.6814,
-              0.7575
-            ],
-            "wrong_count": 327,
-            "wrong_pct": 0.6527,
-            "wrong_ci": [
-              0.6148,
-              0.6926
-            ]
-          },
-          "confident_errors": {
-            "baseline_count": 261,
-            "baseline_total_wrong": 528,
-            "baseline_pct_of_wrong": 0.4943,
-            "baseline_ci_of_wrong": [
-              0.4545,
-              0.5398
-            ],
-            "baseline_pct_of_all": 0.261,
-            "rag_count": 201,
-            "rag_total_wrong": 501,
-            "rag_pct_of_wrong": 0.4012,
-            "rag_ci_of_wrong": [
-              0.3593,
-              0.4451
-            ],
-            "rag_pct_of_all": 0.201,
-            "diff_pct_of_wrong": -0.0931
           }
         }
       },
+      "medqa_grounding": {
+        "n_total": 500,
+        "n_correct": 236,
+        "n_wrong": 264,
+        "cited_support": {
+          "correct_count": 61,
+          "correct_pct": 0.2585,
+          "correct_ci": [
+            0.2034,
+            0.3136
+          ],
+          "wrong_count": 48,
+          "wrong_pct": 0.1818,
+          "wrong_ci": [
+            0.1364,
+            0.2311
+          ]
+        },
+        "evidence_support": {
+          "correct_count": 96,
+          "correct_pct": 0.4068,
+          "correct_ci": [
+            0.3475,
+            0.4703
+          ],
+          "wrong_count": 90,
+          "wrong_pct": 0.3409,
+          "wrong_ci": [
+            0.2879,
+            0.4015
+          ]
+        }
+      },
+      "confident_errors": {
+        "raw": {
+          "baseline_count": 105,
+          "baseline_total_wrong": 292,
+          "baseline_pct_of_wrong": 0.3596,
+          "baseline_ci_of_wrong": [
+            0.3082,
+            0.4178
+          ],
+          "baseline_pct_of_all": 0.21,
+          "rag_count": 87,
+          "rag_total_wrong": 264,
+          "rag_pct_of_wrong": 0.3295,
+          "rag_ci_of_wrong": [
+            0.2765,
+            0.3864
+          ],
+          "rag_pct_of_all": 0.174,
+          "diff_pct_of_wrong": -0.03
+        },
+        "scaled": {
+          "baseline_count": 0,
+          "baseline_total_wrong": 292,
+          "baseline_pct_of_wrong": 0.0,
+          "baseline_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "baseline_pct_of_all": 0.0,
+          "rag_count": 0,
+          "rag_total_wrong": 264,
+          "rag_pct_of_wrong": 0.0,
+          "rag_ci_of_wrong": [
+            0.0,
+            0.0
+          ],
+          "rag_pct_of_all": 0.0,
+          "diff_pct_of_wrong": 0.0
+        }
+      },
       "retrieval_bottleneck": {
-        "n_gold_in_evidence": 152,
-        "acc_gold_in_evidence": 0.6316,
-        "ci_gold_in_evidence": [
+        "gold_in_exact_count": 94,
+        "gold_in_fwr_count": 114,
+        "n_gold_in": 152,
+        "base_acc_in": 0.4408,
+        "base_ci_in": [
+          0.3618,
+          0.5132
+        ],
+        "rag_acc_in": 0.6316,
+        "rag_ci_in": [
           0.5461,
           0.7105
         ],
-        "n_gold_not_in_evidence": 348,
-        "acc_gold_not_in_evidence": 0.4023,
-        "ci_gold_not_in_evidence": [
+        "gain_in": 0.1908,
+        "gain_ci_in": [
+          0.1184,
+          0.2632
+        ],
+        "n_gold_not": 348,
+        "base_acc_not": 0.4052,
+        "base_ci_not": [
+          0.3477,
+          0.4569
+        ],
+        "rag_acc_not": 0.4023,
+        "rag_ci_not": [
           0.3534,
           0.454
         ],
-        "diff": 0.2293,
-        "diff_ci": [
-          0.1385,
-          0.3238
+        "gain_not": -0.0029,
+        "gain_ci_not": [
+          -0.0489,
+          0.0489
+        ],
+        "did": 0.1937,
+        "did_ci": [
+          0.1078,
+          0.2841
+        ]
+      },
+      "rag_transitions": {
+        "n_induced": 44,
+        "induced_wrong_cited_count": 6,
+        "induced_wrong_cited_pct": 0.1364,
+        "induced_ci": [
+          0.0455,
+          0.25
+        ],
+        "n_fixed": 72,
+        "fixed_gold_cited_count": 21,
+        "fixed_gold_cited_pct": 0.2917,
+        "fixed_ci": [
+          0.1944,
+          0.4028
         ]
       }
     }
