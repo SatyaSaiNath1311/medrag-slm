@@ -182,7 +182,7 @@ def plot_fig1_overall_accuracy(data: Dict[str, Any], out_dir: Path):
                     fontsize=16, fontweight="bold", color="#1E6E1E")
 
     ax.set_ylabel("Overall Test Accuracy (%)")
-    ax.set_title("Overall Question-Answering Accuracy across Architectures and Inference Modes")
+    ax.set_title("Adaptive Gating Improves Accuracy over Baseline for All 5 Models (3 Holm-Significant*)")
     ax.set_xticks(x)
     ax.set_xticklabels([MODEL_DISPLAY[m] for m in MODEL_ORDER])
     ax.set_ylim(35, 68)
@@ -267,11 +267,11 @@ def plot_fig2_medqa_pubmedqa(data: Dict[str, Any], out_dir: Path):
     ax2.set_xticks(x)
     ax2.set_xticklabels([MODEL_DISPLAY[m] for m in MODEL_ORDER], rotation=15)
 
-    pub_text = "PubMedQA RAG Gain: NS\nPooled CMH: OR = 0.94\n$p = 0.246$ (No benefit from textbook RAG)"
+    pub_text = "PubMedQA: No Significant Effect\nPooled CMH: OR = 0.94\npooled p = 0.25"
     ax2.text(0.04, 0.95, pub_text, transform=ax2.transAxes, va="top", ha="left",
              fontsize=10.5, bbox=dict(boxstyle="round,pad=0.5", facecolor="#FDF5E6", edgecolor="#F4A460"))
 
-    plt.suptitle("Dataset Divergence: Consistent RAG Gains on MedQA vs. Zero Gain on PubMedQA", y=1.02, fontsize=14, fontweight="bold")
+    plt.suptitle("RAG Significantly Improves MedQA (CMH OR = 1.21, p < 0.001) but Has No Effect on PubMedQA (p = 0.25)", y=1.02, fontsize=12.5, fontweight="bold")
     save_figure(fig, out_dir, "fig2_medqa_pubmedqa")
 
 
@@ -307,7 +307,7 @@ def plot_fig3_pubmedqa_abstract(data: Dict[str, Any], out_dir: Path):
                label="Always 'Yes' Majority Baseline (55.2%)")
 
     ax.set_ylabel("PubMedQA Accuracy (%)")
-    ax.set_title("PubMedQA Performance: Open-Domain Textbook RAG vs. Target Study Abstract")
+    ax.set_title("PubMedQA: Textbook RAG Does Not Help; Study Abstract Raises Accuracy to 66–75% (+18–26 pts)")
     ax.set_xticks(x)
     ax.set_xticklabels([MODEL_DISPLAY[m] for m in MODEL_ORDER])
     ax.set_ylim(35, 85)
@@ -367,7 +367,7 @@ def plot_fig4_accuracy_vs_latency(data: Dict[str, Any], out_dir: Path):
     ax.set_xscale("log")
     ax.set_xlabel("Latency: Seconds per Question (log scale, lower is faster)")
     ax.set_ylabel("Overall Test Accuracy (%)")
-    ax.set_title("Accuracy vs. Latency Trade-Off across Models and Gating Strategies")
+    ax.set_title("Single-Gen Rerank Gating Matches Full RAG at 35–50% Lower Latency (Two-Pass is Slowest)")
     ax.grid(True, which="both", linestyle="--", alpha=0.5, zorder=0)
     ax.set_ylim(44, 61)
 
@@ -412,7 +412,7 @@ def plot_fig5_risk_coverage(data: Dict[str, Any], out_dir: Path):
 
     ax.set_xlabel("Coverage (% of test questions answered, abstaining on low confidence)")
     ax.set_ylabel("Selective Accuracy on Answered Questions (%)")
-    ax.set_title("Selective Accuracy under Confidence-Based Abstention (Full RAG)")
+    ax.set_title("Answering Only Most Confident Questions Raises Accuracy (Up to 76.5% at 20% Coverage)")
     ax.grid(True, linestyle="--", alpha=0.6, zorder=0)
     ax.set_xlim(102, 18)  # Invert so 100% is on left and 20% on right
     ax.set_ylim(44, 82)
@@ -479,7 +479,7 @@ def plot_fig6_retrieval_bottleneck(data: Dict[str, Any], out_dir: Path):
     ax.set_xticks(all_ticks)
     ax.set_xticklabels(all_labels)
     ax.set_ylabel("MedQA Accuracy Gain from RAG (percentage points)")
-    ax.set_title("The Retrieval Bottleneck: RAG Gains Concentrate Strictly Where Gold Answer is Retrieved")
+    ax.set_title("RAG Gains Are Concentrated Where Gold Answer is Retrieved (Pooled DiD +10.2 pts [5.8, 14.6])")
     ax.set_ylim(-8, 30)
 
     ax.legend(loc="upper left", framealpha=0.95)
@@ -522,7 +522,7 @@ def plot_fig7_fixed_vs_induced(data: Dict[str, Any], out_dir: Path):
                 fontsize=10.5, color="white", fontweight="bold")
 
     ax.set_ylabel("Number of Questions (MedQA Test N=500)")
-    ax.set_title("MedQA Error Transitions: Questions Fixed vs. Distractor Errors Induced by RAG")
+    ax.set_title("On MedQA, RAG Fixes 64–87 Questions and Breaks 41–65 (Net Gain +10 to +30 per Model)")
     ax.set_xticks(x)
     ax.set_xticklabels([MODEL_DISPLAY[m] for m in MODEL_ORDER])
     ax.set_ylim(-85, 110)
@@ -643,7 +643,7 @@ def plot_fig9_calibration(data: Dict[str, Any], out_dir: Path):
 
     ax.set_xlabel("Confidence: Mean Predicted Probability")
     ax.set_ylabel("Empirical Accuracy")
-    ax.set_title("Reliability Diagram: Phi-4-mini RAG Calibration")
+    ax.set_title("Reliability Diagram: Temperature Scaling Reduces ECE from 25.9% to 4.9% (Phi-4-mini RAG)")
     ax.set_xlim(0.0, 1.0)
     ax.set_ylim(0.0, 1.05)
 
@@ -726,15 +726,15 @@ All figures are rendered at 300 DPI (`.png`) and vector graphics (`.svg`) using 
 
 | File | Figure Title | Slide-Ready One-Sentence Caption |
 |---|---|---|
-| **fig1_overall_accuracy** | Overall QA Accuracy | Adaptive gating improves accuracy over baseline and full RAG across all models, achieving Holm-significant gains in three architectures (*). |
-| **fig2_medqa_pubmedqa** | MedQA vs. PubMedQA Divergence | Retrieval provides a significant, consistent benefit on MedQA across all architectures (pooled CMH OR = 1.21, p < 0.001), but yields zero net gain on PubMedQA. |
-| **fig3_pubmedqa_abstract** | PubMedQA Abstract Benchmark | Open-domain textbook RAG fails on study-specific queries, whereas supplying the actual study abstract boosts accuracy by over 20 percentage points above majority baseline. |
-| **fig4_accuracy_vs_latency** | Accuracy vs. Latency Trade-Off | Single-generation Rerank Gating recovers the accuracy gains of two-pass confidence gating with near-zero latency overhead over pure retrieval. |
-| **fig5_risk_coverage** | Risk-Coverage Abstention Curves | Abstaining on low model confidence monotonically increases selective accuracy from ~52% to >75% as coverage narrows from 100% to 20%. |
-| **fig6_retrieval_bottleneck** | Retrieval Bottleneck & DiD | Accuracy gains from RAG are strictly concentrated on the 30% of questions where the gold answer is successfully retrieved, yielding a pooled difference-in-differences of +10.2 points. |
-| **fig7_fixed_vs_induced** | MedQA Error Transitions | While RAG induces 41–65 novel errors where models cite incorrect retrieved distractors, fixed questions consistently dominate, producing a net gain of +10 to +30 answers per model. |
+| **fig1_overall_accuracy** | Overall QA Accuracy | Adaptive gating improves accuracy over baseline for all 5 models; gains are Holm-significant for 3 (*). |
+| **fig2_medqa_pubmedqa** | MedQA vs. PubMedQA Divergence | RAG significantly improves MedQA across models (pooled CMH OR = 1.21, p < 0.001) but has no significant effect on PubMedQA (pooled p = 0.25). |
+| **fig3_pubmedqa_abstract** | PubMedQA Abstract Benchmark | Textbook RAG does not help study-specific PubMedQA questions; supplying the study abstract raises accuracy by 18–26 points over question-only, to 66–75%. |
+| **fig4_accuracy_vs_latency** | Accuracy vs. Latency Trade-Off | Single-generation rerank gating matches or exceeds Full RAG accuracy at 35–50% lower latency; two-pass confidence gating is most accurate but slowest. |
+| **fig5_risk_coverage** | Risk-Coverage Abstention Curves | Answering only the most confident questions raises accuracy, up to 76.5% at 20% coverage (Qwen3-4B, RAG). |
+| **fig6_retrieval_bottleneck** | Retrieval Bottleneck & DiD | RAG gains are concentrated where the gold answer is retrieved: same direction for all 5 models, pooled difference-in-differences +10.2 points [5.8, 14.6]. |
+| **fig7_fixed_vs_induced** | MedQA Error Transitions | On MedQA, RAG fixes 64–87 questions and breaks 41–65, a net gain of +10 to +30 per model. |
 | **fig8_overconfidence** | Persistent Overconfidence | Both baseline and RAG exhibit severe overconfidence, assigning >=0.90 probability to 20–95% of wrong answers and unanswerable questions alike. |
-| **fig9_calibration** | Phi-4-mini Reliability Diagram | Post-hoc temperature scaling (T=4.49) successfully resolves logit over-dispersion, reducing expected calibration error (ECE) from 25.9% down to 4.9%. |
+| **fig9_calibration** | Phi-4-mini Reliability Diagram | Temperature scaling reduces calibration error (ECE) from 25.9% to 4.9% for Phi-4-mini (RAG). |
 | **fig10_memory** | Peak VRAM Footprint | Four out of five models run comfortably on a single 16 GB T4 GPU with RAG adding only 1.2–1.8 GB of VRAM overhead. |
 """
     readme_path.write_text(content)
