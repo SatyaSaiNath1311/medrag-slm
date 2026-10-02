@@ -86,7 +86,8 @@ def model_stats(model_name, p5_path, p8_path):
             "ci_pubmedqa":  bootstrap_ci(corr_pub),
             "parse_rate":   parse_rate(rows),
             "fallback_count": fallback_count(rows),
-            "mean_sec_per_q": mean_sec(rows),
+            # Sec/Q over test-answerable rows only (same rows as accuracy)
+            "mean_sec_per_q": mean_sec(test_ans),
             "correct_list": corr_all,
             "correct_medqa": corr_med,
             "correct_pubmedqa": corr_pub,
@@ -132,22 +133,27 @@ def write_markdown(stats_list, out_path):
     lines = []
     lines.append("# Final Results: Baseline vs Full RAG (5 Models)\n")
     lines.append(
-        "> Accuracy on the **test set, answerable questions only** (should_abstain==False).  \n"
-        "> 95% CI: percentile bootstrap (1 000 resamples, seed 42).  \n"
+        "> **Test set, answerable questions only** (should_abstain==False).\n"
+        "> 95% CI: percentile bootstrap (1 000 resamples, seed 42).\n"
         "> McNemar: exact two-sided binomial test on discordant pairs.\n"
+        "> Sec/Q: mean seconds per question over test-split answerable rows only (same rows as accuracy).\n"
+        "> **Significant** = Holm-Bonferroni-adjusted p < 0.05 (not applicable here; no Holm correction "
+        "is applied to the baseline-vs-RAG test — there is only one comparison per model).\n"
     )
     lines.append("")
 
     # Main accuracy table
     lines.append("## Accuracy")
     lines.append(
-        "| Model | Baseline Overall [95% CI] | Baseline MedQA | Baseline PubMedQA "
-        "| RAG Overall [95% CI] | RAG MedQA | RAG PubMedQA "
-        "| McNemar p (overall) | McNemar p (MedQA) | McNemar p (PubMedQA) |"
+        "| Model | Baseline Overall [95% CI] | Baseline MedQA [95% CI] | Baseline PubMedQA [95% CI] "
+        "| RAG Overall [95% CI] | RAG MedQA [95% CI] | RAG PubMedQA [95% CI] "
+        "| McNemar p overall | McNemar p MedQA | McNemar p PubMedQA |"
     )
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for s in stats_list:
         b, r = s["baseline"], s["rag"]
+        p_med = s.get("mcnemar_p_medqa")
+        p_pub = s.get("mcnemar_p_pubmedqa")
         lines.append(
             f"| {s['model']} "
             f"| {fmt_acc_ci(b['acc_overall'], b['ci_overall'])} "
@@ -157,8 +163,8 @@ def write_markdown(stats_list, out_path):
             f"| {fmt_acc_ci(r['acc_medqa'], r['ci_medqa'])} "
             f"| {fmt_acc_ci(r['acc_pubmedqa'], r['ci_pubmedqa'])} "
             f"| {s['mcnemar_p_overall']:.5f} "
-            f"| {s.get('mcnemar_p_medqa', '-')} "
-            f"| {s.get('mcnemar_p_pubmedqa', '-')} |"
+            f"| {f'{p_med:.5f}' if p_med is not None else '-'} "
+            f"| {f'{p_pub:.5f}' if p_pub is not None else '-'} |"
         )
 
     lines.append("")
@@ -181,9 +187,43 @@ def write_markdown(stats_list, out_path):
         )
 
     lines.append("")
+    lines.append("## Key Findings")
+    lines.append(
+        "'Significant' throughout means **Holm-Bonferroni-adjusted p < 0.05** "
+        "(where HB correction is applied, i.e., in the adaptive-RAG analysis over 4 strategies).  "
+    )
+    lines.append(
+        "For the single baseline-vs-Full-RAG comparison (this table), no multiple-test correction is needed; "
+        "a result is 'significant before correction' if raw p < 0.05."
+    )
+    lines.append("")
+    # Collect significant and raw-sig findings
+    sig_raw = []
+    for s in stats_list:
+        p = s["mcnemar_p_overall"]
+        if p is not None and p < 0.05:
+            direction = "RAG > Baseline" if s["rag"]["acc_overall"] > s["baseline"]["acc_overall"] else "Baseline > RAG"
+            sig_raw.append(f"  - {s['model']}: p={p:.5f} ({direction}, "
+                           f"Baseline {s['baseline']['acc_overall']:.4f} → RAG {s['rag']['acc_overall']:.4f})")
+        # Per-dataset
+        for ds, key in (("MedQA", "mcnemar_p_medqa"), ("PubMedQA", "mcnemar_p_pubmedqa")):
+            p_ds = s.get(key)
+            if p_ds is not None and p_ds < 0.05:
+                b_acc = s["baseline"]["acc_medqa"] if ds == "MedQA" else s["baseline"]["acc_pubmedqa"]
+                r_acc = s["rag"]["acc_medqa"] if ds == "MedQA" else s["rag"]["acc_pubmedqa"]
+                direction = "RAG > Baseline" if r_acc > b_acc else "Baseline > RAG"
+                sig_raw.append(f"  - {s['model']} [{ds}]: p={p_ds:.5f} ({direction}, "
+                               f"Baseline {b_acc:.4f} → RAG {r_acc:.4f})")
+
+    if sig_raw:
+        lines.append("**Significant before correction (raw p < 0.05, Full RAG vs Baseline):**")
+        lines.extend(sig_raw)
+    else:
+        lines.append("No model achieves p < 0.05 for Full RAG vs Baseline (overall or per dataset).")
+    lines.append("")
     lines.append("---")
     lines.append(
-        f"*Retrieval+rerank cost (not in sec/q above): 0.12730 s/q "
+        f"*Retrieval+rerank cost not included in Sec/Q above: 0.12730 s/q "
         f"(Phase6 23.424 s + Phase7 180.261 s = 203.685 s / 1600 q, "
         f"from outputs/kaggle_build/medrag-build.log)*"
     )
@@ -246,14 +286,17 @@ def write_csv(stats_list, out_path):
 
 
 def print_table(stats_list):
-    print("\n" + "=" * 130)
-    print("FINAL RESULTS: BASELINE vs FULL RAG  (test, answerable questions only)")
-    print("=" * 130)
-    hdr = (f"{'Model':<16} {'Mode':<9} {'Overall [95% CI]':<26} "
-           f"{'MedQA [95% CI]':<24} {'PubMedQA [95% CI]':<24} "
+    print("\n" + "=" * 140)
+    print("FINAL RESULTS: BASELINE vs FULL RAG  (test-split, answerable questions only)")
+    print("Sec/Q: mean over test-split answerable rows (same rows as accuracy).")
+    print("McNemar: exact two-sided binomial. No multiple-test correction (single comparison per model).")
+    print("'significant before correction' = raw p < 0.05.")
+    print("=" * 140)
+    hdr = (f"{'Model':<16} {'Mode':<9} {'Overall [95% CI]':<28} "
+           f"{'MedQA [95% CI]':<26} {'PubMedQA [95% CI]':<26} "
            f"{'Parse':>6} {'Fallbk':>7} {'Sec/Q':>7} {'McNemar p':>12}")
     print(hdr)
-    print("-" * 130)
+    print("-" * 140)
     for s in stats_list:
         for mode_key, label in [("baseline", "Baseline"), ("rag", "RAG")]:
             m = s[mode_key]
@@ -262,11 +305,50 @@ def print_table(stats_list):
             pubmed  = f"{m['acc_pubmedqa']:.4f} [{m['ci_pubmedqa'][0]:.3f},{m['ci_pubmedqa'][1]:.3f}]"
             p = f"{s['mcnemar_p_overall']:.5f}" if label == "RAG" else "-"
             print(
-                f"{s['model']:<16} {label:<9} {overall:<26} {medqa:<24} {pubmed:<24} "
+                f"{s['model']:<16} {label:<9} {overall:<28} {medqa:<26} {pubmed:<26} "
                 f"{m['parse_rate']:>6.4f} {m['fallback_count']:>7} {m['mean_sec_per_q']:>7.3f} {p:>12}"
             )
+        # Per-dataset McNemar on separate line
+        p_med = s.get("mcnemar_p_medqa")
+        p_pub = s.get("mcnemar_p_pubmedqa")
+        p_med_s = f"{p_med:.5f}" if p_med is not None else "-"
+        p_pub_s = f"{p_pub:.5f}" if p_pub is not None else "-"
+        print(f"{'':16} {'McNemar':9} {'MedQA p='+p_med_s:<28} {'PubMedQA p='+p_pub_s:<26}")
         print()
-    print("=" * 130)
+    print("=" * 140)
+
+    # Key findings
+    print("\nKEY FINDINGS")
+    print("-" * 60)
+    print("'Significant' = Holm-Bonferroni-adjusted p < 0.05")
+    print("  (HB correction is applied in the adaptive-RAG analysis over 4 strategies;")
+    print("  not applicable here — this table has one comparison per model.)")
+    print("'Significant before correction' = raw p < 0.05 (Full RAG vs Baseline).")
+    sig_raw, sig_hb = [], []
+    for s in stats_list:
+        for scope, p_key, label in [
+            ("overall", "mcnemar_p_overall", "overall"),
+            ("MedQA",   "mcnemar_p_medqa",   "MedQA"),
+            ("PubMedQA","mcnemar_p_pubmedqa","PubMedQA"),
+        ]:
+            p = s.get(p_key)
+            if p is not None and p < 0.05:
+                rag_acc = s["rag"]["acc_overall"] if scope == "overall" else (
+                    s["rag"]["acc_medqa"] if scope == "MedQA" else s["rag"]["acc_pubmedqa"]
+                )
+                base_acc = s["baseline"]["acc_overall"] if scope == "overall" else (
+                    s["baseline"]["acc_medqa"] if scope == "MedQA" else s["baseline"]["acc_pubmedqa"]
+                )
+                direction = "RAG > Baseline" if rag_acc > base_acc else "Baseline > RAG"
+                sig_raw.append(f"  {s['model']} [{label}]: p={p:.5f} ({direction})")
+    if sig_raw:
+        print("Significant before correction (raw p < 0.05):")
+        for line in sig_raw:
+            print(line)
+    else:
+        print("No comparison reaches raw p < 0.05 for Full RAG vs Baseline.")
+    print("No comparison reaches Holm-adjusted p < 0.05 (single test per model, no correction).")
+    print("=" * 140)
 
 
 def main():

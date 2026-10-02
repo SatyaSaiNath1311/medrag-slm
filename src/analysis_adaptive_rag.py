@@ -472,12 +472,12 @@ def print_combined_table(all_model_data):
           f"(Phase6 23.424 s + Phase7 180.261 s = 203.685 s / 1600 q, "
           f"from outputs/kaggle_build/medrag-build.log)")
 
-    # Main table
+    # Main table — now includes per-dataset McNemar p vs baseline
     header = (
         "| Model | Strategy | Gens/Q | Retrieval | Sec/Q | % RAG | "
-        "Test Acc [95% CI] | MedQA | PubMedQA | "
-        "p vs Base (raw/adj-HB) | p vs RAG |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|"
+        "Test Acc [95% CI] | MedQA Acc | PubMedQA Acc | "
+        "p vs Base overall (raw/adj-HB) | p MedQA vs Base | p PubMedQA vs Base | p vs RAG |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     )
     rows = []
 
@@ -486,7 +486,7 @@ def print_combined_table(all_model_data):
         for s in strat_order:
             info = test_res.get(s, {})
             if info.get("status") == "skipped":
-                rows.append(f"| {model_name} | {strat_labels[s]} | - | - | - | - | skipped | - | - | - | - |")
+                rows.append(f"| {model_name} | {strat_labels[s]} | - | - | - | - | skipped | - | - | - | - | - | - |")
                 continue
 
             gens  = str(info.get("cost_gens_per_q", "-"))
@@ -495,7 +495,7 @@ def print_combined_table(all_model_data):
             rag   = f"{info['rag_pct']:.1f}%"
             acc   = (f"{info['acc_overall']:.4f} "
                      f"[{info['ci_overall'][0]:.3f}, {info['ci_overall'][1]:.3f}]")
-            med   = f"{info['acc_medqa']:.4f}"   if info.get("acc_medqa")   is not None else "-"
+            med   = f"{info['acc_medqa']:.4f}"    if info.get("acc_medqa")    is not None else "-"
             pub   = f"{info['acc_pubmedqa']:.4f}" if info.get("acc_pubmedqa") is not None else "-"
 
             raw_p = info.get("mcnemar_p_vs_baseline")
@@ -507,21 +507,30 @@ def print_combined_table(all_model_data):
             else:
                 p_base = f"{raw_p:.4f}"
 
+            # Per-dataset p vs baseline
+            pd = info.get("per_dataset_mcnemar_vs_baseline", {})
+            p_med_raw = pd.get("medqa", {}).get("p_vs_baseline")
+            p_pub_raw = pd.get("pubmedqa", {}).get("p_vs_baseline")
+            p_med_s = f"{p_med_raw:.4f}" if p_med_raw is not None else "-"
+            p_pub_s = f"{p_pub_raw:.4f}" if p_pub_raw is not None else "-"
+
             p_rag = info.get("mcnemar_p_vs_rag")
             p_rag_s = f"{p_rag:.4f}" if p_rag is not None else "-"
 
             rows.append(
                 f"| {model_name} | {strat_labels[s]} | {gens} | {retr} | {secs} | {rag} "
-                f"| {acc} | {med} | {pub} | {p_base} | {p_rag_s} |"
+                f"| {acc} | {med} | {pub} | {p_base} | {p_med_s} | {p_pub_s} | {p_rag_s} |"
             )
 
     table = header + "\n" + "\n".join(rows)
-    print("\n" + "=" * 120)
+    print("\n" + "=" * 140)
     print("COMBINED ADAPTIVE RAG TEST RESULTS")
-    print("(% RAG = share of final answers taken from RAG)")
-    print("=" * 120)
+    print("Sec/Q: test-split answerable questions only. % RAG = share of final answers taken from RAG.")
+    print("Holm-Bonferroni correction applied within each model over the 4 strategy-vs-baseline p-values.")
+    print("Significant (HB-adjusted p < 0.05) marked *; significant before correction (raw p < 0.05) marked ~.")
+    print("=" * 140)
     print(table)
-    print("=" * 120)
+    print("=" * 140)
 
     # Per-dataset McNemar
     print("\n" + "=" * 85)
@@ -559,6 +568,8 @@ def main():
     args = parser.parse_args()
 
     candidates = sorted(d for d in glob.glob(os.path.join(args.base_dir, "*")) if os.path.isdir(d))
+    # Exclude helper rerun dirs (e.g. gemma3-4b_rag)
+    candidates = [d for d in candidates if not os.path.basename(d).endswith("_rag")]
     if args.models:
         candidates = [d for d in candidates if os.path.basename(d) in args.models]
 
