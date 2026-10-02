@@ -419,8 +419,12 @@ def build_table_3(models, test_dict, all_data):
         "> **Latency Details**:  \n"
         "> - **Baseline**: Pure parametric forward pass latency.  \n"
         "> - **Full RAG**: Includes generation pass + **0.127 s retrieval overhead** (BM25 + MedCPT dense (FAISS) + MedCPT cross-encoder rerank from Phase 6 & 7 build logs).  \n"
-        "> - **Adaptive Gates**: Incorporates retrieval overhead and selective single/double generation passes based on gate logic.  \n"
-        "> - **Peak VRAM / RAM**: Populated from execution profiling (`profiling.json`); marked *'pending'* if profiling benchmarks have not yet been executed on GPU hardware.\n"
+        "> - **Adaptive Gates**: Incorporates retrieval overhead and selective single/double generation passes based on gate logic; peak memory corresponds to Full RAG when retrieval is triggered.  \n"
+        "> - **Peak VRAM**: Maximum GPU memory allocated (`torch.cuda.max_memory_allocated`) summed across GPUs (GB, 1 decimal); reserved memory is excluded because it includes cached allocations from earlier modes.  \n"
+        "> - **Peak RAM**: Process resident set size (`peak_process_rss_mb`, GB); all models profiled sequentially in one process, so RSS includes residual allocations from previously loaded models — treat as an upper bound.  \n"
+        "> *Footnotes*:  \n"
+        "> 1. **Timing source**: Latency and throughput are computed over full test runs ($N=1,000$ questions); profiling used 20 questions per mode (10 for context) on Kaggle 2×T4.  \n"
+        "> 2. **gemma3-4b**: Loaded in float32 across 2×T4; RAG used batch size 2 vs 8 for baseline, so peak VRAM is not directly comparable across its modes.\n"
     )
     lines.append(
         "| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Peak VRAM | Peak RAM |"
@@ -460,23 +464,26 @@ def build_table_3(models, test_dict, all_data):
             vram_str = "pending"
             ram_str = "pending"
             if m_prof:
-                mode_key = "context" if is_ctx else ("rag" if is_rag else "baseline")
+                mode_key = "context" if is_ctx else ("rag" if (is_rag or is_adapt) else "baseline")
                 mode_stats = m_prof.get("modes", {}).get(mode_key, {})
                 if mode_stats:
                     cuda_mem = mode_stats.get("cuda_memory", {})
                     if cuda_mem:
-                        total_res_mb = sum(dev.get("max_memory_reserved_mb", 0) for dev in cuda_mem.values())
-                        vram_str = f"{total_res_mb / 1024:.2f} GB"
+                        total_alloc_mb = sum(dev.get("max_memory_allocated_mb", 0) for dev in cuda_mem.values())
+                        vram_str = f"{total_alloc_mb / 1024:.1f} GB"
                     rss_mb = mode_stats.get("peak_process_rss_mb")
                     if rss_mb:
-                        ram_str = f"{rss_mb / 1024:.2f} GB"
+                        ram_str = f"{rss_mb / 1024:.1f} GB"
 
             lines.append(
                 f"| **{m}** | {v_name} | {avg_lat:.3f} s | {tps:.1f} tok/s | {mean_prompt:.1f} | {vram_str} | {ram_str} |"
             )
 
     lines.append("")
+    lines.append("4 of 5 models run on a single 16 GB T4 including RAG; RAG adds ~1.2–1.8 GB VRAM.")
+    lines.append("")
     return "\n".join(lines)
+
 
 
 # ---------- Main ----------

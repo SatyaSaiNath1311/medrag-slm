@@ -1,0 +1,347 @@
+{
+  "qwen3-4b": {
+    "model_id": "Qwen/Qwen3-4B",
+    "modes": {
+      "baseline": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 0.345,
+        "total_seconds": 6.9,
+        "peak_process_rss_bytes": 3791171584,
+        "peak_process_rss_mb": 3615.54,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 9028417536,
+            "max_memory_allocated_mb": 8610.17,
+            "max_memory_reserved_bytes": 9298771968,
+            "max_memory_reserved_mb": 8868.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 0,
+            "max_memory_allocated_mb": 0.0,
+            "max_memory_reserved_bytes": 0,
+            "max_memory_reserved_mb": 0.0
+          }
+        }
+      },
+      "rag": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 1.2403,
+        "total_seconds": 24.81,
+        "peak_process_rss_bytes": 3793858560,
+        "peak_process_rss_mb": 3618.11,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 10905066496,
+            "max_memory_allocated_mb": 10399.88,
+            "max_memory_reserved_bytes": 11668553728,
+            "max_memory_reserved_mb": 11128.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 0,
+            "max_memory_allocated_mb": 0.0,
+            "max_memory_reserved_bytes": 0,
+            "max_memory_reserved_mb": 0.0
+          }
+        }
+      },
+      "context": {
+        "num_questions": 10,
+        "mean_seconds_per_question": 0.4318,
+        "total_seconds": 4.32,
+        "peak_process_rss_bytes": 3793858560,
+        "peak_process_rss_mb": 3618.11,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 9384558080,
+            "max_memory_allocated_mb": 8949.81,
+            "max_memory_reserved_bytes": 11668553728,
+            "max_memory_reserved_mb": 11128.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 0,
+            "max_memory_allocated_mb": 0.0,
+            "max_memory_reserved_bytes": 0,
+            "max_memory_reserved_mb": 0.0
+          }
+        }
+      }
+    },
+    "model_load_time_sec": 75.477
+  },
+  "phi4-mini": {
+    "model_id": "microsoft/Phi-4-mini-instruct",
+    "modes": {
+      "baseline": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 0.2301,
+        "total_seconds": 4.6,
+        "peak_process_rss_bytes": 4646674432,
+        "peak_process_rss_mb": 4431.41,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 8565048320,
+            "max_memory_allocated_mb": 8168.27,
+            "max_memory_reserved_bytes": 8698986496,
+            "max_memory_reserved_mb": 8296.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 0,
+            "max_memory_allocated_mb": 0.0,
+            "max_memory_reserved_bytes": 0,
+            "max_memory_reserved_mb": 0.0
+          }
+        }
+      },
+      "rag": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 1.1013,
+        "total_seconds": 22.03,
+        "peak_process_rss_bytes": 4646928384,
+        "peak_process_rss_mb": 4431.66,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 10270542336,
+            "max_memory_allocated_mb": 9794.75,
+            "max_memory_reserved_bytes": 10722738176,
+            "max_memory_reserved_mb": 10226.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 0,
+            "max_memory_allocated_mb": 0.0,
+            "max_memory_reserved_bytes": 0,
+            "max_memory_reserved_mb": 0.0
+          }
+        }
+      },
+      "context": {
+        "num_questions": 10,
+        "mean_seconds_per_question": 0.6069,
+        "total_seconds": 6.07,
+        "peak_process_rss_bytes": 4646932480,
+        "peak_process_rss_mb": 4431.66,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 8906002944,
+            "max_memory_allocated_mb": 8493.43,
+            "max_memory_reserved_bytes": 10722738176,
+            "max_memory_reserved_mb": 10226.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 0,
+            "max_memory_allocated_mb": 0.0,
+            "max_memory_reserved_bytes": 0,
+            "max_memory_reserved_mb": 0.0
+          }
+        }
+      }
+    },
+    "model_load_time_sec": 43.718
+  },
+  "gemma3-4b": {
+    "model_id": "google/gemma-3-4b-it",
+    "modes": {
+      "baseline": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 0.8128,
+        "total_seconds": 16.26,
+        "peak_process_rss_bytes": 6277775360,
+        "peak_process_rss_mb": 5986.95,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 9620588544,
+            "max_memory_allocated_mb": 9174.91,
+            "max_memory_reserved_bytes": 9776922624,
+            "max_memory_reserved_mb": 9324.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 10163325952,
+            "max_memory_allocated_mb": 9692.5,
+            "max_memory_reserved_bytes": 10498342912,
+            "max_memory_reserved_mb": 10012.0
+          }
+        }
+      },
+      "rag": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 3.2457,
+        "total_seconds": 64.91,
+        "peak_process_rss_bytes": 6027632640,
+        "peak_process_rss_mb": 5748.4,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 9253716992,
+            "max_memory_allocated_mb": 8825.03,
+            "max_memory_reserved_bytes": 9779019776,
+            "max_memory_reserved_mb": 9326.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 9667599360,
+            "max_memory_allocated_mb": 9219.74,
+            "max_memory_reserved_bytes": 10498342912,
+            "max_memory_reserved_mb": 10012.0
+          }
+        }
+      },
+      "context": {
+        "num_questions": 10,
+        "mean_seconds_per_question": 1.6129,
+        "total_seconds": 16.13,
+        "peak_process_rss_bytes": 5996785664,
+        "peak_process_rss_mb": 5718.98,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 8896121344,
+            "max_memory_allocated_mb": 8484.0,
+            "max_memory_reserved_bytes": 9779019776,
+            "max_memory_reserved_mb": 9326.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 9189212160,
+            "max_memory_allocated_mb": 8763.52,
+            "max_memory_reserved_bytes": 10504634368,
+            "max_memory_reserved_mb": 10018.0
+          }
+        }
+      }
+    },
+    "model_load_time_sec": 60.036
+  },
+  "qwen3-1.7b": {
+    "model_id": "Qwen/Qwen3-1.7B",
+    "modes": {
+      "baseline": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 0.1724,
+        "total_seconds": 3.45,
+        "peak_process_rss_bytes": 6698409984,
+        "peak_process_rss_mb": 6388.1,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 4796636672,
+            "max_memory_allocated_mb": 4574.43,
+            "max_memory_reserved_bytes": 4945084416,
+            "max_memory_reserved_mb": 4716.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 8519680,
+            "max_memory_allocated_mb": 8.12,
+            "max_memory_reserved_bytes": 20971520,
+            "max_memory_reserved_mb": 20.0
+          }
+        }
+      },
+      "rag": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 0.7299,
+        "total_seconds": 14.6,
+        "peak_process_rss_bytes": 6698631168,
+        "peak_process_rss_mb": 6388.31,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 6194179584,
+            "max_memory_allocated_mb": 5907.23,
+            "max_memory_reserved_bytes": 6702497792,
+            "max_memory_reserved_mb": 6392.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 8519680,
+            "max_memory_allocated_mb": 8.12,
+            "max_memory_reserved_bytes": 20971520,
+            "max_memory_reserved_mb": 20.0
+          }
+        }
+      },
+      "context": {
+        "num_questions": 10,
+        "mean_seconds_per_question": 0.5566,
+        "total_seconds": 5.57,
+        "peak_process_rss_bytes": 6698635264,
+        "peak_process_rss_mb": 6388.32,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 5060317696,
+            "max_memory_allocated_mb": 4825.9,
+            "max_memory_reserved_bytes": 6702497792,
+            "max_memory_reserved_mb": 6392.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 8519680,
+            "max_memory_allocated_mb": 8.12,
+            "max_memory_reserved_bytes": 20971520,
+            "max_memory_reserved_mb": 20.0
+          }
+        }
+      }
+    },
+    "model_load_time_sec": 27.964
+  },
+  "smollm3-3b": {
+    "model_id": "HuggingFaceTB/SmolLM3-3B",
+    "modes": {
+      "baseline": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 0.2434,
+        "total_seconds": 4.87,
+        "peak_process_rss_bytes": 5565628416,
+        "peak_process_rss_mb": 5307.8,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 6870258688,
+            "max_memory_allocated_mb": 6551.99,
+            "max_memory_reserved_bytes": 6975127552,
+            "max_memory_reserved_mb": 6652.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 8519680,
+            "max_memory_allocated_mb": 8.12,
+            "max_memory_reserved_bytes": 20971520,
+            "max_memory_reserved_mb": 20.0
+          }
+        }
+      },
+      "rag": {
+        "num_questions": 20,
+        "mean_seconds_per_question": 1.0511,
+        "total_seconds": 21.02,
+        "peak_process_rss_bytes": 5565661184,
+        "peak_process_rss_mb": 5307.83,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 8136140288,
+            "max_memory_allocated_mb": 7759.23,
+            "max_memory_reserved_bytes": 8564768768,
+            "max_memory_reserved_mb": 8168.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 8519680,
+            "max_memory_allocated_mb": 8.12,
+            "max_memory_reserved_bytes": 20971520,
+            "max_memory_reserved_mb": 20.0
+          }
+        }
+      },
+      "context": {
+        "num_questions": 10,
+        "mean_seconds_per_question": 0.6162,
+        "total_seconds": 6.16,
+        "peak_process_rss_bytes": 5326532608,
+        "peak_process_rss_mb": 5079.78,
+        "cuda_memory": {
+          "cuda:0": {
+            "max_memory_allocated_bytes": 7126221824,
+            "max_memory_allocated_mb": 6796.09,
+            "max_memory_reserved_bytes": 8602517504,
+            "max_memory_reserved_mb": 8204.0
+          },
+          "cuda:1": {
+            "max_memory_allocated_bytes": 8519680,
+            "max_memory_allocated_mb": 8.12,
+            "max_memory_reserved_bytes": 20971520,
+            "max_memory_reserved_mb": 20.0
+          }
+        }
+      }
+    },
+    "model_load_time_sec": 35.983
+  }
+}

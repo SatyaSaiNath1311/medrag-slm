@@ -77,28 +77,34 @@ Comprehensive empirical evaluation comparing five open-weight small language mod
 > **Latency Details**:  
 > - **Baseline**: Pure parametric forward pass latency.  
 > - **Full RAG**: Includes generation pass + **0.127 s retrieval overhead** (BM25 + MedCPT dense (FAISS) + MedCPT cross-encoder rerank from Phase 6 & 7 build logs).  
-> - **Adaptive Gates**: Incorporates retrieval overhead and selective single/double generation passes based on gate logic.  
-> - **Peak VRAM / RAM**: Populated from execution profiling (`profiling.json`); marked *'pending'* if profiling benchmarks have not yet been executed on GPU hardware.
+> - **Adaptive Gates**: Incorporates retrieval overhead and selective single/double generation passes based on gate logic; peak memory corresponds to Full RAG when retrieval is triggered.  
+> - **Peak VRAM**: Maximum GPU memory allocated (`torch.cuda.max_memory_allocated`) summed across GPUs (GB, 1 decimal); reserved memory is excluded because it includes cached allocations from earlier modes.  
+> - **Peak RAM**: Process resident set size (`peak_process_rss_mb`, GB); all models profiled sequentially in one process, so RSS includes residual allocations from previously loaded models — treat as an upper bound.  
+> *Footnotes*:  
+> 1. **Timing source**: Latency and throughput are computed over full test runs ($N=1,000$ questions); profiling used 20 questions per mode (10 for context) on Kaggle 2×T4.  
+> 2. **gemma3-4b**: Loaded in float32 across 2×T4; RAG used batch size 2 vs 8 for baseline, so peak VRAM is not directly comparable across its modes.
 
 | Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Peak VRAM | Peak RAM |
 |---|---|---|---|---|---|---|
-| **qwen3-4b** | Baseline | 0.223 s | 71.8 tok/s | 161.2 | pending | pending |
-| **qwen3-4b** | Full RAG | 1.579 s | 12.7 tok/s | 1200.1 | pending | pending |
-| **qwen3-4b** | Adaptive (Combined Gate) | 1.802 s | 17.3 tok/s | 843.9 | pending | pending |
-| **qwen3-4b** | +Abstract (PubMedQA) | 0.406 s | 21.8 tok/s | 440.8 | pending | pending |
-| **phi4-mini** | Baseline | 0.162 s | 60.5 tok/s | 146.2 | pending | pending |
-| **phi4-mini** | Full RAG | 1.256 s | 20.1 tok/s | 1138.9 | pending | pending |
-| **phi4-mini** | Adaptive (Confidence Gate) | 1.418 s | 23.9 tok/s | 722.5 | pending | pending |
-| **phi4-mini** | +Abstract (PubMedQA) | 0.485 s | 25.4 tok/s | 411.8 | pending | pending |
-| **gemma3-4b** | Baseline | 0.611 s | 18.7 tok/s | 157.8 | pending | pending |
-| **gemma3-4b** | Full RAG | 3.449 s | 3.4 tok/s | 1144.7 | pending | pending |
-| **gemma3-4b** | Adaptive (Rerank Gate) | 1.842 s | 6.5 tok/s | 555.9 | pending | pending |
-| **gemma3-4b** | +Abstract (PubMedQA) | 1.422 s | 5.0 tok/s | 431.6 | pending | pending |
-| **qwen3-1.7b** | Baseline | 0.117 s | 136.6 tok/s | 161.2 | pending | pending |
-| **qwen3-1.7b** | Full RAG | 0.823 s | 52.3 tok/s | 1200.1 | pending | pending |
-| **qwen3-1.7b** | Adaptive (Combined Gate) | 0.940 s | 59.0 tok/s | 839.9 | pending | pending |
-| **qwen3-1.7b** | +Abstract (PubMedQA) | 0.333 s | 106.4 tok/s | 440.8 | pending | pending |
-| **smollm3-3b** | Baseline | 0.162 s | 98.6 tok/s | 213.5 | pending | pending |
-| **smollm3-3b** | Full RAG | 1.067 s | 42.3 tok/s | 1225.1 | pending | pending |
-| **smollm3-3b** | Adaptive (Rerank Gate) | 0.691 s | 49.6 tok/s | 736.0 | pending | pending |
-| **smollm3-3b** | +Abstract (PubMedQA) | 0.464 s | 32.5 tok/s | 480.2 | pending | pending |
+| **qwen3-4b** | Baseline | 0.223 s | 71.8 tok/s | 161.2 | 8.4 GB | 3.5 GB |
+| **qwen3-4b** | Full RAG | 1.579 s | 12.7 tok/s | 1200.1 | 10.2 GB | 3.5 GB |
+| **qwen3-4b** | Adaptive (Combined Gate) | 1.802 s | 17.3 tok/s | 843.9 | 10.2 GB | 3.5 GB |
+| **qwen3-4b** | +Abstract (PubMedQA) | 0.406 s | 21.8 tok/s | 440.8 | 8.7 GB | 3.5 GB |
+| **phi4-mini** | Baseline | 0.162 s | 60.5 tok/s | 146.2 | 8.0 GB | 4.3 GB |
+| **phi4-mini** | Full RAG | 1.256 s | 20.1 tok/s | 1138.9 | 9.6 GB | 4.3 GB |
+| **phi4-mini** | Adaptive (Confidence Gate) | 1.418 s | 23.9 tok/s | 722.5 | 9.6 GB | 4.3 GB |
+| **phi4-mini** | +Abstract (PubMedQA) | 0.485 s | 25.4 tok/s | 411.8 | 8.3 GB | 4.3 GB |
+| **gemma3-4b** | Baseline | 0.611 s | 18.7 tok/s | 157.8 | 18.4 GB | 5.8 GB |
+| **gemma3-4b** | Full RAG | 3.449 s | 3.4 tok/s | 1144.7 | 17.6 GB | 5.6 GB |
+| **gemma3-4b** | Adaptive (Rerank Gate) | 1.842 s | 6.5 tok/s | 555.9 | 17.6 GB | 5.6 GB |
+| **gemma3-4b** | +Abstract (PubMedQA) | 1.422 s | 5.0 tok/s | 431.6 | 16.8 GB | 5.6 GB |
+| **qwen3-1.7b** | Baseline | 0.117 s | 136.6 tok/s | 161.2 | 4.5 GB | 6.2 GB |
+| **qwen3-1.7b** | Full RAG | 0.823 s | 52.3 tok/s | 1200.1 | 5.8 GB | 6.2 GB |
+| **qwen3-1.7b** | Adaptive (Combined Gate) | 0.940 s | 59.0 tok/s | 839.9 | 5.8 GB | 6.2 GB |
+| **qwen3-1.7b** | +Abstract (PubMedQA) | 0.333 s | 106.4 tok/s | 440.8 | 4.7 GB | 6.2 GB |
+| **smollm3-3b** | Baseline | 0.162 s | 98.6 tok/s | 213.5 | 6.4 GB | 5.2 GB |
+| **smollm3-3b** | Full RAG | 1.067 s | 42.3 tok/s | 1225.1 | 7.6 GB | 5.2 GB |
+| **smollm3-3b** | Adaptive (Rerank Gate) | 0.691 s | 49.6 tok/s | 736.0 | 7.6 GB | 5.2 GB |
+| **smollm3-3b** | +Abstract (PubMedQA) | 0.464 s | 32.5 tok/s | 480.2 | 6.6 GB | 5.0 GB |
+
+4 of 5 models run on a single 16 GB T4 including RAG; RAG adds ~1.2–1.8 GB VRAM.
