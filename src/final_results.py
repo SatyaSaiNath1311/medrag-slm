@@ -37,6 +37,93 @@ def mcnemar_exact(a_correct, b_correct):
     return round(min(1.0, 2.0 * cdf), 5)
 
 
+def cochran_mantel_haenszel(strata):
+    """Cochran-Mantel-Haenszel test for 2x2xK tables.
+    
+    strata: list of tuples (a, b, c, d) where:
+      a: Group 1 (RAG) Success (correct)
+      b: Group 1 (RAG) Failure (incorrect)
+      c: Group 2 (Baseline) Success (correct)
+      d: Group 2 (Baseline) Failure (incorrect)
+    """
+    sum_a = sum(a for a, b, c, d in strata)
+    sum_e = 0.0
+    sum_var = 0.0
+    R = 0.0
+    S = 0.0
+    sum_PR = 0.0
+    sum_PS_QR = 0.0
+    sum_QS = 0.0
+
+    for a, b, c, d in strata:
+        n1 = a + b
+        n2 = c + d
+        m1 = a + c
+        m2 = b + d
+        N = n1 + n2
+        if N <= 1 or n1 == 0 or n2 == 0 or m1 == 0 or m2 == 0:
+            continue
+        e = n1 * m1 / N
+        v = (n1 * n2 * m1 * m2) / (N * N * (N - 1))
+        sum_e += e
+        sum_var += v
+
+        R_k = (a * d) / N
+        S_k = (b * c) / N
+        R += R_k
+        S += S_k
+        P_k = (a + d) / N
+        Q_k = (b + c) / N
+        sum_PR += P_k * R_k
+        sum_PS_QR += P_k * S_k + Q_k * R_k
+        sum_QS += Q_k * S_k
+
+    diff = abs(sum_a - sum_e)
+    chi2_raw = (diff ** 2) / sum_var if sum_var > 0 else 0.0
+    chi2_cc = (max(0.0, diff - 0.5) ** 2) / sum_var if sum_var > 0 else 0.0
+    p_raw = math.erfc(math.sqrt(chi2_raw / 2.0))
+    p_cc = math.erfc(math.sqrt(chi2_cc / 2.0))
+
+    or_mh = R / S if S > 0 else float("inf")
+    if R > 0 and S > 0:
+        var_ln_or = (sum_PR / (2 * R * R)) + (sum_PS_QR / (2 * R * S)) + (sum_QS / (2 * S * S))
+        se = math.sqrt(var_ln_or)
+        ci_lo = round(math.exp(math.log(or_mh) - 1.96 * se), 4)
+        ci_hi = round(math.exp(math.log(or_mh) + 1.96 * se), 4)
+    else:
+        ci_lo, ci_hi = None, None
+
+    return {
+        "or_mh": round(or_mh, 4),
+        "ci": (ci_lo, ci_hi),
+        "chi2_raw": round(chi2_raw, 4),
+        "p_raw": p_raw,
+        "chi2_cc": round(chi2_cc, 4),
+        "p_cc": p_cc,
+    }
+
+
+def compute_cmh_results(stats_list):
+    results = {}
+    for scope in ("overall", "medqa", "pubmedqa"):
+        strata = []
+        for s in stats_list:
+            b, r = s["baseline"], s["rag"]
+            if scope == "overall":
+                b_corr, r_corr = b["correct_list"], r["correct_list"]
+            elif scope == "medqa":
+                b_corr, r_corr = b["correct_medqa"], r["correct_medqa"]
+            else:
+                b_corr, r_corr = b["correct_pubmedqa"], r["correct_pubmedqa"]
+            a = sum(r_corr)
+            b_cnt = len(r_corr) - a
+            c = sum(b_corr)
+            d = len(b_corr) - c
+            strata.append((a, b_cnt, c, d))
+        results[scope] = cochran_mantel_haenszel(strata)
+    return results
+
+
 def acc(rows):
     return round(sum(r["correct"] for r in rows) / len(rows), 4) if rows else None
 
@@ -221,6 +308,33 @@ def write_markdown(stats_list, out_path):
     else:
         lines.append("No model achieves p < 0.05 for Full RAG vs Baseline (overall or per dataset).")
     lines.append("")
+
+    # CMH pooled analysis across all 5 models
+    cmh = compute_cmh_results(stats_list)
+    lines.append("## Pooled Cochran–Mantel–Haenszel (CMH) Analysis")
+    lines.append("")
+    lines.append(
+        "Across all 5 models (stratified 2x2 meta-analysis, RAG vs Baseline conditional on model):\n"
+    )
+    lines.append(
+        "| Scope | Mantel–Haenszel Common OR [95% CI] | CMH $\\chi^2$ (df=1) | p-value (raw) | p-value (continuity-corrected) | Significant? |"
+    )
+    lines.append("|---|---|---|---|---|---|")
+    for scope in ("overall", "medqa", "pubmedqa"):
+        res = cmh[scope]
+        sig_str = "**Yes (p < 0.001, RAG > Baseline)**" if res["p_raw"] < 0.01 else (
+            "Yes (p < 0.05)" if res["p_raw"] < 0.05 else f"No (p = {res['p_raw']:.3f})"
+        )
+        ci_str = f"[{res['ci'][0]:.4f}, {res['ci'][1]:.4f}]" if res["ci"][0] else "-"
+        lines.append(
+            f"| **{scope.capitalize() if scope != 'medqa' else 'MedQA'}** "
+            f"| {res['or_mh']:.4f} {ci_str} "
+            f"| {res['chi2_raw']:.4f} "
+            f"| {res['p_raw']:.5e} "
+            f"| {res['p_cc']:.5e} "
+            f"| {sig_str} |"
+        )
+    lines.append("")
     lines.append("---")
     lines.append(
         f"*Retrieval+rerank cost not included in Sec/Q above: 0.12730 s/q "
@@ -348,6 +462,14 @@ def print_table(stats_list):
     else:
         print("No comparison reaches raw p < 0.05 for Full RAG vs Baseline.")
     print("No comparison reaches Holm-adjusted p < 0.05 (single test per model, no correction).")
+    print("-" * 60)
+    cmh = compute_cmh_results(stats_list)
+    print("POOLED COCHRAN-MANTEL-HAENSZEL (CMH) TEST (across all 5 models):")
+    for scope in ("overall", "medqa", "pubmedqa"):
+        res = cmh[scope]
+        sc_lbl = scope.capitalize() if scope != "medqa" else "MedQA"
+        ci_str = f"[{res['ci'][0]:.4f}, {res['ci'][1]:.4f}]" if res["ci"][0] else "-"
+        print(f"  {sc_lbl:<10}: Common OR = {res['or_mh']:.4f} {ci_str:<22} chi2 = {res['chi2_raw']:<7.4f} p = {res['p_raw']:.5e} (cc p = {res['p_cc']:.5e})")
     print("=" * 140)
 
 

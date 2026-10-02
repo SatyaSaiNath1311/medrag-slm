@@ -34,5 +34,15 @@ For the single baseline-vs-Full-RAG comparison (this table), no multiple-test co
   - qwen3-1.7b [MedQA]: p=0.01327 (RAG > Baseline, Baseline 0.4460 → RAG 0.5060)
   - smollm3-3b [MedQA]: p=0.01185 (RAG > Baseline, Baseline 0.4160 → RAG 0.4720)
 
+## Pooled Cochran–Mantel–Haenszel (CMH) Analysis
+
+Across all 5 models (stratified 2x2 meta-analysis, RAG vs Baseline conditional on model):
+
+| Scope | Mantel–Haenszel Common OR [95% CI] | CMH $\chi^2$ (df=1) | p-value (raw) | p-value (continuity-corrected) | Significant? |
+|---|---|---|---|---|---|
+| **Overall** | 1.0629 [0.9826, 1.1497] | 2.3160 | 1.28053e-01 | 1.33148e-01 | No (p = 0.128) |
+| **MedQA** | 1.2090 [1.0812, 1.3519] | 11.0851 | 8.70246e-04 | 9.63507e-04 | **Yes (p < 0.001, RAG > Baseline)** |
+| **Pubmedqa** | 0.9364 [0.8380, 1.0463] | 1.3471 | 2.45778e-01 | 2.57485e-01 | No (p = 0.246) |
+
 ---
 *Retrieval+rerank cost not included in Sec/Q above: 0.12730 s/q (Phase6 23.424 s + Phase7 180.261 s = 203.685 s / 1600 q, from outputs/kaggle_build/medrag-build.log)*
