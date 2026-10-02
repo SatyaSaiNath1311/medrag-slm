@@ -1,0 +1,15 @@
+{
+  "id": "satyasainath1311/medrag-slm-chat",
+  "title": "medrag-slm-chat",
+  "code_file": "chat_app.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": [
+    "satyasainath1311/medrag-build"
+  ]
+}

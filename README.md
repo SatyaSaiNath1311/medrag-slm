@@ -37,9 +37,16 @@ Every folder has a manifest.json (counts, settings, file hashes).
 5. Download results: `kaggle kernels output satyasainath1311/medrag-slm-runner -p outputs/kaggle_qa`
 
 ## Run the demo
+### 1. Local Offline Demo (Streamlit)
 ```bash
 pip install -r requirements-app.txt && streamlit run app/demo.py
 ```
+
+### 2. Live Interactive Chatbot (Kaggle GPU)
+```bash
+kaggle kernels push -p kaggle_chat
+```
+Open the kernel in Kaggle, click **Edit → Run All** (GPU enabled + Internet on, with `medrag-build` attached). Gradio generates a live public shareable link (`https://xxxx.gradio.live`). See [`kaggle_chat/README.md`](kaggle_chat/README.md) for details.
 
 ## If something fails
 | Message | Fix |
