@@ -1,0 +1,250 @@
+{
+  "model": "qwen3-4b",
+  "n_validation": 400,
+  "n_test": 1000,
+  "retr_sec_per_q": 0.1273,
+  "retr_sec_derivation": "Phase6 (23.424s) + Phase7 (180.261s) = 203.685s / 1600 q = 0.12730 s/q  (from outputs/kaggle_build/medrag-build.log)",
+  "tuning_validation": {
+    "rerank_gate": {
+      "best_tau": 5.9023,
+      "val_acc": 0.58
+    },
+    "combined": {
+      "best_tau": -5.8086,
+      "best_delta": 0.0,
+      "val_acc": 0.59
+    }
+  },
+  "test_results": {
+    "baseline": {
+      "acc_overall": 0.554,
+      "ci_overall": [
+        0.524,
+        0.588
+      ],
+      "acc_medqa": 0.584,
+      "ci_medqa": [
+        0.54,
+        0.626
+      ],
+      "acc_pubmedqa": 0.524,
+      "ci_pubmedqa": [
+        0.484,
+        0.566
+      ],
+      "rag_pct": 0.0,
+      "mcnemar_p_vs_baseline": null,
+      "mcnemar_discordant_vs_baseline": null,
+      "mcnemar_p_vs_rag": null,
+      "mcnemar_discordant_vs_rag": null,
+      "per_dataset_mcnemar_vs_baseline": {},
+      "cost_gens_per_q": 1,
+      "cost_retrieval": false,
+      "cost_sec_per_q": 0.2228
+    },
+    "rag": {
+      "acc_overall": 0.544,
+      "ci_overall": [
+        0.514,
+        0.575
+      ],
+      "acc_medqa": 0.604,
+      "ci_medqa": [
+        0.558,
+        0.648
+      ],
+      "acc_pubmedqa": 0.484,
+      "ci_pubmedqa": [
+        0.442,
+        0.53
+      ],
+      "rag_pct": 100.0,
+      "mcnemar_p_vs_baseline": 0.58256,
+      "mcnemar_discordant_vs_baseline": {
+        "a_wins": 139,
+        "b_wins": 129,
+        "discordant_total": 268
+      },
+      "mcnemar_p_vs_rag": null,
+      "mcnemar_discordant_vs_rag": null,
+      "per_dataset_mcnemar_vs_baseline": {
+        "medqa": {
+          "p_vs_baseline": 0.40749,
+          "discordant": {
+            "a_wins": 54,
+            "b_wins": 64,
+            "discordant_total": 118
+          }
+        },
+        "pubmedqa": {
+          "p_vs_baseline": 0.12053,
+          "discordant": {
+            "a_wins": 85,
+            "b_wins": 65,
+            "discordant_total": 150
+          }
+        }
+      },
+      "cost_gens_per_q": 1,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 1.5788,
+      "holm_adj_p_vs_baseline": 0.62976
+    },
+    "rerank_gate": {
+      "acc_overall": 0.565,
+      "ci_overall": [
+        0.535,
+        0.597
+      ],
+      "acc_medqa": 0.584,
+      "ci_medqa": [
+        0.54,
+        0.628
+      ],
+      "acc_pubmedqa": 0.546,
+      "ci_pubmedqa": [
+        0.502,
+        0.59
+      ],
+      "rag_pct": 40.3,
+      "mcnemar_p_vs_baseline": 0.31488,
+      "mcnemar_discordant_vs_baseline": {
+        "a_wins": 44,
+        "b_wins": 55,
+        "discordant_total": 99
+      },
+      "mcnemar_p_vs_rag": 0.12368,
+      "mcnemar_discordant_vs_rag": {
+        "a_wins": 74,
+        "b_wins": 95,
+        "discordant_total": 169
+      },
+      "per_dataset_mcnemar_vs_baseline": {
+        "medqa": {
+          "p_vs_baseline": 1.0,
+          "discordant": {
+            "a_wins": 30,
+            "b_wins": 30,
+            "discordant_total": 60
+          }
+        },
+        "pubmedqa": {
+          "p_vs_baseline": 0.10813,
+          "discordant": {
+            "a_wins": 14,
+            "b_wins": 25,
+            "discordant_total": 39
+          }
+        }
+      },
+      "cost_gens_per_q": 1,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 0.8636,
+      "holm_adj_p_vs_baseline": 0.62976
+    },
+    "confidence_gate": {
+      "acc_overall": 0.575,
+      "ci_overall": [
+        0.544,
+        0.606
+      ],
+      "acc_medqa": 0.606,
+      "ci_medqa": [
+        0.56,
+        0.646
+      ],
+      "acc_pubmedqa": 0.544,
+      "ci_pubmedqa": [
+        0.5,
+        0.588
+      ],
+      "rag_pct": 38.8,
+      "mcnemar_p_vs_baseline": 0.08017,
+      "mcnemar_discordant_vs_baseline": {
+        "a_wins": 55,
+        "b_wins": 76,
+        "discordant_total": 131
+      },
+      "mcnemar_p_vs_rag": 0.01011,
+      "mcnemar_discordant_vs_rag": {
+        "a_wins": 53,
+        "b_wins": 84,
+        "discordant_total": 137
+      },
+      "per_dataset_mcnemar_vs_baseline": {
+        "medqa": {
+          "p_vs_baseline": 0.22155,
+          "discordant": {
+            "a_wins": 28,
+            "b_wins": 39,
+            "discordant_total": 67
+          }
+        },
+        "pubmedqa": {
+          "p_vs_baseline": 0.26044,
+          "discordant": {
+            "a_wins": 27,
+            "b_wins": 37,
+            "discordant_total": 64
+          }
+        }
+      },
+      "cost_gens_per_q": 2,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 1.8017,
+      "holm_adj_p_vs_baseline": 0.24051
+    },
+    "combined": {
+      "acc_overall": 0.583,
+      "ci_overall": [
+        0.554,
+        0.612
+      ],
+      "acc_medqa": 0.614,
+      "ci_medqa": [
+        0.57,
+        0.656
+      ],
+      "acc_pubmedqa": 0.552,
+      "ci_pubmedqa": [
+        0.508,
+        0.596
+      ],
+      "rag_pct": 65.4,
+      "mcnemar_p_vs_baseline": 0.01974,
+      "mcnemar_discordant_vs_baseline": {
+        "a_wins": 58,
+        "b_wins": 87,
+        "discordant_total": 145
+      },
+      "mcnemar_p_vs_rag": 0.00056,
+      "mcnemar_discordant_vs_rag": {
+        "a_wins": 42,
+        "b_wins": 81,
+        "discordant_total": 123
+      },
+      "per_dataset_mcnemar_vs_baseline": {
+        "medqa": {
+          "p_vs_baseline": 0.10534,
+          "discordant": {
+            "a_wins": 30,
+            "b_wins": 45,
+            "discordant_total": 75
+          }
+        },
+        "pubmedqa": {
+          "p_vs_baseline": 0.11961,
+          "discordant": {
+            "a_wins": 28,
+            "b_wins": 42,
+            "discordant_total": 70
+          }
+        }
+      },
+      "cost_gens_per_q": 2,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 1.8017,
+      "holm_adj_p_vs_baseline": 0.07896
+    }
+  }
+}

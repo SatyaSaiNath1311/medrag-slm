@@ -1,5 +1,6 @@
 data/
-outputs/
+outputs/*
+!outputs/analysis/
 __pycache__/
 *.pyc
 .venv/
