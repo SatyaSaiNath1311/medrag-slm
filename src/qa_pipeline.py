@@ -46,7 +46,11 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
                for q in todo}
     todo.sort(key=lambda q: -len(prompts[q["id"]]))  # longest first: memory problems appear immediately
     max_new = qcfg[f"max_new_tokens_{mode}"]
-    bs, t0 = qcfg["batch_size"], time.time()
+    # Per-model batch size overrides: batch_size_baseline / batch_size_rag; fall back to qa.batch_size
+    bs_key = f"batch_size_{mode}"
+    bs = llm.cfg.get(bs_key) or qcfg["batch_size"]
+    t0 = time.time()
+    print(f"  {mode}: batch_size={bs} (from {'model config' if llm.cfg.get(bs_key) else 'qa config'})", flush=True)
     for s in range(0, len(todo), bs):
         batch = todo[s:s + bs]
         res = llm.generate_safe([prompts[q["id"]] for q in batch], [list(q["options"]) for q in batch], max_new)
@@ -216,6 +220,8 @@ def delete_from_cache(model_id):
 def main():
     ap = phase_args("Phases 4, 5, 8: model check, baseline QA, RAG QA")
     ap.add_argument("--models", nargs="*", help="Only these model names")
+    ap.add_argument("--modes", nargs="+", choices=["baseline", "rag"], default=None,
+                    help="Which QA modes to run (default: both). With --modes rag, skips Phase 4 and Phase 5.")
     ap.add_argument("--keep-cache", action="store_true", help="Do not delete model files after use")
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
     ap.add_argument("--dry-run", action="store_true", help="Print selected models and exit without running")
@@ -228,14 +234,11 @@ def main():
     p1, p7 = phase_dir(args.work, 1), phase_dir(args.work, 7)
     p4, p5, p8 = (phase_dir(args.work, n) for n in (4, 5, 8))
 
-    test, val = read_jsonl(p1 / "test.jsonl"), read_jsonl(p1 / "validation.jsonl")
-    val_pool = list(val)
-    evidence = {r["id"]: r for r in read_jsonl(p7 / "evidence.jsonl")}
-    questions = test + val
-    missing = [q["id"] for q in questions if q["id"] not in evidence]
-    if missing:
-        raise AssertionError(f"[CHECK FAILED] {len(missing)} questions have no Phase 7 evidence")
+    # Determine which QA modes to run
+    run_modes = list(args.modes) if args.modes else ["baseline", "rag"]
+    rag_only = run_modes == ["rag"]
 
+    # Model selection (before data load so --dry-run doesn't need the work dir)
     all_models = {m["name"]: m for m in cfg["models"] + [cfg["tiny_model"]]}
     if args.models:
         unknown = [name for name in args.models if name not in all_models]
@@ -250,7 +253,19 @@ def main():
     if args.dry_run:
         mode_str = " (check-only)" if args.check_only else ""
         print(f"Selected {len(models)} model(s){mode_str}: {[m['name'] for m in models]}")
+        print(f"QA modes: {run_modes}" + ("  [skip Phase 4 + Phase 5]" if rag_only else ""))
         return
+
+    print(f"QA modes to run: {run_modes}" + ("  [skip Phase 4 + Phase 5]" if rag_only else ""), flush=True)
+
+    test, val = read_jsonl(p1 / "test.jsonl"), read_jsonl(p1 / "validation.jsonl")
+    val_pool = list(val)
+    evidence = {r["id"]: r for r in read_jsonl(p7 / "evidence.jsonl")}
+    questions = test + val
+    missing = [q["id"] for q in questions if q["id"] not in evidence]
+    if missing:
+        raise AssertionError(f"[CHECK FAILED] {len(missing)} questions have no Phase 7 evidence")
+
 
     threshold = qcfg["tiny_min_parse_rate"] if (args.tiny and not args.check_only) else qcfg["min_parse_rate"]
 
@@ -269,17 +284,36 @@ def main():
             llm = LLM(m, device)
             print(f"  loaded in {time.time() - t0:.0f}s")
             load_sources[m["name"]] = llm.load_source
-            check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
-            check_reports[m["name"]] = check
-            (p4 / f"{m['name']}.json").write_text(json.dumps(check, indent=2))
-            if not check["passed"]:
-                status[m["name"]] = "FAILED format check (see phase4/%s.json)" % m["name"]
-                print(f"  !! {status[m['name']]}")
-            else:
+
+            if rag_only or args.check_only:
+                # When rag-only or check-only: skip Phase 4 format check if rag_only
+                if args.check_only:
+                    check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
+                    check_reports[m["name"]] = check
+                    (p4 / f"{m['name']}.json").write_text(json.dumps(check, indent=2))
+                    if not check["passed"]:
+                        status[m["name"]] = "FAILED format check (see phase4/%s.json)" % m["name"]
+                        print(f"  !! {status[m['name']]}")
+                        llm.close()
+                        continue
                 if not args.check_only:
-                    run_mode(llm, "baseline", questions, evidence, qcfg, p5 / f"{m['name']}.jsonl")
+                    # rag_only: skip phase 4 & 5, run only rag
+                    print(f"  --modes rag: skipping Phase 4 (format check) and Phase 5 (baseline)", flush=True)
                     run_mode(llm, "rag", questions, evidence, qcfg, p8 / f"{m['name']}.jsonl")
                 status[m["name"]] = "DONE"
+            else:
+                # Normal flow: Phase 4 -> Phase 5 -> Phase 8
+                check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
+                check_reports[m["name"]] = check
+                (p4 / f"{m['name']}.json").write_text(json.dumps(check, indent=2))
+                if not check["passed"]:
+                    status[m["name"]] = "FAILED format check (see phase4/%s.json)" % m["name"]
+                    print(f"  !! {status[m['name']]}")
+                else:
+                    for mode in run_modes:
+                        p_out = p5 if mode == "baseline" else p8
+                        run_mode(llm, mode, questions, evidence, qcfg, p_out / f"{m['name']}.jsonl")
+                    status[m["name"]] = "DONE"
             llm.close()
         except Exception as e:  # noqa: BLE001 - one broken model must not stop the others
             import traceback
@@ -347,9 +381,17 @@ def main():
         if status.get(name) != "DONE":
             print(f"    -> {status.get(name)}")
     Path(p8 / "summary.json").write_text(json.dumps(summary, indent=2))
+    batch_sizes_used = {
+        m["name"]: {
+            "baseline": m.get("batch_size_baseline") or qcfg["batch_size"],
+            "rag":      m.get("batch_size_rag")      or qcfg["batch_size"],
+        }
+        for m in models
+    }
     for p, n in ((p4, 4), (p5, 5), (p8, 8)):
         write_manifest(p, {"phase": n, "tiny": args.tiny, "device": device, "status": status,
-                            "load_sources": load_sources, "settings": qcfg})
+                            "load_sources": load_sources, "settings": qcfg,
+                            "batch_sizes_used": batch_sizes_used, "modes": run_modes})
     ok = all(v == "DONE" for v in status.values())
     print(f"\nPHASES 4, 5, 8 {'COMPLETE' if ok else 'FINISHED WITH PROBLEMS (see above)'}")
     if args.strict and not ok:

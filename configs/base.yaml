@@ -14,6 +14,7 @@ models:
     loader: gemma3
     kaggle_path_glob: "/kaggle/input/gemma-3/transformers/gemma-3-4b-it/*"
     kaggle_handle: "google/gemma-3/transformers/gemma-3-4b-it"
+    batch_size_rag: 2   # float32 on 2x T4 (28 GB total) OOMs at batch 8 during RAG; 2 is safe
   - name: phi4-mini
     id: microsoft/Phi-4-mini-instruct
     dtype: float16

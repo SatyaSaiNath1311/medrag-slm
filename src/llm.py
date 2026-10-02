@@ -245,15 +245,31 @@ class LLM:
         return results
 
     def generate_safe(self, prompts, letters_list, max_new_tokens):
-        """Like generate, but halves the batch on GPU out-of-memory instead of crashing."""
+        """Like generate, but halves the batch on GPU out-of-memory instead of crashing.
+
+        Catches both torch.cuda.OutOfMemoryError and RuntimeError containing
+        "out of memory" (older PyTorch / CUDA versions surface it as the latter).
+        Halves the batch and retries recursively down to batch size 1; re-raises
+        only if a single-prompt call still fails.
+        """
+        def _is_oom(exc):
+            if isinstance(exc, self.torch.cuda.OutOfMemoryError):
+                return True
+            if isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower():
+                return True
+            return False
+
         try:
             return self.generate(prompts, letters_list, max_new_tokens)
-        except self.torch.cuda.OutOfMemoryError:
+        except Exception as exc:
+            if not _is_oom(exc):
+                raise
             self.torch.cuda.empty_cache()
             if len(prompts) == 1:
+                print(f"    OOM on single prompt – re-raising", flush=True)
                 raise
             h = len(prompts) // 2
-            print(f"    out of memory at batch {len(prompts)}, retrying as {h} + {len(prompts) - h}", flush=True)
+            print(f"    OOM at batch {len(prompts)}, retrying as {h} + {len(prompts) - h}", flush=True)
             return (self.generate_safe(prompts[:h], letters_list[:h], max_new_tokens)
                     + self.generate_safe(prompts[h:], letters_list[h:], max_new_tokens))
 

@@ -13,6 +13,7 @@ MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 TINY = False                               # set to True for tiny check on Kaggle
 MODELS = ["gemma3-4b"]
+MODES = ["rag"]                            # modes to run: "baseline", "rag", or both
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
@@ -21,6 +22,8 @@ if "TINY" in os.environ:
     TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
 if "MODELS" in os.environ:
     MODELS = [m.strip() for m in os.environ["MODELS"].split(",") if m.strip()]
+if "MODES" in os.environ:
+    MODES = [m.strip() for m in os.environ["MODES"].split(",") if m.strip()]
 
 
 def print_kaggle_input_configs(max_depth=7):
@@ -72,6 +75,8 @@ if not MODELS and os.path.exists(models_file):
         MODELS = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 if MODELS:
     print(f"Selected models to run: {MODELS}")
+if MODES:
+    print(f"Selected modes to run: {MODES}")
 if TINY:
     print("TINY mode enabled: running on tiny scale")
 
@@ -115,5 +120,7 @@ if TINY:
     cmd.append("--tiny")
 if MODELS:
     cmd += ["--models", *MODELS]
+if MODES:
+    cmd += ["--modes", *MODES]
 run(cmd)
 print("\nRUNNER B COMPLETE: " + ("phase 4 format check" if CHECK_ONLY else "phases 4, 5, 8"))
