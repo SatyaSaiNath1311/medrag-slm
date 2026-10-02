@@ -12,7 +12,7 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["qwen3-1.7b", "phi4-mini", "qwen3-4b", "smollm3-3b"]
+MODELS = ["gemma3-4b"]
 MODES = ["context"]
 
 # Override from env var if provided
