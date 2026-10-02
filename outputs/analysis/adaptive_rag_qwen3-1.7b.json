@@ -2,6 +2,8 @@
   "model": "qwen3-1.7b",
   "n_validation": 400,
   "n_test": 1000,
+  "retr_sec_per_q": 0.1273,
+  "retr_sec_derivation": "Phase6 (23.424s) + Phase7 (180.261s) = 203.685s / 1600 q = 0.12730 s/q  (from outputs/kaggle_build/medrag-build.log)",
   "tuning_validation": {
     "rerank_gate": {
       "best_tau": -12.6172,
@@ -37,6 +39,7 @@
       "mcnemar_discordant_vs_rag": null,
       "per_dataset_mcnemar_vs_baseline": {},
       "cost_gens_per_q": 1,
+      "cost_retrieval": false,
       "cost_sec_per_q": 0.1172
     },
     "rag": {
@@ -82,8 +85,9 @@
           }
         }
       },
-      "cost_gens_per_q": 2,
-      "cost_sec_per_q": 0.6959,
+      "cost_gens_per_q": 1,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 0.8232,
       "holm_adj_p_vs_baseline": 0.62892
     },
     "rerank_gate": {
@@ -133,8 +137,9 @@
           }
         }
       },
-      "cost_gens_per_q": 2,
-      "cost_sec_per_q": 0.8131,
+      "cost_gens_per_q": 1,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 0.8232,
       "holm_adj_p_vs_baseline": 0.62892
     },
     "confidence_gate": {
@@ -184,8 +189,9 @@
           }
         }
       },
-      "cost_gens_per_q": 3,
-      "cost_sec_per_q": 0.8131,
+      "cost_gens_per_q": 2,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 0.9404,
       "holm_adj_p_vs_baseline": 0.01172
     },
     "combined": {
@@ -235,8 +241,9 @@
           }
         }
       },
-      "cost_gens_per_q": 3,
-      "cost_sec_per_q": 0.8131,
+      "cost_gens_per_q": 2,
+      "cost_retrieval": true,
+      "cost_sec_per_q": 0.9404,
       "holm_adj_p_vs_baseline": 0.01172
     }
   }
