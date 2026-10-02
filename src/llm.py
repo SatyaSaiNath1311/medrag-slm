@@ -46,19 +46,44 @@ def parse_answer(text, options):
 
 
 def parse_citations(text, n_passages):
-    nums = {int(x) for x in re.findall(r"\[(\d+)\]", text)}
+    if not text:
+        return []
+    nums = set()
+    for b in re.findall(r"\[([^\]]+)\]", text):
+        for n in re.findall(r"\b\d+\b", b):
+            nums.add(int(n))
+    if not nums:
+        m = re.search(r"evidence\s*:(.*)", text, re.I | re.DOTALL)
+        if m:
+            first_line = m.group(1).strip().split("\n")[0]
+            for n in re.findall(r"\b\d+\b", first_line):
+                nums.add(int(n))
     return sorted(n for n in nums if 1 <= n <= n_passages)
 
 
 # ---------- model ----------
 class LLM:
     def __init__(self, mcfg, device):
+        import glob
+        import os
         import torch
         import transformers
         from packaging import version
         from transformers import AutoModelForCausalLM, AutoTokenizer
         self.torch, self.cfg, self.device = torch, mcfg, device
-        self.tok = AutoTokenizer.from_pretrained(mcfg["id"])
+
+        load_path = mcfg["id"]
+        load_source = f"hf {mcfg['id']}"
+        if mcfg.get("kaggle_path_glob"):
+            matches = [p for p in glob.glob(mcfg["kaggle_path_glob"])
+                       if os.path.isdir(p) and os.path.exists(os.path.join(p, "config.json"))]
+            if matches:
+                load_path = matches[0]
+                load_source = f"kaggle-models {load_path}"
+        print(f"  source: {load_source}", flush=True)
+        self.load_source = load_source
+
+        self.tok = AutoTokenizer.from_pretrained(load_path)
         self.tok.padding_side = "left"
         if self.tok.pad_token is None:
             self.tok.pad_token = self.tok.eos_token
@@ -72,7 +97,7 @@ class LLM:
         if device == "cuda":
             many = torch.cuda.device_count() > 1 and mcfg["dtype"] == "float32"
             kwargs["device_map"] = "auto" if many else {"": 0}
-        self.model = cls.from_pretrained(mcfg["id"], **kwargs)
+        self.model = cls.from_pretrained(load_path, **kwargs)
         if device == "cpu":
             self.model.to("cpu")
         self.model.eval()

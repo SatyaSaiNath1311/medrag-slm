@@ -72,8 +72,7 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
                    "mode": mode, "should_abstain": q["should_abstain"], "gold": q["answer"], "pred": pred,
                    "correct": correct, "parsed": parsed, "pred_source": pred_source,
                    "letter_probs": lp, "confidence": max(lp.values()) if lp else None,
-                   "prob_pred": prob_pred, **r,
-                   "pred": pred, "correct": correct, "parsed": parsed, "pred_source": pred_source}
+                   "prob_pred": prob_pred, "load_source": getattr(llm, "load_source", None), **r}
             if mode == "rag":
                 passages = evidence[q["id"]]["passages"]
                 cites = parse_citations(r["raw_output"], len(passages))
@@ -122,10 +121,19 @@ def summarise(path):
             "by_dataset": by_dataset}
 
 
-def format_check(llm, val, evidence, qcfg, n, threshold):
-    rng = random.Random(0)
-    sample = rng.sample(val, min(n, len(val)))
-    report = {}
+def sample_format_check(val, seed):
+    rng = random.Random(seed)
+    medqa = sorted([q for q in val if q["dataset"] == "medqa" and not q["should_abstain"]], key=lambda x: x["id"])
+    pubmed = sorted([q for q in val if q["dataset"] == "pubmedqa" and not q["should_abstain"]], key=lambda x: x["id"])
+    unans = sorted([q for q in val if q["should_abstain"]], key=lambda x: x["id"])
+    return (rng.sample(medqa, min(8, len(medqa))) +
+            rng.sample(pubmed, min(8, len(pubmed))) +
+            rng.sample(unans, min(4, len(unans))))
+
+
+def format_check(llm, val, evidence, qcfg, threshold, seed):
+    sample = sample_format_check(val, seed)
+    report = {"load_source": getattr(llm, "load_source", None)}
     for mode in ("baseline", "rag"):
         prompts = [baseline_prompt(q) if mode == "baseline"
                    else rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in sample]
@@ -134,15 +142,61 @@ def format_check(llm, val, evidence, qcfg, n, threshold):
             res += llm.generate_safe(prompts[s:s + qcfg["batch_size"]],
                                      [list(q["options"]) for q in sample[s:s + qcfg["batch_size"]]],
                                      qcfg[f"max_new_tokens_{mode}"])
-        parsed = [parse_answer(r["raw_output"], q["options"]) is not None for q, r in zip(sample, res)]
-        rate = sum(parsed) / len(parsed)
-        fallback_count = sum(not p and r.get("letter_probs") is not None for p, r in zip(parsed, res))
-        report[mode] = {"parse_rate": round(rate, 3),
-                        "fallback_count": fallback_count,
-                        "letter_prob_rate": round(sum(r["letter_probs"] is not None for r in res) / len(res), 3),
-                        "examples": [r["raw_output"][:150] for r in res[:2]],
-                        "unparsed_examples": [r["raw_output"][:150] for r, p in zip(res, parsed) if not p][:3]}
-        print(f"  check {mode}: parse rate {rate:.0%}, fallback count {fallback_count}, examples: {report[mode]['examples'][:2]}")
+        rows = []
+        for q, r in zip(sample, res):
+            parsed_pred = parse_answer(r["raw_output"], q["options"])
+            parsed = parsed_pred is not None
+            lp = r.get("letter_probs")
+            prob_pred = max(lp, key=lp.get) if lp else None
+
+            if parsed:
+                pred = parsed_pred
+                pred_source = "parsed"
+            elif prob_pred is not None:
+                pred = prob_pred
+                pred_source = "logprob_fallback"
+            else:
+                pred = None
+                pred_source = "none"
+
+            if mode == "rag":
+                passages = evidence[q["id"]]["passages"]
+                cites = parse_citations(r["raw_output"], len(passages))
+            else:
+                cites = []
+
+            rows.append({
+                "id": q["id"],
+                "dataset": q["dataset"],
+                "should_abstain": q["should_abstain"],
+                "raw_output": r["raw_output"],
+                "pred": pred,
+                "parsed": parsed,
+                "pred_source": pred_source,
+                "citations": cites,
+                "load_source": getattr(llm, "load_source", None),
+            })
+
+        parsed_flags = [row["parsed"] for row in rows]
+        rate = sum(parsed_flags) / len(parsed_flags) if parsed_flags else 0.0
+        fallback_count = sum(1 for row in rows if not row["parsed"] and row["pred_source"] == "logprob_fallback")
+
+        datasets = sorted(list({q["dataset"] for q in sample}))
+        parse_rate_by_dataset = {}
+        for d in datasets:
+            d_rows = [row for row in rows if row["dataset"] == d]
+            parse_rate_by_dataset[d] = round(sum(1 for row in d_rows if row["parsed"]) / len(d_rows), 3) if d_rows else None
+
+        report[mode] = {
+            "parse_rate": round(rate, 3),
+            "parse_rate_by_dataset": parse_rate_by_dataset,
+            "fallback_count": fallback_count,
+            "letter_prob_rate": round(sum(r.get("letter_probs") is not None for r in res) / len(res), 3) if res else 0.0,
+            "examples": [r["raw_output"][:150] for r in res[:2]],
+            "unparsed_examples": [r["raw_output"][:150] for r, p in zip(res, parsed_flags) if not p][:3],
+            "rows": rows,
+        }
+        print(f"  check {mode}: parse rate {rate:.0%} (by dataset: {parse_rate_by_dataset}), fallback count {fallback_count}, examples: {report[mode]['examples'][:2]}")
     report["passed"] = all(report[m]["parse_rate"] >= threshold for m in ("baseline", "rag"))
     return report
 
@@ -175,6 +229,7 @@ def main():
     p4, p5, p8 = (phase_dir(args.work, n) for n in (4, 5, 8))
 
     test, val = read_jsonl(p1 / "test.jsonl"), read_jsonl(p1 / "validation.jsonl")
+    val_pool = list(val)
     evidence = {r["id"]: r for r in read_jsonl(p7 / "evidence.jsonl")}
     questions = test + val
     missing = [q["id"] for q in questions if q["id"] not in evidence]
@@ -197,12 +252,7 @@ def main():
         print(f"Selected {len(models)} model(s){mode_str}: {[m['name'] for m in models]}")
         return
 
-    if args.check_only:
-        n_check = qcfg["check_questions"]
-        threshold = qcfg["min_parse_rate"]
-    else:
-        n_check = 5 if args.tiny else qcfg["check_questions"]
-        threshold = qcfg["tiny_min_parse_rate"] if args.tiny else qcfg["min_parse_rate"]
+    threshold = qcfg["tiny_min_parse_rate"] if (args.tiny and not args.check_only) else qcfg["min_parse_rate"]
 
     if args.tiny:
         test = sample_stratified_tiny(test, qcfg["tiny_questions"], cfg["seed"])
@@ -211,13 +261,15 @@ def main():
 
     status = {}
     check_reports = {}
+    load_sources = {}
     for m in models:
         banner(f"MODEL {m['name']} ({m['id']}, {m['dtype']}) on {device}")
         try:
             t0 = time.time()
             llm = LLM(m, device)
             print(f"  loaded in {time.time() - t0:.0f}s")
-            check = format_check(llm, val, evidence, qcfg, n_check, threshold)
+            load_sources[m["name"]] = llm.load_source
+            check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
             check_reports[m["name"]] = check
             (p4 / f"{m['name']}.json").write_text(json.dumps(check, indent=2))
             if not check["passed"]:
@@ -259,7 +311,7 @@ def main():
                     print(f"    - {ex!r}")
                 print()
         write_manifest(p4, {"phase": 4, "tiny": args.tiny, "check_only": True, "device": device,
-                            "status": status, "settings": qcfg})
+                            "status": status, "load_sources": load_sources, "settings": qcfg})
         ok = all(v == "DONE" for v in status.values())
         print(f"\nPHASE 4 FORMAT CHECK {'COMPLETE' if ok else 'FINISHED WITH PROBLEMS'}")
         if args.strict and not ok:
@@ -296,7 +348,8 @@ def main():
             print(f"    -> {status.get(name)}")
     Path(p8 / "summary.json").write_text(json.dumps(summary, indent=2))
     for p, n in ((p4, 4), (p5, 5), (p8, 8)):
-        write_manifest(p, {"phase": n, "tiny": args.tiny, "device": device, "status": status, "settings": qcfg})
+        write_manifest(p, {"phase": n, "tiny": args.tiny, "device": device, "status": status,
+                            "load_sources": load_sources, "settings": qcfg})
     ok = all(v == "DONE" for v in status.values())
     print(f"\nPHASES 4, 5, 8 {'COMPLETE' if ok else 'FINISHED WITH PROBLEMS (see above)'}")
     if args.strict and not ok:

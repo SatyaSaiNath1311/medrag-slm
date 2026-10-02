@@ -11,5 +11,8 @@
   "competition_sources": [],
   "kernel_sources": [
     "satyasainath1311/medrag-build"
+  ],
+  "model_sources": [
+    "google/gemma-3/transformers/gemma-3-4b-it/1"
   ]
 }
