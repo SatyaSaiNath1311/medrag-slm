@@ -5,8 +5,8 @@ Generates:
 
 Tables:
 1. QA Performance: Accuracy, EM, Macro-F1 across Answer Options (Overall, MedQA, PubMedQA) with 95% Bootstrap CIs.
-2. Reliability: Faithfulness, Hallucination Rates, Context Precision & Recall, Citation Validity on MedQA.
-3. Efficiency: Latency per question, Generation Throughput (tokens/sec), Prompt Tokens, Peak Memory.
+2. Shared Retrieval Performance & System Reliability on MedQA (Faithfulness on RAG-routed outputs, Hallucination Rates, Citation Validity).
+3. Efficiency: Latency per question, Generation Throughput (tokens/sec), Prompt Tokens, Peak Memory (VRAM/RAM).
 """
 import argparse
 import json
@@ -182,7 +182,7 @@ def assemble_variant_records(model: str, model_data: Dict[str, Any], test_dict: 
         },
         adaptive_display_name: {
             "records": adapt_records,
-            "unanswerable": b_unans,  # gate evaluates baseline/rag
+            "unanswerable": b_unans,
             "is_rag": False,
             "is_adaptive": True,
             "gate_key": best_gate,
@@ -286,40 +286,52 @@ def build_table_2(models, test_dict, ev_dict, all_data):
     lines.append(
         "> **Setup**: Grounding and hallucination evaluation on MedQA test answerable ($N=500$) and unanswerable ($N=150$) sets.  \n"
         "> **Metrics Definition**:  \n"
-        "> - **Faithfulness**: % of answers whose cited passage explicitly contains the selected option text (string-matching proxy).  \n"
+        "> - **Faithfulness**: % of answers whose cited passage explicitly contains the selected option text (string-matching proxy). For Adaptive gates, computed *strictly over final answers routed to RAG*.  \n"
+        "> - **Wrong Answers ($N$)**: Total count of incorrect predictions on the MedQA test set ($N=500$).  \n"
         "> - **Hallucination Rate (Wrong Answers)**: % of incorrect predictions carrying raw confidence $\\ge 0.90$.  \n"
         "> - **Hallucination Rate (Unanswerable)**: % of unanswerable questions answered with raw confidence $\\ge 0.90$.  \n"
-        "> - **Context Precision**: % of top-5 retrieved passages containing the correct gold option text (mean over questions = 12.9%).  \n"
-        "> - **Context Recall**: % of questions with the gold option present in *any* of the 5 retrieved passages (30.4% under default rule).  \n"
-        "> - **Citation Validity %**: % of bracketed citations pointing to valid retrieved indices (1–5).  \n"
-        "> *Footnote*: Grounding metrics utilize deterministic string-matching proxies (exact substring or first word removed), not LLM-judged RAGAS.\n"
+        "> - **Citation Validity %**: % of bracketed citations pointing to valid retrieved passage numbers (1–5).  \n"
+        "> *Notes*:  \n"
+        "> 1. Grounding metrics utilize deterministic string-matching proxies (exact substring or first word removed), not LLM-judged RAGAS.  \n"
+        "> 2. Adaptive gates choose the higher-confidence answer, so the conditional hallucination rate among wrong answers is inflated by construction.\n"
     )
-    lines.append(
-        "| Model | Variant | Faithfulness % | Hallucination Rate: Wrong $\\ge 0.90$ % (N/Wrong) | Hallucination Rate: Unanswerable $\\ge 0.90$ % (N/150) | Context Precision % | Context Recall % | Citation Validity % |"
-    )
-    lines.append("|---|---|---|---|---|---|---|---|")
 
-    # Fixed retrieval properties on MedQA
-    ctx_prec_str = "12.9%"
-    ctx_rec_str = "30.4%"
+    # Small separate table for shared retrieval performance
+    lines.append("### Retrieval Performance (Shared across all models on MedQA)")
+    lines.append("| Metric | Value | Scope | Description |")
+    lines.append("|---|---|---|---|")
+    lines.append("| **Context Precision** | **12.9%** | Top-5 passages | % of 5 retrieved passages containing the correct gold option text (mean: 0.64 / 5 passages) |")
+    lines.append("| **Context Recall (Default Rule)** | **30.4%** | Any of top-5 | % of questions with the gold option present in *any* of the 5 retrieved passages (152 / 500) |")
+    lines.append("| **Strict Verbatim Recall** | **18.8%** | Any of top-5 | % of questions with the verbatim option string present in *any* passage (94 / 500) |")
+    lines.append("")
+
+    lines.append("### Model Reliability and Hallucination Breakdown")
+    lines.append(
+        "| Model | Variant | Wrong Answers ($N$) | Faithfulness % (Count / $N_{\\text{RAG}}$) | Hallucination Rate: Wrong $\\ge 0.90$ % (Count/$N$) | Hallucination Rate: Unanswerable $\\ge 0.90$ % (Count/150) | Citation Validity % |"
+    )
+    lines.append("|---|---|---|---|---|---|---|")
 
     for m in models:
         variants = assemble_variant_records(m, all_data[m], test_dict)
         for v_name, v_info in variants.items():
             if v_info.get("is_context"):
-                continue  # Context is PubMedQA only
+                continue
 
             recs = [r for r in v_info["records"] if r.get("dataset") == "medqa"]
             unans = v_info["unanswerable"]
 
-            # 1. Faithfulness
-            has_cites = any(r.get("citations") for r in recs)
-            if not has_cites:
+            # Wrong answers count
+            wrong_recs = [r for r in recs if not r["correct"]]
+            n_wrong = len(wrong_recs)
+
+            # Faithfulness
+            is_adapt = v_info.get("is_adaptive", False)
+            is_rag = v_info.get("is_rag", False)
+
+            if not is_rag and not is_adapt:
                 faith_str = "—"
                 val_str = "—"
-                prec_str = "—"
-                rec_str = "—"
-            else:
+            elif is_rag:
                 faithful_count = 0
                 all_cites = []
                 for r in recs:
@@ -335,26 +347,44 @@ def build_table_2(models, test_dict, ev_dict, all_data):
                         faithful_count += 1
                 faith_pct = faithful_count / len(recs) if recs else 0.0
                 faith_str = f"{faith_pct:.1%} ({faithful_count}/{len(recs)})"
-                prec_str = ctx_prec_str
-                rec_str = ctx_rec_str
-
+                n_valid_cites = sum(1 for c in all_cites if 1 <= c <= 5)
+                val_pct = (n_valid_cites / len(all_cites)) if all_cites else 1.0
+                val_str = f"{val_pct:.1%}"
+            else:
+                # Adaptive: evaluate ONLY on final answers taken from RAG
+                rag_recs = [r for r in recs if r.get("_used_rag")]
+                n_rag_routed = len(rag_recs)
+                faithful_count = 0
+                all_cites = []
+                for r in rag_recs:
+                    qid = r["id"]
+                    q = test_dict[qid]
+                    pred = r.get("pred")
+                    chosen_opt = q["options"].get(pred) if pred else None
+                    passages = ev_dict[qid]["passages"]
+                    cites = [c for c in r.get("citations", []) if 1 <= c <= len(passages)]
+                    all_cites.extend(r.get("citations", []))
+                    cited_passages = [passages[c - 1] for c in cites]
+                    if chosen_opt and any(text_contains_option(p["text"], chosen_opt) for p in cited_passages):
+                        faithful_count += 1
+                faith_pct = faithful_count / n_rag_routed if n_rag_routed else 0.0
+                faith_str = f"{faith_pct:.1%} ({faithful_count}/{n_rag_routed})"
                 n_valid_cites = sum(1 for c in all_cites if 1 <= c <= 5)
                 val_pct = (n_valid_cites / len(all_cites)) if all_cites else 1.0
                 val_str = f"{val_pct:.1%}"
 
-            # 2. Hallucination Rate: Wrong Answers raw conf >= 0.90
-            wrong_recs = [r for r in recs if not r["correct"]]
+            # Hallucination Rate: Wrong Answers raw conf >= 0.90
             wrong_conf90 = sum(1 for r in wrong_recs if (r.get("confidence") or 0.0) >= 0.90)
-            wrong_pct = (wrong_conf90 / len(wrong_recs)) if wrong_recs else 0.0
-            halluc_wrong_str = f"{wrong_pct:.1%} ({wrong_conf90}/{len(wrong_recs)})"
+            wrong_pct = (wrong_conf90 / n_wrong) if n_wrong else 0.0
+            halluc_wrong_str = f"{wrong_pct:.1%} ({wrong_conf90}/{n_wrong})"
 
-            # 3. Hallucination Rate: Unanswerable raw conf >= 0.90
+            # Hallucination Rate: Unanswerable raw conf >= 0.90
             unans_conf90 = sum(1 for r in unans if (r.get("confidence") or 0.0) >= 0.90)
             unans_pct = (unans_conf90 / len(unans)) if unans else 0.0
             halluc_unans_str = f"{unans_pct:.1%} ({unans_conf90}/{len(unans)})"
 
             lines.append(
-                f"| **{m}** | {v_name} | {faith_str} | {halluc_wrong_str} | {halluc_unans_str} | {prec_str} | {rec_str} | {val_str} |"
+                f"| **{m}** | {v_name} | {n_wrong} | {faith_str} | {halluc_wrong_str} | {halluc_unans_str} | {val_str} |"
             )
 
     lines.append("")
@@ -363,24 +393,44 @@ def build_table_2(models, test_dict, ev_dict, all_data):
 
 # ---------- Build Table 3: Efficiency & Cost ----------
 
+def load_profiling_stats():
+    """Attempt to load outputs/analysis/profiling.json or work/profile/profiling.json."""
+    candidates = [
+        Path("outputs/analysis/profiling.json"),
+        Path("outputs/kaggle_qa/profiling.json"),
+        Path("work/profile/profiling.json"),
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                return json.load(open(p))
+            except Exception:
+                pass
+    return None
+
+
 def build_table_3(models, test_dict, all_data):
+    profiling_data = load_profiling_stats()
+
     lines = []
     lines.append("## Table 3: Efficiency, Generation Throughput, and Computational Footprint")
     lines.append(
         "> **Setup**: Evaluated on the answerable test questions ($N=1,000$ for full benchmarks, $N=500$ for PubMedQA +Abstract).  \n"
         "> **Latency Details**:  \n"
         "> - **Baseline**: Pure parametric forward pass latency.  \n"
-        "> - **Full RAG**: Includes generation pass + **0.127 s retrieval overhead** (BM25 + BGE dense retrieval + reranking from Phase 6 & 7 build logs).  \n"
+        "> - **Full RAG**: Includes generation pass + **0.127 s retrieval overhead** (BM25 + MedCPT dense (FAISS) + MedCPT cross-encoder rerank from Phase 6 & 7 build logs).  \n"
         "> - **Adaptive Gates**: Incorporates retrieval overhead and selective single/double generation passes based on gate logic.  \n"
-        "> - **Peak VRAM / RAM**: Marked as *'pending'* pending dedicated execution profiling on GPU hardware.\n"
+        "> - **Peak VRAM / RAM**: Populated from execution profiling (`profiling.json`); marked *'pending'* if profiling benchmarks have not yet been executed on GPU hardware.\n"
     )
     lines.append(
-        "| Model | Variant | Avg Latency (s/q) | Generation Throughput (tokens/s) | Mean Prompt Tokens | Peak VRAM | Peak RAM |"
+        "| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Peak VRAM | Peak RAM |"
     )
     lines.append("|---|---|---|---|---|---|---|")
 
     for m in models:
         variants = assemble_variant_records(m, all_data[m], test_dict)
+        m_prof = profiling_data.get(m, {}) if profiling_data else {}
+
         for v_name, v_info in variants.items():
             recs = v_info["records"]
             is_rag = v_info.get("is_rag", False)
@@ -406,8 +456,20 @@ def build_table_3(models, test_dict, all_data):
             else:
                 avg_lat = gen_secs / len(recs)
 
+            # Profiling lookup
             vram_str = "pending"
             ram_str = "pending"
+            if m_prof:
+                mode_key = "context" if is_ctx else ("rag" if is_rag else "baseline")
+                mode_stats = m_prof.get("modes", {}).get(mode_key, {})
+                if mode_stats:
+                    cuda_mem = mode_stats.get("cuda_memory", {})
+                    if cuda_mem:
+                        total_res_mb = sum(dev.get("max_memory_reserved_mb", 0) for dev in cuda_mem.values())
+                        vram_str = f"{total_res_mb / 1024:.2f} GB"
+                    rss_mb = mode_stats.get("peak_process_rss_mb")
+                    if rss_mb:
+                        ram_str = f"{rss_mb / 1024:.2f} GB"
 
             lines.append(
                 f"| **{m}** | {v_name} | {avg_lat:.3f} s | {tps:.1f} tok/s | {mean_prompt:.1f} | {vram_str} | {ram_str} |"

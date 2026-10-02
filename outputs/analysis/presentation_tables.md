@@ -37,41 +37,50 @@ Comprehensive empirical evaluation comparing five open-weight small language mod
 ## Table 2: System Reliability, Hallucination, and Evidence Grounding (MedQA)
 > **Setup**: Grounding and hallucination evaluation on MedQA test answerable ($N=500$) and unanswerable ($N=150$) sets.  
 > **Metrics Definition**:  
-> - **Faithfulness**: % of answers whose cited passage explicitly contains the selected option text (string-matching proxy).  
+> - **Faithfulness**: % of answers whose cited passage explicitly contains the selected option text (string-matching proxy). For Adaptive gates, computed *strictly over final answers routed to RAG*.  
+> - **Wrong Answers ($N$)**: Total count of incorrect predictions on the MedQA test set ($N=500$).  
 > - **Hallucination Rate (Wrong Answers)**: % of incorrect predictions carrying raw confidence $\ge 0.90$.  
 > - **Hallucination Rate (Unanswerable)**: % of unanswerable questions answered with raw confidence $\ge 0.90$.  
-> - **Context Precision**: % of top-5 retrieved passages containing the correct gold option text (mean over questions = 12.9%).  
-> - **Context Recall**: % of questions with the gold option present in *any* of the 5 retrieved passages (30.4% under default rule).  
-> - **Citation Validity %**: % of bracketed citations pointing to valid retrieved indices (1–5).  
-> *Footnote*: Grounding metrics utilize deterministic string-matching proxies (exact substring or first word removed), not LLM-judged RAGAS.
+> - **Citation Validity %**: % of bracketed citations pointing to valid retrieved passage numbers (1–5).  
+> *Notes*:  
+> 1. Grounding metrics utilize deterministic string-matching proxies (exact substring or first word removed), not LLM-judged RAGAS.  
+> 2. Adaptive gates choose the higher-confidence answer, so the conditional hallucination rate among wrong answers is inflated by construction.
 
-| Model | Variant | Faithfulness % | Hallucination Rate: Wrong $\ge 0.90$ % (N/Wrong) | Hallucination Rate: Unanswerable $\ge 0.90$ % (N/150) | Context Precision % | Context Recall % | Citation Validity % |
-|---|---|---|---|---|---|---|---|
-| **qwen3-4b** | Baseline | — | 82.7% (172/208) | 82.7% (124/150) | — | — | — |
-| **qwen3-4b** | Full RAG | 31.2% (156/500) | 82.8% (164/198) | 88.0% (132/150) | 12.9% | 30.4% | 100.0% |
-| **qwen3-4b** | Adaptive (Combined Gate) | 23.4% (117/500) | 95.3% (184/193) | 82.7% (124/150) | 12.9% | 30.4% | 100.0% |
-| **phi4-mini** | Baseline | — | 18.9% (44/233) | 32.7% (49/150) | — | — | — |
-| **phi4-mini** | Full RAG | 26.8% (134/500) | 21.8% (45/206) | 33.3% (50/150) | 12.9% | 30.4% | 100.0% |
-| **phi4-mini** | Adaptive (Confidence Gate) | 18.8% (94/500) | 32.5% (67/206) | 32.7% (49/150) | 12.9% | 30.4% | 100.0% |
-| **gemma3-4b** | Baseline | — | 95.3% (245/257) | 95.3% (143/150) | — | — | — |
-| **gemma3-4b** | Full RAG | 32.0% (160/500) | 93.6% (220/235) | 94.0% (141/150) | 12.9% | 30.4% | 100.0% |
-| **gemma3-4b** | Adaptive (Rerank Gate) | 19.6% (98/500) | 94.5% (222/235) | 95.3% (143/150) | 12.9% | 30.4% | 100.0% |
-| **qwen3-1.7b** | Baseline | — | 84.8% (235/277) | 88.0% (132/150) | — | — | — |
-| **qwen3-1.7b** | Full RAG | 21.0% (105/500) | 86.2% (213/247) | 88.7% (133/150) | 12.9% | 30.4% | 100.0% |
-| **qwen3-1.7b** | Adaptive (Combined Gate) | 15.8% (79/500) | 97.9% (238/243) | 88.0% (132/150) | 12.9% | 30.4% | 100.0% |
-| **smollm3-3b** | Baseline | — | 36.0% (105/292) | 48.0% (72/150) | — | — | — |
-| **smollm3-3b** | Full RAG | 21.8% (109/500) | 33.0% (87/264) | 40.7% (61/150) | 12.9% | 30.4% | 100.0% |
-| **smollm3-3b** | Adaptive (Rerank Gate) | 16.0% (80/500) | 33.2% (91/274) | 48.0% (72/150) | 12.9% | 30.4% | 100.0% |
+### Retrieval Performance (Shared across all models on MedQA)
+| Metric | Value | Scope | Description |
+|---|---|---|---|
+| **Context Precision** | **12.9%** | Top-5 passages | % of 5 retrieved passages containing the correct gold option text (mean: 0.64 / 5 passages) |
+| **Context Recall (Default Rule)** | **30.4%** | Any of top-5 | % of questions with the gold option present in *any* of the 5 retrieved passages (152 / 500) |
+| **Strict Verbatim Recall** | **18.8%** | Any of top-5 | % of questions with the verbatim option string present in *any* passage (94 / 500) |
+
+### Model Reliability and Hallucination Breakdown
+| Model | Variant | Wrong Answers ($N$) | Faithfulness % (Count / $N_{\text{RAG}}$) | Hallucination Rate: Wrong $\ge 0.90$ % (Count/$N$) | Hallucination Rate: Unanswerable $\ge 0.90$ % (Count/150) | Citation Validity % |
+|---|---|---|---|---|---|---|
+| **qwen3-4b** | Baseline | 208 | — | 82.7% (172/208) | 82.7% (124/150) | — |
+| **qwen3-4b** | Full RAG | 198 | 31.2% (156/500) | 82.8% (164/198) | 88.0% (132/150) | 100.0% |
+| **qwen3-4b** | Adaptive (Combined Gate) | 193 | 33.3% (117/351) | 95.3% (184/193) | 82.7% (124/150) | 100.0% |
+| **phi4-mini** | Baseline | 233 | — | 18.9% (44/233) | 32.7% (49/150) | — |
+| **phi4-mini** | Full RAG | 206 | 26.8% (134/500) | 21.8% (45/206) | 33.3% (50/150) | 100.0% |
+| **phi4-mini** | Adaptive (Confidence Gate) | 206 | 29.7% (94/316) | 32.5% (67/206) | 32.7% (49/150) | 100.0% |
+| **gemma3-4b** | Baseline | 257 | — | 95.3% (245/257) | 95.3% (143/150) | — |
+| **gemma3-4b** | Full RAG | 235 | 32.0% (160/500) | 93.6% (220/235) | 94.0% (141/150) | 100.0% |
+| **gemma3-4b** | Adaptive (Rerank Gate) | 235 | 38.1% (98/257) | 94.5% (222/235) | 95.3% (143/150) | 100.0% |
+| **qwen3-1.7b** | Baseline | 277 | — | 84.8% (235/277) | 88.0% (132/150) | — |
+| **qwen3-1.7b** | Full RAG | 247 | 21.0% (105/500) | 86.2% (213/247) | 88.7% (133/150) | 100.0% |
+| **qwen3-1.7b** | Adaptive (Combined Gate) | 243 | 25.7% (79/307) | 97.9% (238/243) | 88.0% (132/150) | 100.0% |
+| **smollm3-3b** | Baseline | 292 | — | 36.0% (105/292) | 48.0% (72/150) | — |
+| **smollm3-3b** | Full RAG | 264 | 21.8% (109/500) | 33.0% (87/264) | 40.7% (61/150) | 100.0% |
+| **smollm3-3b** | Adaptive (Rerank Gate) | 274 | 25.0% (80/320) | 33.2% (91/274) | 48.0% (72/150) | 100.0% |
 
 ## Table 3: Efficiency, Generation Throughput, and Computational Footprint
 > **Setup**: Evaluated on the answerable test questions ($N=1,000$ for full benchmarks, $N=500$ for PubMedQA +Abstract).  
 > **Latency Details**:  
 > - **Baseline**: Pure parametric forward pass latency.  
-> - **Full RAG**: Includes generation pass + **0.127 s retrieval overhead** (BM25 + BGE dense retrieval + reranking from Phase 6 & 7 build logs).  
+> - **Full RAG**: Includes generation pass + **0.127 s retrieval overhead** (BM25 + MedCPT dense (FAISS) + MedCPT cross-encoder rerank from Phase 6 & 7 build logs).  
 > - **Adaptive Gates**: Incorporates retrieval overhead and selective single/double generation passes based on gate logic.  
-> - **Peak VRAM / RAM**: Marked as *'pending'* pending dedicated execution profiling on GPU hardware.
+> - **Peak VRAM / RAM**: Populated from execution profiling (`profiling.json`); marked *'pending'* if profiling benchmarks have not yet been executed on GPU hardware.
 
-| Model | Variant | Avg Latency (s/q) | Generation Throughput (tokens/s) | Mean Prompt Tokens | Peak VRAM | Peak RAM |
+| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Peak VRAM | Peak RAM |
 |---|---|---|---|---|---|---|
 | **qwen3-4b** | Baseline | 0.223 s | 71.8 tok/s | 161.2 | pending | pending |
 | **qwen3-4b** | Full RAG | 1.579 s | 12.7 tok/s | 1200.1 | pending | pending |
