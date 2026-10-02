@@ -175,6 +175,14 @@ def load_presentation_tables_markdown() -> str:
     return "Presentation tables file not found."
 
 
+def render_image(image_path: Path | str, caption: str = ""):
+    """Render image using width='stretch' or fallback to use_container_width."""
+    try:
+        st.image(str(image_path), caption=caption, width="stretch")
+    except (TypeError, ValueError):
+        st.image(str(image_path), caption=caption, use_container_width=True)
+
+
 # -----------------------------------------------------------------------------
 # Main Application
 # -----------------------------------------------------------------------------
@@ -186,105 +194,91 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    # Clean custom CSS for large readable typography and aesthetic layout
+    # Clean, high-contrast light theme CSS (no hard-coded dark blues)
     st.markdown(
         """
         <style>
         .main-title {
             font-size: 2.1rem;
-            font-weight: 700;
-            color: #1E293B;
-            margin-bottom: 0.2rem;
+            font-weight: 800;
+            color: #1A1A1A;
+            margin-bottom: 0.25rem;
+            line-height: 1.2;
         }
         .sub-title {
             font-size: 1.05rem;
-            color: #64748B;
+            color: #4A4A4A;
+            margin-bottom: 1.25rem;
+            line-height: 1.5;
+        }
+        .question-text-box {
+            font-size: 18px;
+            font-weight: 400;
+            color: #1A1A1A;
+            line-height: 1.65;
             margin-bottom: 1.2rem;
         }
-        .card {
-            background-color: #F8FAFC;
-            border: 1px solid #E2E8F0;
-            border-radius: 10px;
-            padding: 1.2rem 1.4rem;
-            margin-bottom: 1rem;
-        }
-        .question-text {
-            font-size: 1.15rem;
-            font-weight: 500;
-            color: #0F172A;
-            line-height: 1.6;
-            margin-bottom: 1rem;
-        }
         .option-box {
-            font-size: 1.0rem;
-            padding: 0.55rem 0.85rem;
-            margin-bottom: 0.4rem;
+            font-size: 16px;
+            padding: 0.65rem 0.95rem;
+            margin-bottom: 0.45rem;
             border-radius: 6px;
-            background-color: #FFFFFF;
-            border: 1px solid #CBD5E1;
-            color: #1E293B;
+            background-color: #F4F6F8;
+            border: 1px solid #D0D5DD;
+            color: #1A1A1A;
+            font-weight: 400;
+            line-height: 1.5;
         }
         .option-box-correct {
-            font-size: 1.0rem;
-            padding: 0.55rem 0.85rem;
-            margin-bottom: 0.4rem;
+            font-size: 16px;
+            padding: 0.65rem 0.95rem;
+            margin-bottom: 0.45rem;
             border-radius: 6px;
-            background-color: #ECFDF5;
-            border: 1.5px solid #10B981;
-            color: #065F46;
+            background-color: #E6F4EA;
+            border: 1.5px solid #28A745;
+            color: #0F5132;
             font-weight: 600;
+            line-height: 1.5;
         }
         .badge-correct {
             display: inline-block;
-            background-color: #10B981;
+            background-color: #28A745;
             color: #FFFFFF;
-            font-weight: 600;
-            padding: 0.2rem 0.6rem;
+            font-weight: 700;
+            padding: 0.22rem 0.65rem;
             border-radius: 4px;
             font-size: 0.85rem;
+            margin-bottom: 0.45rem;
         }
         .badge-wrong {
             display: inline-block;
-            background-color: #EF4444;
+            background-color: #DC3545;
             color: #FFFFFF;
-            font-weight: 600;
-            padding: 0.2rem 0.6rem;
-            border-radius: 4px;
-            font-size: 0.85rem;
-        }
-        .badge-unans {
-            display: inline-block;
-            background-color: #F59E0B;
-            color: #FFFFFF;
-            font-weight: 600;
-            padding: 0.2rem 0.6rem;
-            border-radius: 4px;
-            font-size: 0.85rem;
-        }
-        .col-header {
-            font-size: 1.15rem;
             font-weight: 700;
+            padding: 0.22rem 0.65rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            margin-bottom: 0.45rem;
+        }
+        .col-heading {
+            font-size: 1.22rem;
+            font-weight: 700;
+            color: #1A1A1A;
             margin-bottom: 0.6rem;
-            color: #1E293B;
+            line-height: 1.3;
+        }
+        .col-subheading {
+            font-size: 0.92rem;
+            font-weight: 500;
+            color: #4A4A4A;
         }
         .cited-highlight {
             background-color: #EFF6FF;
-            border-left: 4px solid #3B82F6;
-            padding: 0.6rem 0.8rem;
+            border-left: 4px solid #1F77B4;
+            padding: 0.6rem 0.85rem;
             margin-bottom: 0.6rem;
             border-radius: 4px;
-        }
-        .step-num {
-            display: inline-block;
-            width: 28px;
-            height: 28px;
-            line-height: 28px;
-            background-color: #2563EB;
-            color: white;
-            text-align: center;
-            border-radius: 50%;
-            font-weight: bold;
-            margin-right: 8px;
+            color: #1A1A1A;
         }
         </style>
         """,
@@ -420,51 +414,56 @@ def main():
             passages = evidence_by_id.get(selected_qid, [])
 
             if q_data:
-                # Top header bar
                 is_unans = q_data.get("should_abstain", False)
                 gold_answer = q_data.get("answer")
                 options = q_data.get("options", {})
 
-                st.markdown(
-                    f"**Question {st.session_state['q_idx'] + 1} of {len(filtered_ids)}** &nbsp;|&nbsp; "
-                    f"**ID:** `{selected_qid}` &nbsp;|&nbsp; "
-                    f"**Dataset:** `{q_data.get('dataset').upper()}`",
-                )
+                # Render Question Card (Everything INSIDE a single bordered container)
+                with st.container(border=True):
+                    st.markdown(
+                        f"<div style='font-size: 0.92rem; color: #4A4A4A; margin-bottom: 0.6rem;'>"
+                        f"<b>Question {st.session_state['q_idx'] + 1} of {len(filtered_ids)}</b> &nbsp;|&nbsp; "
+                        f"<b>ID:</b> <code>{selected_qid}</code> &nbsp;|&nbsp; "
+                        f"<b>Dataset:</b> <code>{q_data.get('dataset', '').upper()}</code>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
 
-                # Question Box
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                st.markdown(f'<div class="question-text">{q_data.get("question")}</div>', unsafe_allow_html=True)
+                    # Question text inside card: readable ~18px, normal weight
+                    st.markdown(
+                        f'<div class="question-text-box">{q_data.get("question")}</div>',
+                        unsafe_allow_html=True,
+                    )
 
-                reveal_answer = st.toggle("👁️ Reveal correct answer", value=False)
+                    # Reveal correct answer toggle
+                    reveal_answer = st.toggle("👁️ Reveal correct answer", value=False, key="reveal_toggle")
 
-                st.markdown("**Options:**")
-                for opt_key in sorted(options.keys()):
-                    opt_val = options[opt_key]
-                    if reveal_answer and not is_unans and opt_key == gold_answer:
-                        st.markdown(
-                            f'<div class="option-box-correct">✅ <b>{opt_key}.</b> {opt_val} &nbsp; <i>(Correct Answer)</i></div>',
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.markdown(
-                            f'<div class="option-box"><b>{opt_key}.</b> {opt_val}</div>',
-                            unsafe_allow_html=True,
-                        )
+                    st.markdown("<div style='font-weight: 600; color: #1A1A1A; margin-bottom: 0.4rem;'>Options:</div>", unsafe_allow_html=True)
+                    for opt_key in sorted(options.keys()):
+                        opt_val = options[opt_key]
+                        if reveal_answer and not is_unans and opt_key == gold_answer:
+                            st.markdown(
+                                f'<div class="option-box-correct">✅ <b>{opt_key}.</b> {opt_val} &nbsp; <i>(Correct Answer)</i></div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                f'<div class="option-box"><b>{opt_key}.</b> {opt_val}</div>',
+                                unsafe_allow_html=True,
+                            )
 
-                if reveal_answer:
-                    if is_unans:
-                        st.warning(
-                            "⚠️ **Adversarial Unanswerable Question**: None of the listed options is medically correct! "
-                            "The true gold option was removed to test if the model detects absent evidence or hallucinates with unwarranted confidence."
-                        )
-                    else:
-                        st.success(f"**Gold Answer:** Option **{gold_answer}** — {options.get(gold_answer, '')}")
+                    if reveal_answer:
+                        if is_unans:
+                            st.warning(
+                                "⚠️ **Adversarial Unanswerable Question**: None of the listed options is medically correct! "
+                                "The true gold option was intentionally removed to test if the model detects absent evidence or hallucinates with unwarranted confidence."
+                            )
+                        else:
+                            st.success(f"**Gold Answer:** Option **{gold_answer}** — {options.get(gold_answer, '')}")
 
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                # Unanswerable warning banner if applicable
+                # Unanswerable warning banner
                 if is_unans:
-                    st.error(
+                    st.warning(
                         "⚠️ **No option is correct here (Unanswerable Question).** "
                         "Notice the model confidence below: even when faced with impossible choices, SLMs frequently output 90–100% confidence."
                     )
@@ -476,18 +475,22 @@ def main():
 
                 # (1) WITHOUT BOOK (BASELINE)
                 with col1:
-                    st.markdown('<div class="col-header">📚 (1) Without Book<br><small style="font-weight:normal;color:#64748B;">Parametric Only</small></div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="col-heading">📚 (1) Without Book<br><span class="col-subheading">Parametric Baseline</span></div>',
+                        unsafe_allow_html=True,
+                    )
                     b_pred = b_data.get("pred", "—")
                     b_conf = float(b_data.get("confidence") or 0.0)
                     b_correct = b_data.get("correct", False)
 
-                    # Status badge
-                    if is_unans:
-                        st.markdown('<span class="badge-unans">❌ Hallucinated</span>', unsafe_allow_html=True)
-                    elif b_correct:
-                        st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+                    # Only show correctness badge when reveal_answer is ON
+                    if reveal_answer:
+                        if is_unans:
+                            st.markdown('<span class="badge-wrong">❌ Hallucinated</span>', unsafe_allow_html=True)
+                        elif b_correct:
+                            st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
 
                     st.markdown(f"**Predicted:** Option **{b_pred}** ({options.get(b_pred, '')})")
                     st.markdown(f"**Confidence:** `{b_conf * 100:.1f}%`")
@@ -504,20 +507,24 @@ def main():
 
                 # (2) WITH TEXTBOOK (RAG)
                 with col2:
-                    st.markdown('<div class="col-header">📖 (2) With Textbook<br><small style="font-weight:normal;color:#64748B;">Full RAG (Top-5 Passages)</small></div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="col-heading">📖 (2) With Textbook<br><span class="col-subheading">Full RAG (Top-5 Passages)</span></div>',
+                        unsafe_allow_html=True,
+                    )
                     r_pred = r_data.get("pred", "—")
                     r_conf = float(r_data.get("confidence") or 0.0)
                     r_correct = r_data.get("correct", False)
                     citations = r_data.get("citations") or []
                     top_rerank = r_data.get("top_rerank_score")
 
-                    # Status badge
-                    if is_unans:
-                        st.markdown('<span class="badge-unans">❌ Hallucinated</span>', unsafe_allow_html=True)
-                    elif r_correct:
-                        st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+                    # Only show correctness badge when reveal_answer is ON
+                    if reveal_answer:
+                        if is_unans:
+                            st.markdown('<span class="badge-wrong">❌ Hallucinated</span>', unsafe_allow_html=True)
+                        elif r_correct:
+                            st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
 
                     st.markdown(f"**Predicted:** Option **{r_pred}** ({options.get(r_pred, '')})")
                     st.markdown(f"**Confidence:** `{r_conf * 100:.1f}%`")
@@ -554,7 +561,10 @@ def main():
 
                 # (3) SMART GATE
                 with col3:
-                    st.markdown('<div class="col-header">⚡ (3) Smart Gate<br><small style="font-weight:normal;color:#64748B;">Adaptive Dynamic Routing</small></div>', unsafe_allow_html=True)
+                    st.markdown(
+                        '<div class="col-heading">⚡ (3) Smart Gate<br><span class="col-subheading">Adaptive Dynamic Routing</span></div>',
+                        unsafe_allow_html=True,
+                    )
 
                     # Confidence Gate Decision
                     conf_chose_rag = r_conf > b_conf
@@ -563,12 +573,15 @@ def main():
 
                     st.markdown("##### 1. Confidence Gate")
                     st.markdown(f"**Selected:** `{'RAG' if conf_chose_rag else 'Baseline'}` (Option **{conf_pred}**)")
-                    if is_unans:
-                        st.markdown('<span class="badge-unans">❌ Incorrect</span>', unsafe_allow_html=True)
-                    elif conf_correct:
-                        st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+
+                    # Only show correctness badge when reveal_answer is ON
+                    if reveal_answer:
+                        if is_unans:
+                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+                        elif conf_correct:
+                            st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
 
                     if conf_chose_rag:
                         st.caption(f"💡 *Reason:* RAG confidence ({r_conf*100:.1f}%) > Baseline ({b_conf*100:.1f}%) → Routed to RAG.")
@@ -584,12 +597,15 @@ def main():
 
                     st.markdown("##### 2. Rerank Gate")
                     st.markdown(f"**Selected:** `{'RAG' if rerank_chose_rag else 'Baseline'}` (Option **{rerank_pred}**)")
-                    if is_unans:
-                        st.markdown('<span class="badge-unans">❌ Incorrect</span>', unsafe_allow_html=True)
-                    elif rerank_correct:
-                        st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
-                    else:
-                        st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+
+                    # Only show correctness badge when reveal_answer is ON
+                    if reveal_answer:
+                        if is_unans:
+                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+                        elif rerank_correct:
+                            st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
 
                     score_disp = f"{top_rerank:.2f}" if top_rerank is not None else "N/A"
                     if rerank_chose_rag:
@@ -609,10 +625,11 @@ def main():
 
                     c_a1, c_a2 = st.columns([1, 2])
                     with c_a1:
-                        if ctx_correct:
-                            st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
-                        else:
-                            st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
+                        if reveal_answer:
+                            if ctx_correct:
+                                st.markdown('<span class="badge-correct">✅ Correct</span>', unsafe_allow_html=True)
+                            else:
+                                st.markdown('<span class="badge-wrong">❌ Incorrect</span>', unsafe_allow_html=True)
                         st.markdown(f"**Predicted:** Option **{ctx_pred}** ({options.get(ctx_pred, '')})")
                         st.markdown(f"**Confidence:** `{ctx_conf * 100:.1f}%`")
                         st.progress(min(max(ctx_conf, 0.0), 1.0))
@@ -640,7 +657,7 @@ def main():
 
             st.markdown(f"#### Figure {idx}: {title}")
             if png_path.exists():
-                st.image(str(png_path), use_container_width=True)
+                render_image(png_path)
                 st.info(f"**Finding:** {caption_text}")
             else:
                 st.warning(f"Figure file not found: `{png_path.name}`")
@@ -659,10 +676,9 @@ def main():
 
         arch_img_path = REPO_ROOT / "app" / "assets" / "architecture.png"
         if arch_img_path.exists():
-            st.image(
-                str(arch_img_path),
+            render_image(
+                arch_img_path,
                 caption="End-to-End Medical RAG Architecture: Dense/Sparse Retrieval, Cross-Encoder Reranking, and Adaptive Gating.",
-                use_container_width=True,
             )
         else:
             st.warning(
