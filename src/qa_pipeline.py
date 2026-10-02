@@ -24,7 +24,8 @@ import torch
 
 from src.common import (append_jsonl, banner, get_device, load_config, phase_args, phase_dir, read_jsonl,
                         set_seed, write_manifest)
-from src.llm import LLM, baseline_prompt, context_prompt, parse_answer, parse_citations, rag_prompt
+from src.llm import (LLM, baseline_idk_prompt, baseline_prompt, context_prompt, get_idk_letter, get_idk_options,
+                     parse_answer, parse_citations, rag_idk_prompt, rag_prompt)
 
 
 class RSSProfiler:
@@ -87,35 +88,57 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
         return
     if mode == "baseline":
         prompts = {q["id"]: baseline_prompt(q) for q in todo}
+        options_map = {q["id"]: q["options"] for q in todo}
+        letters_map = {q["id"]: list(q["options"]) for q in todo}
     elif mode == "rag":
         prompts = {q["id"]: rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in todo}
+        options_map = {q["id"]: q["options"] for q in todo}
+        letters_map = {q["id"]: list(q["options"]) for q in todo}
     elif mode == "context":
         max_chars = qcfg["passage_max_chars"] * 3
         prompts = {q["id"]: context_prompt(q, max_chars) for q in todo}
+        options_map = {q["id"]: q["options"] for q in todo}
+        letters_map = {q["id"]: list(q["options"]) for q in todo}
+    elif mode == "baseline_idk":
+        prompts = {q["id"]: baseline_idk_prompt(q) for q in todo}
+        options_map = {q["id"]: get_idk_options(q) for q in todo}
+        letters_map = {q["id"]: list(get_idk_options(q).keys()) for q in todo}
+    elif mode == "rag_idk":
+        prompts = {q["id"]: rag_idk_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in todo}
+        options_map = {q["id"]: get_idk_options(q) for q in todo}
+        letters_map = {q["id"]: list(get_idk_options(q).keys()) for q in todo}
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
     todo.sort(key=lambda q: -len(prompts[q["id"]]))  # longest first: memory problems appear immediately
-    max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_rag"]
-    # Per-model batch size overrides: batch_size_baseline / batch_size_rag; fall back to qa.batch_size
-    if mode == "context":
+    if "baseline" in mode:
+        max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_baseline"]
+        bs = llm.cfg.get("batch_size_baseline") or qcfg["batch_size"]
+        source_desc = "model config (batch_size_baseline)" if llm.cfg.get("batch_size_baseline") else "qa config"
+    else:
+        max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_rag"]
         bs = llm.cfg.get("batch_size_rag") or qcfg["batch_size"]
         source_desc = "model config (batch_size_rag)" if llm.cfg.get("batch_size_rag") else "qa config"
-    else:
-        bs_key = f"batch_size_{mode}"
-        bs = llm.cfg.get(bs_key) or qcfg["batch_size"]
-        source_desc = "model config" if llm.cfg.get(bs_key) else "qa config"
+
     t0 = time.time()
     print(f"  {mode}: batch_size={bs} (from {source_desc})", flush=True)
+    is_idk = "idk" in mode
     for s in range(0, len(todo), bs):
         batch = todo[s:s + bs]
-        res = llm.generate_safe([prompts[q["id"]] for q in batch], [list(q["options"]) for q in batch], max_new)
+        res = llm.generate_safe([prompts[q["id"]] for q in batch], [letters_map[q["id"]] for q in batch], max_new)
         rows = []
         for q, r in zip(batch, res):
-            parsed_pred = parse_answer(r["raw_output"], q["options"])
+            opts = options_map[q["id"]]
+            idk_let = get_idk_letter(q) if is_idk else None
+            parsed_pred = parse_answer(r["raw_output"], opts, idk_letter=idk_let)
             parsed = parsed_pred is not None
             lp = r["letter_probs"]
-            prob_pred = max(lp, key=lp.get) if lp else None
+            prob_pred_raw = max(lp, key=lp.get) if lp else None
+
+            if is_idk and prob_pred_raw == idk_let:
+                prob_pred = "ABSTAIN"
+            else:
+                prob_pred = prob_pred_raw
 
             if parsed:
                 pred = parsed_pred
@@ -127,19 +150,21 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
                 pred = None
                 pred_source = "none"
 
+            abstained = (pred == "ABSTAIN")
             correct = pred is not None and pred == q["answer"]
             row = {"id": q["id"], "split": q["split"], "dataset": q["dataset"], "model": llm.cfg["name"],
                    "mode": mode, "should_abstain": q["should_abstain"], "gold": q["answer"], "pred": pred,
                    "correct": correct, "parsed": parsed, "pred_source": pred_source,
                    "letter_probs": lp, "confidence": max(lp.values()) if lp else None,
-                   "prob_pred": prob_pred, "load_source": getattr(llm, "load_source", None), **r}
-            if mode == "rag":
+                   "prob_pred": prob_pred, "load_source": getattr(llm, "load_source", None),
+                   "abstained": abstained, **r}
+            if mode in ("rag", "rag_idk"):
                 passages = evidence[q["id"]]["passages"]
                 cites = parse_citations(r["raw_output"], len(passages))
                 row["citations"] = cites
                 row["cited_chunk_ids"] = [passages[c - 1]["chunk_id"] for c in cites]
                 row["evidence_chunk_ids"] = [p["chunk_id"] for p in passages]
-                row["top_rerank_score"] = passages[0]["rerank_score"]
+                row["top_rerank_score"] = passages[0]["rerank_score"] if passages else None
             elif mode == "context":
                 row["citations"] = parse_citations(r["raw_output"], 1)
             rows.append(row)
@@ -413,8 +438,8 @@ def run_profiling(models, cfg, qcfg, questions, evidence, work_dir, device, keep
 def main():
     ap = phase_args("Phases 4, 5, 8, 10: model check, baseline QA, RAG QA, context QA")
     ap.add_argument("--models", nargs="*", help="Only these model names")
-    ap.add_argument("--modes", nargs="+", choices=["baseline", "rag", "context"], default=None,
-                    help="Which QA modes to run (choices: baseline, rag, context; default: baseline rag).")
+    ap.add_argument("--modes", nargs="+", choices=["baseline", "rag", "context", "baseline_idk", "rag_idk"], default=None,
+                    help="Which QA modes to run (choices: baseline, rag, context, baseline_idk, rag_idk; default: baseline rag).")
     ap.add_argument("--profile", action="store_true", help="Run profiling benchmark and write work/profile/profiling.json")
     ap.add_argument("--keep-cache", action="store_true", help="Do not delete model files after use")
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
@@ -428,10 +453,11 @@ def main():
     p1 = phase_dir(args.work, 1)
     p4, p5, p8 = (phase_dir(args.work, n) for n in (4, 5, 8))
     p10 = phase_dir(args.work, 10)
+    p12 = phase_dir(args.work, 12)
 
     # Determine which QA modes to run
     run_modes = list(args.modes) if args.modes else ["baseline", "rag"]
-    skip_checks = all(m in ("rag", "context") for m in run_modes)
+    skip_checks = all(m in ("rag", "context", "baseline_idk", "rag_idk") for m in run_modes)
 
     # Model selection (before data load so --dry-run doesn't need the work dir)
     all_models = {m["name"]: m for m in cfg["models"] + [cfg["tiny_model"]]}
@@ -458,7 +484,7 @@ def main():
     ensure_pubmedqa_contexts(questions, cfg)
     val_pool = list(val)
 
-    if "rag" in run_modes or args.check_only or args.profile:
+    if "rag" in run_modes or "rag_idk" in run_modes or args.check_only or args.profile:
         p7 = phase_dir(args.work, 7)
         if (p7 / "evidence.jsonl").exists():
             evidence = {r["id"]: r for r in read_jsonl(p7 / "evidence.jsonl")}
@@ -509,11 +535,17 @@ def main():
                     for mode in run_modes:
                         if mode == "baseline":
                             p_out, q_subset = p5, questions
+                            out_file = p_out / f"{m['name']}.jsonl"
                         elif mode == "rag":
                             p_out, q_subset = p8, questions
+                            out_file = p_out / f"{m['name']}.jsonl"
                         elif mode == "context":
                             p_out, q_subset = p10, [q for q in questions if q["dataset"] == "pubmedqa"]
-                        run_mode(llm, mode, q_subset, evidence, qcfg, p_out / f"{m['name']}.jsonl")
+                            out_file = p_out / f"{m['name']}.jsonl"
+                        elif mode in ("baseline_idk", "rag_idk"):
+                            p_out, q_subset = p12, questions
+                            out_file = p_out / f"{m['name']}_{mode}.jsonl"
+                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file)
                 status[m["name"]] = "DONE"
             else:
                 check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
@@ -526,11 +558,17 @@ def main():
                     for mode in run_modes:
                         if mode == "baseline":
                             p_out, q_subset = p5, questions
+                            out_file = p_out / f"{m['name']}.jsonl"
                         elif mode == "rag":
                             p_out, q_subset = p8, questions
+                            out_file = p_out / f"{m['name']}.jsonl"
                         elif mode == "context":
                             p_out, q_subset = p10, [q for q in questions if q["dataset"] == "pubmedqa"]
-                        run_mode(llm, mode, q_subset, evidence, qcfg, p_out / f"{m['name']}.jsonl")
+                            out_file = p_out / f"{m['name']}.jsonl"
+                        elif mode in ("baseline_idk", "rag_idk"):
+                            p_out, q_subset = p12, questions
+                            out_file = p_out / f"{m['name']}_{mode}.jsonl"
+                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file)
                     status[m["name"]] = "DONE"
             llm.close()
         except Exception as e:  # noqa: BLE001 - one broken model must not stop the others
@@ -578,6 +616,8 @@ def main():
         b = summarise(p5 / f"{name}.jsonl") if (p5 / f"{name}.jsonl").exists() else {}
         r = summarise(p8 / f"{name}.jsonl") if (p8 / f"{name}.jsonl").exists() else {}
         c = summarise(p10 / f"{name}.jsonl") if (p10 / f"{name}.jsonl").exists() else {}
+        b_idk = summarise(p12 / f"{name}_baseline_idk.jsonl") if (p12 / f"{name}_baseline_idk.jsonl").exists() else {}
+        r_idk = summarise(p12 / f"{name}_rag_idk.jsonl") if (p12 / f"{name}_rag_idk.jsonl").exists() else {}
 
         if b:
             b_ans = [row for row in read_jsonl(p5 / f"{name}.jsonl") if row["split"] == "test" and not row["should_abstain"]]
@@ -598,7 +638,8 @@ def main():
                 f"Context accuracy mismatch: {c.get('test_accuracy_all_answerable')} != {c_recomputed}"
             )
 
-        summary[name] = {"status": status.get(name), "baseline": b, "rag": r, "context": c}
+        summary[name] = {"status": status.get(name), "baseline": b, "rag": r, "context": c,
+                         "baseline_idk": b_idk, "rag_idk": r_idk}
         b_acc = str(b.get('test_accuracy_all_answerable', '-'))
         r_acc = str(r.get('test_accuracy_all_answerable', '-'))
         c_acc = str(c.get('test_accuracy_pubmedqa', '-'))
@@ -612,17 +653,25 @@ def main():
         Path(p8 / "summary.json").write_text(json.dumps(summary, indent=2))
     if p10.exists():
         Path(p10 / "summary.json").write_text(json.dumps(summary, indent=2))
+    if p12.exists():
+        Path(p12 / "summary.json").write_text(json.dumps(summary, indent=2))
     batch_sizes_used = {
         m["name"]: {
-            "baseline": m.get("batch_size_baseline") or qcfg["batch_size"],
-            "rag":      m.get("batch_size_rag")      or qcfg["batch_size"],
-            "context":  m.get("batch_size_rag")      or qcfg["batch_size"],
+            "baseline":     m.get("batch_size_baseline") or qcfg["batch_size"],
+            "rag":          m.get("batch_size_rag")      or qcfg["batch_size"],
+            "context":      m.get("batch_size_rag")      or qcfg["batch_size"],
+            "baseline_idk": m.get("batch_size_baseline") or qcfg["batch_size"],
+            "rag_idk":      m.get("batch_size_rag")      or qcfg["batch_size"],
         }
         for m in models
     }
     manifest_phases = [(p4, 4), (p5, 5), (p8, 8)]
     if "context" in run_modes or any((p10 / f"{m['name']}.jsonl").exists() for m in models):
         manifest_phases.append((p10, 10))
+    if any(m in run_modes for m in ("baseline_idk", "rag_idk")) or any(
+        (p12 / f"{m['name']}_{mode}.jsonl").exists() for m in models for mode in ("baseline_idk", "rag_idk")
+    ):
+        manifest_phases.append((p12, 12))
     for p, n in manifest_phases:
         write_manifest(p, {"phase": n, "tiny": args.tiny, "device": device, "status": status,
                             "load_sources": load_sources, "settings": qcfg,

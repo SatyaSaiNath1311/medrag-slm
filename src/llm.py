@@ -16,8 +16,27 @@ FORMAT_RAG = ("Answer with the letter of the correct option. Then, on a new line
 ANSWER_PREFIX = "Answer:"
 
 
+# Constant used across demo, chatbot, and pipeline when the model abstains or confidence is low
+ABSTAIN_MESSAGE = "I don't have enough information to answer this confidently. Please consult a doctor."
+IDK_TEXT = "I do not have enough information to answer this question."
+
+
 def _options_block(q):
     return "\n".join(f"{k}. {v}" for k, v in q["options"].items())
+
+
+def get_idk_letter(q):
+    """Next option letter: D for PubMedQA (3 options), E for MedQA and unanswerable."""
+    if q.get("dataset") == "pubmedqa":
+        return "D"
+    return "E"
+
+
+def get_idk_options(q):
+    """Return options dictionary augmented with the IDK option."""
+    opts = dict(q["options"])
+    opts[get_idk_letter(q)] = IDK_TEXT
+    return opts
 
 
 def baseline_prompt(q):
@@ -28,6 +47,24 @@ def rag_prompt(q, passages, max_chars):
     ev = "\n".join(f"[{i}] ({p['title']}) {p['text'][:max_chars]}" for i, p in enumerate(passages, 1))
     return (f"{PROMPT_HEAD} Use the numbered evidence passages.\n\nEvidence:\n{ev}\n\n"
             f"Question: {q['question']}\nOptions:\n{_options_block(q)}\n\n{FORMAT_RAG}")
+
+
+def baseline_idk_prompt(q):
+    letter = get_idk_letter(q)
+    opts = get_idk_options(q)
+    opts_block = "\n".join(f"{k}. {v}" for k, v in opts.items())
+    instruction = f"If none of the options is correct or you do not have enough information to answer, choose {letter}."
+    return f"{PROMPT_HEAD}\n\nQuestion: {q['question']}\nOptions:\n{opts_block}\n\n{FORMAT_BASELINE} {instruction}"
+
+
+def rag_idk_prompt(q, passages, max_chars):
+    letter = get_idk_letter(q)
+    opts = get_idk_options(q)
+    opts_block = "\n".join(f"{k}. {v}" for k, v in opts.items())
+    ev = "\n".join(f"[{i}] ({p['title']}) {p['text'][:max_chars]}" for i, p in enumerate(passages, 1))
+    instruction = f"If none of the options is correct or you do not have enough information to answer, choose {letter}."
+    return (f"{PROMPT_HEAD} Use the numbered evidence passages.\n\nEvidence:\n{ev}\n\n"
+            f"Question: {q['question']}\nOptions:\n{opts_block}\n\n{FORMAT_RAG} {instruction}")
 
 
 def context_prompt(q, max_chars=None):
@@ -41,17 +78,27 @@ def context_prompt(q, max_chars=None):
 
 
 # ---------- parsing ----------
-def parse_answer(text, options):
+def parse_answer(text, options, idk_letter=None):
     t = re.sub(r"</?\s*(?:letter|answer)\s*>", " ", text, flags=re.I).strip()
     m = re.search(r"answer(?:\s+is)?\W*([A-Za-z])\b", t, re.I)
     if m and m.group(1).upper() in options:
-        return m.group(1).upper()
+        res = m.group(1).upper()
+        if (idk_letter and res == idk_letter) or options.get(res) == IDK_TEXT:
+            return "ABSTAIN"
+        return res
     for letter, value in options.items():  # e.g. "Answer: yes" for PubMedQA
         if re.search(r"answer\W*" + re.escape(value.lower()) + r"\b", t.lower()):
+            if (idk_letter and letter == idk_letter) or value == IDK_TEXT:
+                return "ABSTAIN"
             return letter
     m = re.match(r"^\W*([A-Za-z])(?:[.):]|\s*$|\n)", t)  # bare "B", "B.", "(B)"
     if m and m.group(1).upper() in options:
-        return m.group(1).upper()
+        res = m.group(1).upper()
+        if (idk_letter and res == idk_letter) or options.get(res) == IDK_TEXT:
+            return "ABSTAIN"
+        return res
+    if IDK_TEXT.lower() in t.lower():
+        return "ABSTAIN"
     return None
 
 

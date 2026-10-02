@@ -11,10 +11,10 @@ CODE_DIR = "/tmp/medrag-slm"
 WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
-PROFILE = True
+PROFILE = False
 TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["qwen3-4b", "phi4-mini", "gemma3-4b", "qwen3-1.7b", "smollm3-3b"]
-MODES = ["context"]
+MODELS = ["qwen3-4b"]
+MODES = ["baseline_idk", "rag_idk"]
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
