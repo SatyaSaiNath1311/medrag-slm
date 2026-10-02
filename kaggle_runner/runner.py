@@ -10,9 +10,9 @@ REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm.git"
 CODE_DIR = "/tmp/medrag-slm"
 WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
-CHECK_ONLY = True                          # when True, run only Phase 4 format check
+CHECK_ONLY = False
 TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["gemma3-4b"]
+MODELS = ["qwen3-1.7b"]
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
