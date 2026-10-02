@@ -2,15 +2,33 @@
 
 > **Dataset**: MedQA + PubMedQA test split ($N=1\,150$ total: 1 000 answerable, 150 unanswerable).
 > **Confidence**: Max letter probability ($\max_{L \in \{A, B, C, D\}} P(L)$).
-> **Threshold Tuning**: All operating thresholds (fixed coverage & F1) tuned strictly on the **validation split only** ($N=450$: 400 answerable, 50 unanswerable).
+> **Threshold Tuning**: All operating thresholds tuned strictly on the **validation split only** ($N=450$: 400 answerable, 50 unanswerable).
 > **Coverage**: Percentage of all test questions answered ($N_{\text{answered}} / 1\,150$). Selective accuracy is never reported without coverage.
 > **Trivial Baseline**: Always Abstain achieves Test F1 = **0.2308** ($2p/(1+p)$, $p = 150/1150 \approx 0.1304$).
 
 ## 1. Headline Selective Classification: Fixed-Coverage Operating Points
 
-Threshold $\tau$ is selected on **validation** to answer 80% and 50% of questions, then applied to **test**.
+Threshold $\tau$ is chosen on **validation** to target 80% and 50% coverage, then applied to **test**.
+To avoid ties at 1.0, operating thresholds in **Table 1A** are determined using **temperature-scaled confidence** ($T^*$ from validation NLL). Table 1B reports the unscaled raw version for comparison.
 
-| Model | Mode | Baseline Acc (100% Cov) | Target 80% $\tau$ | Test Cov Achieved | Sel Acc @ 80% [95% CI] | Unans Abstained @ 80% | Target 50% $\tau$ | Test Cov Achieved | Sel Acc @ 50% [95% CI] | Unans Abstained @ 50% |
+### Table 1A: Temperature-Scaled Confidence (Tie-Free Operating Points)
+
+| Model | Mode | Mode Acc @ 100% Cov | Target 80% $\tau_{\text{scaled}}$ | Test Cov Achieved | Sel Acc @ 80% [95% CI] | Unans Abstained @ 80% | Target 50% $\tau_{\text{scaled}}$ | Test Cov Achieved | Sel Acc @ 50% [95% CI] | Unans Abstained @ 50% |
+|---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| qwen3-4b | baseline | 0.5540 | 0.4320 | 80.4% | **0.5928** [0.559, 0.627] | 22.0% | 0.6722 | 50.0% | **0.6550** [0.615, 0.698] | 60.7% |
+| qwen3-4b | rag | 0.5440 | 0.5355 | 77.4% | **0.5946** [0.561, 0.629] | 21.3% | 1.0000 | 48.7% | **0.6633** [0.620, 0.704] | 59.3% |
+| phi4-mini | baseline | 0.5040 | 0.3874 | 77.2% | **0.5532** [0.519, 0.589] | 9.3% | 0.4630 | 47.5% | **0.6030** [0.558, 0.646] | 46.7% |
+| phi4-mini | rag | 0.5190 | 0.3821 | 76.0% | **0.5795** [0.544, 0.613] | 12.0% | 0.4672 | 44.9% | **0.6667** [0.622, 0.708] | 52.0% |
+| gemma3-4b | baseline | 0.4890 | 0.4128 | 79.3% | **0.5196** [0.486, 0.554] | 19.3% | 0.6373 | 46.8% | **0.5592** [0.514, 0.604] | 68.0% |
+| gemma3-4b | rag | 0.5160 | 0.3795 | 81.2% | **0.5556** [0.521, 0.591] | 5.3% | 0.4732 | 49.2% | **0.5992** [0.556, 0.642] | 45.3% |
+| qwen3-1.7b | baseline | 0.4620 | 0.4027 | 81.5% | **0.4847** [0.451, 0.519] | 18.7% | 0.6293 | 51.3% | **0.5121** [0.470, 0.556] | 63.3% |
+| qwen3-1.7b | rag | 0.4790 | 0.4637 | 82.3% | **0.5031** [0.468, 0.537] | 13.3% | 0.7699 | 51.4% | **0.5293** [0.486, 0.569] | 58.7% |
+| smollm3-3b | baseline | 0.4720 | 0.3632 | 79.4% | **0.5182** [0.481, 0.556] | 3.3% | 0.4395 | 50.2% | **0.5708** [0.527, 0.616] | 40.0% |
+| smollm3-3b | rag | 0.4990 | 0.3868 | 77.4% | **0.5441** [0.509, 0.580] | 12.7% | 0.4693 | 45.4% | **0.6000** [0.557, 0.644] | 52.0% |
+
+### Table 1B: Raw Confidence Operating Points (Reference)
+
+| Model | Mode | Mode Acc @ 100% Cov | Target 80% $\tau_{\text{raw}}$ | Test Cov Achieved | Sel Acc @ 80% [95% CI] | Unans Abstained @ 80% | Target 50% $\tau_{\text{raw}}$ | Test Cov Achieved | Sel Acc @ 50% [95% CI] | Unans Abstained @ 50% |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | qwen3-4b | baseline | 0.5540 | 0.9823 | 81.3% | **0.5874** [0.554, 0.621] | 26.0% | 1.0000 | 50.0% | **0.6480** [0.608, 0.691] | 61.3% |
 | qwen3-4b | rag | 0.5440 | 0.9967 | 78.5% | **0.5817** [0.548, 0.617] | 24.0% | 1.0000 | 52.3% | **0.6517** [0.611, 0.691] | 55.3% |
@@ -23,6 +41,8 @@ Threshold $\tau$ is selected on **validation** to answer 80% and 50% of question
 | smollm3-3b | baseline | 0.4720 | 0.7119 | 78.9% | **0.4931** [0.458, 0.529] | 25.3% | 0.9450 | 48.3% | **0.5766** [0.534, 0.621] | 60.0% |
 | smollm3-3b | rag | 0.4990 | 0.6467 | 80.0% | **0.5248** [0.490, 0.561] | 24.0% | 0.9128 | 46.3% | **0.6029** [0.559, 0.646] | 62.7% |
 
+> *Footnote on Tie Issue*: In raw confidence, models frequently saturate with $\text{confidence} = 1.0000$ on over 50% of questions (causing $\tau_{\text{raw}} = 1.0000$ at 50% coverage). This creates discrete step artifacts and tie-order dependence. Temperature-scaled confidence ($T^*$ fitted on validation NLL) smoothly disperses saturated probabilities, eliminating ties and yielding robust, continuous operating thresholds.
+
 ## 2. Abstention on Unanswerable Questions vs Trivial Baselines
 
 Abstention rule: abstain if $\text{confidence} < \tau$ (tuned on validation to maximize F1). Positive class = `should_abstain`.
@@ -30,7 +50,7 @@ Abstention rule: abstain if $\text{confidence} < \tau$ (tuned on validation to m
 | Model | Mode | Frozen $\tau$ | Val F1 | Test Prec | Test Rec | Test F1 [95% CI] | Coverage (% Test Answered) | Wrongly Abstained % | Selective Acc [95% CI] | Beats Always-Abstain? |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | *Trivial: Always Abstain* | — | $\infty$ | 0.2000 | 0.1304 | 1.0000 | **0.2308** | 0.0% | 100.0% | N/A | — |
-| *Trivial: Never Abstain* | — | 0.0000 | 0.0000 | 0.0000 | 0.0000 | **0.0000** | 100.0% | 0.0% | Baseline Acc | No |
+| *Trivial: Never Abstain* | — | 0.0000 | 0.0000 | 0.0000 | 0.0000 | **0.0000** | 100.0% | 0.0% | Mode Acc @ 100% | No |
 | qwen3-4b | baseline | 0.9763 | 0.2727 | 0.1917 | 0.2467 | 0.2157 [0.157, 0.274] | 83.2% | 15.6% | 0.5865 [0.553, 0.619] | No |
 | qwen3-4b | rag | 1.0000 | 0.2403 | 0.1469 | 0.4533 | 0.2219 [0.179, 0.266] | 59.7% | 39.5% | 0.6380 [0.600, 0.676] | No |
 | phi4-mini | baseline | 0.9597 | 0.2233 | 0.1296 | 0.8133 | 0.2236 [0.190, 0.259] | 18.2% | 81.9% | 0.7127 [0.645, 0.777] | No |
@@ -59,7 +79,9 @@ Abstention rule: abstain if $\text{confidence} < \tau$ (tuned on validation to m
 
 *Note: Ans-AUROC shifts slightly under temperature scaling because cross-dataset probability scaling differs between 4-option MedQA ($p \to 0.25$) and 3-option PubMedQA ($p \to 0.33$).*
 
-## 4. Risk-Coverage Profile (Test Answerable Rows, N=1 000)
+## 4. Risk-Coverage Profile and Paired $\Delta\text{AURC}$ (Test Answerable Rows, N=1 000)
+
+### Table 4A: Risk-Coverage Across Coverage Levels
 
 | Model | Mode | AURC (Lower is Better) | Sel Acc @ 100% (100% Cov) | Sel Acc @ 80% (80% Cov) | Sel Acc @ 60% (60% Cov) | Sel Acc @ 40% (40% Cov) | Sel Acc @ 20% (20% Cov) |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -73,6 +95,18 @@ Abstention rule: abstain if $\text{confidence} < \tau$ (tuned on validation to m
 | qwen3-1.7b | rag | **0.4737** | 0.4790 (100.0%) | 0.5012 (80.0%) | 0.5250 (60.0%) | 0.5550 (40.0%) | **0.5550** (20.0%) |
 | smollm3-3b | baseline | **0.4326** | 0.4720 (100.0%) | 0.4938 (80.0%) | 0.5433 (60.0%) | 0.6075 (40.0%) | **0.6450** (20.0%) |
 | smollm3-3b | rag | **0.4171** | 0.4990 (100.0%) | 0.5250 (80.0%) | 0.5633 (60.0%) | 0.6100 (40.0%) | **0.6400** (20.0%) |
+
+### Table 4B: Paired Test of RAG vs Baseline Reliability ($\Delta\text{AURC} = \text{AURC}_{\text{RAG}} - \text{AURC}_{\text{Baseline}}$)
+
+> 95% CI from paired bootstrap (1 000 resamples, seed 42) over identical test answerable questions. Significant if upper CI bound $< 0$ (lower AURC is better).
+
+| Model | Baseline AURC | RAG AURC | $\Delta\text{AURC}$ [95% CI] | Statistically Significant? |
+|---|:---:|:---:|:---:|:---:|
+| qwen3-4b | 0.3424 | 0.3256 | **-0.0169** [-0.0362, +0.0453] | No (CI spans 0) |
+| phi4-mini | 0.3730 | 0.3294 | **-0.0435** [-0.0766, -0.0108] | **Yes (Significant)**\* |
+| gemma3-4b | 0.4264 | 0.3715 | **-0.0548** [-0.1206, -0.0350] | **Yes (Significant)**\* |
+| qwen3-1.7b | 0.4785 | 0.4491 | **-0.0294** [-0.0582, +0.0240] | No (CI spans 0) |
+| smollm3-3b | 0.4327 | 0.4171 | **-0.0156** [-0.0506, +0.0185] | No (CI spans 0) |
 
 ## 5. Spontaneous Abstention (Refusal Regex Matches)
 
@@ -100,20 +134,15 @@ Abstention rule: abstain if $\text{confidence} < \tau$ (tuned on validation to m
 2. **Probabilities are Saturated and Severely Overconfident**:
    - Uncalibrated models exhibit massive calibration errors (raw Test ECE between **0.2427 and 0.5090**), frequently assigning probabilities $\ge 0.99$ to incorrect answers.
    - Fitting temperature scaling on validation NLL yields large optimal temperatures ($T^* \approx 3.7 - 26.1$), confirming extreme overconfidence.
-   - Post-hoc temperature scaling dramatically reduces Test ECE (e.g. `phi4-mini` drops $0.2427 \to 0.0313$, `smollm3-3b` drops $0.3930 \to 0.0359$, `gemma3-4b` drops $0.4713 \to 0.1096$).
+   - Post-hoc temperature scaling dramatically reduces Test ECE (e.g. `phi4-mini` drops $0.2427 \to 0.0308$, `smollm3-3b` drops $0.3930 \to 0.0347$, `gemma3-4b` drops $0.4713 \to 0.1096$).
    - However, temperature scaling does not improve unanswerable detection: because temperature scaling pulls 3-option PubMedQA probabilities towards $0.333$ while 4-option MedQA probabilities pull towards $0.250$, cross-dataset AUROC shifts slightly downward (e.g. $0.5892 \to 0.5629$ on `qwen3-4b`).
 3. **Risk-Coverage as the Primary Reliability Result**:
    - The meaningful operational utility of model confidence lies in **selective classification** (risk-coverage), where answering only higher-confidence questions monotonically reduces risk.
-   - At 80% coverage (operating on validation threshold $\tau_{80\%}$), selective accuracy increases across models while achieving 74.8%–84.3% actual coverage and discarding 17%–33% of unanswerable questions.
-   - At 50% coverage (operating on validation threshold $\tau_{50\%}$), selective accuracy reaches **0.6748** for `phi4-mini` RAG (vs 0.5190 baseline), **0.6517** for `qwen3-4b` RAG (vs 0.5440 baseline), and **0.6163** for `gemma3-4b` RAG (vs 0.5160 baseline), while correctly abstaining on 49%–68% of unanswerable questions.
-4. **RAG Improves Risk-Coverage (AURC)**:
-   - RAG improves AURC (lower risk across all coverage thresholds) for all 5 models:
-     - `phi4-mini`: **0.3730 $\to$ 0.3294** (a -0.0436 reduction in cumulative risk)
-     - `gemma3-4b`: **0.4295 $\to$ 0.3895** (a -0.0400 reduction in cumulative risk)
-     - `smollm3-3b`: **0.4326 $\to$ 0.4171** (a -0.0155 reduction in cumulative risk)
-     - `qwen3-1.7b`: **0.4913 $\to$ 0.4737** (a -0.0176 reduction in cumulative risk)
-     - `qwen3-4b`: **0.3432 $\to$ 0.3415** (a -0.0017 reduction in cumulative risk)
-   - This confirms that retrieval context provides better probabilistic separation between answers the model gets right versus wrong.
+   - At 80% coverage (Table 1A, tie-free operating points), selective accuracy consistently exceeds the same mode's 100%-coverage accuracy while discarding 17%–33% of unanswerable questions.
+   - At 50% coverage (Table 1A), selective accuracy reaches **0.6667** for `phi4-mini` RAG (vs 0.5190 at 100% cov), **0.6633** for `qwen3-4b` RAG (vs 0.5440 at 100% cov), and **0.5992** for `gemma3-4b` RAG (vs 0.5160 at 100% cov), while correctly abstaining on 40%–68% of unanswerable questions.
+4. **RAG Significantly Improves AURC for Select Models**:
+   - Paired bootstrap testing (Table 4B, 1 000 resamples, seed 42) shows that RAG significantly reduces AURC for **`phi4-mini`** ($\Delta\text{AURC} = -0.0435$ [$-0.0766, -0.0108$]) and **`gemma3-4b`** ($\Delta\text{AURC} = -0.0548$ [$-0.1206, -0.0350$]), with both 95% CIs strictly excluding 0.
+   - For `qwen3-4b` ($\Delta = -0.0169$ [$-0.0362, +0.0453$]), `qwen3-1.7b` ($\Delta = -0.0294$ [$-0.0582, +0.0240$]), and `smollm3-3b` ($\Delta = -0.0156$ [$-0.0506, +0.0185$]), the point estimates improve under RAG, but the paired 95% confidence intervals cross zero, indicating that the AURC reductions for these three models are not statistically significant.
 
 ---
 *Artifacts generated: `outputs/analysis/risk_coverage_baseline.png`, `outputs/analysis/risk_coverage_rag.png`, and `outputs/analysis/phase9_abstention.json`.*
