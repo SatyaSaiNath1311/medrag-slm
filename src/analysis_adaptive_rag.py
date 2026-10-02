@@ -5,12 +5,28 @@ Tunes gating thresholds on VALIDATION split only, then evaluates on TEST split.
 Evaluates:
   - baseline
   - rag
-  - rerank_gate (top_rerank_score >= tau)
-  - confidence_gate (max letter probability)
-  - combined (rerank_gate with confidence check)
+  - rerank_gate (top_rerank_score >= tau  -> uses RAG; gate decided from rerank score,
+                 NOT requiring a second generation)
+  - confidence_gate (pick whichever of baseline/RAG has higher confidence; 2 generations)
+  - combined (rerank_gate + confidence check; 2 generations)
+
+Cost model
+----------
+Strategy         Gens/Q  Retrieval  Seconds/Q
+baseline           1       no       b_sec
+Full RAG           1       yes      r_sec + retr_sec
+rerank_gate        1       yes      (r_sec if RAG used else b_sec) + retr_sec
+confidence_gate    2       yes      b_sec + r_sec + retr_sec
+combined           2       yes      b_sec + r_sec + retr_sec
+
+retr_sec is the mean per-question retrieval+rerank wall time derived from the
+Runner A phase6/phase7 manifests in outputs/kaggle_build/medrag-build.log:
+  Phase 6 (retrieval): 552.68 s -> 576.11 s  =>  23.42 s / 1600 q = 0.01464 s/q
+  Phase 7 (rerank):    577.57 s -> 757.83 s  => 180.26 s / 1600 q = 0.11266 s/q
+  Total  retr_sec = 0.01464 + 0.11266 = 0.12730 s/q
 
 Reports accuracy (overall, MedQA, PubMedQA) with 95% bootstrap CIs,
-share of answers taken from RAG, cost (generations/question + mean seconds/question),
+share of answers taken from RAG, cost (gens/q, retrieval yes/no, sec/q),
 McNemar exact tests vs baseline and vs Full RAG,
 and Holm-Bonferroni corrected p-values for strategy-vs-baseline within each model.
 """
@@ -21,6 +37,25 @@ import math
 import os
 import random
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Retrieval+rerank cost derived from Runner A log (phase6 + phase7 timestamps)
+# Build log: outputs/kaggle_build/medrag-build.log
+#   Phase 6 start:  time=552.682 s  Phase 6 end:  time=576.105 s  => 23.424 s
+#   Phase 7 start:  time=577.568 s  Phase 7 end:  time=757.829 s  => 180.261 s
+#   Total for 1600 questions: 203.685 s  =>  0.12730 s/q
+RETR_SEC_PER_Q = (23.424 + 180.261) / 1600   # = 0.12730 s/q
+N_RETRIEVAL_QUESTIONS = 1600
+
+# Cost metadata per strategy
+COST_META = {
+    # (gens_per_q, retrieval)
+    "baseline":         (1, False),
+    "rag":              (1, True),
+    "rerank_gate":      (1, True),
+    "confidence_gate":  (2, True),
+    "combined":         (2, True),
+}
 
 
 # ---------- Statistics ----------
@@ -43,14 +78,13 @@ def mcnemar_exact(preds_a_correct, preds_b_correct):
 
 def holm_bonferroni(pvals_and_keys):
     """Holm-Bonferroni correction over a list of (key, raw_p) pairs.
-    Returns dict: key -> {"raw_p": ..., "adj_p": ..., "significant": bool}.
+    Returns dict: key -> {"raw_p": ..., "adj_p": ...}.
     """
     m = len(pvals_and_keys)
     sorted_items = sorted(pvals_and_keys, key=lambda x: x[1])
     result = {}
     for rank, (key, raw_p) in enumerate(sorted_items, start=1):
         adj_p = min(1.0, raw_p * (m - rank + 1))
-        # Monotonicity: adjusted p must be >= previous adjusted p
         if rank > 1:
             prev_key = sorted_items[rank - 2][0]
             adj_p = max(adj_p, result[prev_key]["adj_p"])
@@ -64,33 +98,13 @@ def bootstrap_ci(correct_list, n_boot=1000, seed=42):
         return (0.0, 0.0)
     rng = random.Random(seed)
     n = len(correct_list)
-    means = []
-    for _ in range(n_boot):
-        sample = rng.choices(correct_list, k=n)
-        means.append(sum(sample) / n)
+    means = [sum(rng.choices(correct_list, k=n)) / n for _ in range(n_boot)]
     means.sort()
-    low = means[int(0.025 * n_boot)]
-    high = means[int(0.975 * n_boot)]
-    return (round(low, 4), round(high, 4))
-
-
-def safe_mean(vals):
-    return round(sum(vals) / len(vals), 4) if vals else None
-
-
-# ---------- Cost model ----------
-# generations per question (retrieval cost is assumed equal for RAG-using strategies)
-COST_GENS = {
-    "baseline": 1,
-    "rag": 2,             # 1 retrieval + 1 generation
-    "rerank_gate": 2,     # 1 retrieval always + 1 generation
-    "confidence_gate": 3, # 2 generations + 1 retrieval
-    "combined": 3,        # 2 generations + 1 retrieval
-}
+    return (round(means[int(0.025 * n_boot)], 4), round(means[int(0.975 * n_boot)], 4))
 
 
 def compute_metrics(pairs, strat_func, base_test_correct, rag_test_correct, seed=42):
-    """Compute accuracy, sub-dataset accuracy, RAG share, cost, and McNemar tests."""
+    """Compute accuracy, sub-dataset accuracy, RAG share, and McNemar tests."""
     total = len(pairs)
     if total == 0:
         return {}
@@ -99,20 +113,19 @@ def compute_metrics(pairs, strat_func, base_test_correct, rag_test_correct, seed
     correct_all = [pred == p["gold"] for pred, p in zip(preds, pairs)]
     used_rag_all = [p["_used_rag"] for p in pairs]
 
-    # Sub-datasets
-    medqa_pairs = [(c, p) for c, p in zip(correct_all, pairs) if p["dataset"] == "medqa"]
-    medqa_correct = [c for c, _ in medqa_pairs]
-    pubmed_pairs = [(c, p) for c, p in zip(correct_all, pairs) if p["dataset"] == "pubmedqa"]
-    pubmed_correct = [c for c, _ in pubmed_pairs]
+    medqa_idx    = [i for i, p in enumerate(pairs) if p["dataset"] == "medqa"]
+    pubmed_idx   = [i for i, p in enumerate(pairs) if p["dataset"] == "pubmedqa"]
+    medqa_correct  = [correct_all[i] for i in medqa_idx]
+    pubmed_correct = [correct_all[i] for i in pubmed_idx]
 
     acc_overall = round(sum(correct_all) / total, 4)
-    acc_medqa = round(sum(medqa_correct) / len(medqa_correct), 4) if medqa_correct else None
-    acc_pubmed = round(sum(pubmed_correct) / len(pubmed_correct), 4) if pubmed_correct else None
-    rag_pct = round(100.0 * sum(used_rag_all) / total, 1)
+    acc_medqa   = round(sum(medqa_correct)  / len(medqa_correct),  4) if medqa_correct  else None
+    acc_pubmed  = round(sum(pubmed_correct) / len(pubmed_correct), 4) if pubmed_correct else None
+    rag_pct     = round(100.0 * sum(used_rag_all) / total, 1)
 
-    ci_overall = bootstrap_ci(correct_all, n_boot=1000, seed=seed)
-    ci_medqa = bootstrap_ci(medqa_correct, n_boot=1000, seed=seed) if medqa_correct else (None, None)
-    ci_pubmed = bootstrap_ci(pubmed_correct, n_boot=1000, seed=seed) if pubmed_correct else (None, None)
+    ci_overall = bootstrap_ci(correct_all,  n_boot=1000, seed=seed)
+    ci_medqa   = bootstrap_ci(medqa_correct,  n_boot=1000, seed=seed) if medqa_correct  else (None, None)
+    ci_pubmed  = bootstrap_ci(pubmed_correct, n_boot=1000, seed=seed) if pubmed_correct else (None, None)
 
     # McNemar vs baseline
     if base_test_correct is not None:
@@ -129,13 +142,12 @@ def compute_metrics(pairs, strat_func, base_test_correct, rag_test_correct, seed
     # Per-dataset McNemar vs baseline
     pd_mcnemar = {}
     if base_test_correct is not None:
-        for ds, ds_pairs in [("medqa", medqa_pairs), ("pubmedqa", pubmed_pairs)]:
-            if not ds_pairs:
+        for ds, ds_idx in [("medqa", medqa_idx), ("pubmedqa", pubmed_idx)]:
+            if not ds_idx:
                 continue
-            ds_correct = [c for c, _ in ds_pairs]
-            ds_idx = [i for i, p in enumerate(pairs) if p["dataset"] == ds]
             base_ds = [base_test_correct[i] for i in ds_idx]
-            p_ds, disc_ds = mcnemar_exact(base_ds, ds_correct)
+            strat_ds = [correct_all[i] for i in ds_idx]
+            p_ds, disc_ds = mcnemar_exact(base_ds, strat_ds)
             pd_mcnemar[ds] = {"p_vs_baseline": p_ds, "discordant": disc_ds}
 
     return {
@@ -156,28 +168,31 @@ def compute_metrics(pairs, strat_func, base_test_correct, rag_test_correct, seed
     }
 
 
-def compute_cost(pairs, strat_name):
-    """Mean seconds/question for a strategy.
+def compute_cost_sec(pairs, strat_name):
+    """Mean seconds/question including retrieval where applicable.
 
-    Cost model:
-      baseline:         mean b_seconds
-      rag:              mean r_seconds
-      rerank_gate:      b_seconds (always run) + r_seconds when RAG used
-      confidence_gate:  b_seconds + r_seconds (both always run)
-      combined:         b_seconds + r_seconds (both always run, we gate on scores)
+    retr_sec = RETR_SEC_PER_Q (derived from build log; see module docstring).
+
+    baseline:         b_sec  (no retrieval)
+    Full RAG:         r_sec + retr_sec
+    rerank_gate:      retr_sec always + (r_sec if RAG used else b_sec)
+                      — gate is decided from stored rerank score; only ONE generation
+    confidence_gate:  b_sec + r_sec + retr_sec  (both passes always run)
+    combined:         b_sec + r_sec + retr_sec  (both passes always run)
     """
     if not pairs:
         return None
     if strat_name == "baseline":
         secs = [p["b_sec"] for p in pairs]
     elif strat_name == "rag":
-        secs = [p["r_sec"] for p in pairs]
+        secs = [p["r_sec"] + RETR_SEC_PER_Q for p in pairs]
     elif strat_name == "rerank_gate":
-        # RAG generation runs only when used; retrieval+rerank always runs (part of r_sec)
-        secs = [p["b_sec"] + (p["r_sec"] if p["_used_rag"] else 0.0) for p in pairs]
+        secs = [
+            RETR_SEC_PER_Q + (p["r_sec"] if p["_used_rag"] else p["b_sec"])
+            for p in pairs
+        ]
     elif strat_name in ("confidence_gate", "combined"):
-        # Both passes always run
-        secs = [p["b_sec"] + p["r_sec"] for p in pairs]
+        secs = [p["b_sec"] + p["r_sec"] + RETR_SEC_PER_Q for p in pairs]
     else:
         return None
     return round(sum(secs) / len(secs), 4)
@@ -199,14 +214,12 @@ def analyze_model(model_dir):
     b_rows = {json.loads(l)["id"]: json.loads(l) for l in open(p5_path)}
     r_rows = {json.loads(l)["id"]: json.loads(l) for l in open(p8_path)}
 
-    common_ids = sorted(list(set(b_rows.keys()) & set(r_rows.keys())))
+    common_ids = sorted(set(b_rows) & set(r_rows))
     print(f"Total matching questions: {len(common_ids)}")
 
     val_pairs, test_pairs = [], []
-
     for qid in common_ids:
-        b = b_rows[qid]
-        r = r_rows[qid]
+        b, r = b_rows[qid], r_rows[qid]
         if b["should_abstain"]:
             continue
         pair = {
@@ -221,8 +234,8 @@ def analyze_model(model_dir):
             "b_conf": b.get("confidence"),
             "r_conf": r.get("confidence"),
             "top_rerank_score": r.get("top_rerank_score"),
-            "b_sec": b.get("seconds", 0.0) or 0.0,
-            "r_sec": r.get("seconds", 0.0) or 0.0,
+            "b_sec": b.get("seconds") or 0.0,
+            "r_sec": r.get("seconds") or 0.0,
             "_used_rag": False,
         }
         if b["split"] == "validation":
@@ -232,7 +245,6 @@ def analyze_model(model_dir):
 
     print(f"Answerable rows: {len(val_pairs)} validation, {len(test_pairs)} test")
 
-    # Field presence check
     has_b_conf = any(p["b_conf"] is not None for p in val_pairs + test_pairs)
     has_r_conf = any(p["r_conf"] is not None for p in val_pairs + test_pairs)
     has_rerank = any(p["top_rerank_score"] is not None for p in val_pairs + test_pairs)
@@ -242,18 +254,18 @@ def analyze_model(model_dir):
     print(f"  RAG confidence:      {'yes' if has_r_conf else 'MISSING'}")
     print(f"  top_rerank_score:    {'yes' if has_rerank else 'MISSING'}")
 
-    can_rerank = has_rerank
-    can_conf = has_b_conf and has_r_conf
+    can_rerank   = has_rerank
+    can_conf     = has_b_conf and has_r_conf
     can_combined = can_rerank and can_conf
 
     if not can_rerank:
-        print("  -> top_rerank_score missing: skipping rerank_gate & combined strategies")
+        print("  -> top_rerank_score missing: skipping rerank_gate & combined")
     if not can_conf:
-        print("  -> confidence missing: skipping confidence_gate & combined strategies")
+        print("  -> confidence missing: skipping confidence_gate & combined")
 
     tuning_info = {}
 
-    # --- Strat functions ---
+    # --- Strategy helpers ---
     def strat_baseline(p):
         p["_used_rag"] = False
         return p["b_pred"]
@@ -265,45 +277,44 @@ def analyze_model(model_dir):
     # --- Tune on validation only ---
     best_tau = None
     best_comb_tau, best_comb_delta = None, None
-    val_scores = None
     taus = None
 
     if can_rerank:
-        val_scores = sorted([p["top_rerank_score"] for p in val_pairs if p["top_rerank_score"] is not None])
+        val_scores = sorted(p["top_rerank_score"] for p in val_pairs if p["top_rerank_score"] is not None)
         if val_scores:
-            taus = sorted(list({val_scores[int(round(i / 100.0 * (len(val_scores) - 1)))] for i in range(101)}))
+            taus = sorted({
+                val_scores[int(round(i / 100.0 * (len(val_scores) - 1)))]
+                for i in range(101)
+            })
             taus.append(val_scores[-1] + 0.01)
 
-            best_tau = None
-            best_val_acc = -1.0
+            best_tau, best_val_acc = None, -1.0
             for tau in taus:
-                val_acc = sum(
+                acc = sum(
                     1 for p in val_pairs
                     if (p["r_pred"] if p["top_rerank_score"] >= tau else p["b_pred"]) == p["gold"]
                 ) / len(val_pairs)
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
-                    best_tau = tau
+                if acc > best_val_acc:
+                    best_val_acc, best_tau = acc, tau
 
             tuning_info["rerank_gate"] = {"best_tau": round(best_tau, 4), "val_acc": round(best_val_acc, 4)}
             print(f"Tuned rerank_gate on validation: tau={best_tau:.4f}, val_acc={best_val_acc:.4f}")
 
     if can_combined and taus:
-        deltas = [0.0, 0.05, 0.1, 0.2]
         best_comb_acc = -1.0
-        for delta in deltas:
+        for delta in [0.0, 0.05, 0.1, 0.2]:
             for tau in taus:
-                val_acc = sum(
+                acc = sum(
                     1 for p in val_pairs
                     if (
-                        p["r_pred"] if (p["top_rerank_score"] >= tau and not (p["r_conf"] < p["b_conf"] - delta))
-                        else p["b_pred"]
+                        p["r_pred"] if (
+                            p["top_rerank_score"] >= tau
+                            and not (p["r_conf"] < p["b_conf"] - delta)
+                        ) else p["b_pred"]
                     ) == p["gold"]
                 ) / len(val_pairs)
-                if val_acc > best_comb_acc:
-                    best_comb_acc = val_acc
-                    best_comb_tau = tau
-                    best_comb_delta = delta
+                if acc > best_comb_acc:
+                    best_comb_acc, best_comb_tau, best_comb_delta = acc, tau, delta
 
         tuning_info["combined"] = {
             "best_tau": round(best_comb_tau, 4),
@@ -315,71 +326,74 @@ def analyze_model(model_dir):
     # --- Evaluate on TEST ---
     results = {}
 
-    res_base = compute_metrics(test_pairs, strat_baseline, base_test_correct=None, rag_test_correct=None, seed=42)
+    res_base = compute_metrics(test_pairs, strat_baseline, None, None, seed=42)
     base_correct_list = res_base.pop("correct_list")
     res_base.pop("used_rag_list")
-    res_base["cost_gens_per_q"] = COST_GENS["baseline"]
-    res_base["cost_sec_per_q"] = compute_cost(test_pairs, "baseline")
+    gens, retr = COST_META["baseline"]
+    res_base.update({"cost_gens_per_q": gens, "cost_retrieval": retr,
+                     "cost_sec_per_q": compute_cost_sec(test_pairs, "baseline")})
     results["baseline"] = res_base
 
-    res_rag = compute_metrics(test_pairs, strat_rag, base_test_correct=base_correct_list, rag_test_correct=None, seed=42)
+    res_rag = compute_metrics(test_pairs, strat_rag, base_correct_list, None, seed=42)
     rag_correct_list = res_rag.pop("correct_list")
     res_rag.pop("used_rag_list")
-    res_rag["cost_gens_per_q"] = COST_GENS["rag"]
-    res_rag["cost_sec_per_q"] = compute_cost(test_pairs, "rag")
+    gens, retr = COST_META["rag"]
+    res_rag.update({"cost_gens_per_q": gens, "cost_retrieval": retr,
+                    "cost_sec_per_q": compute_cost_sec(test_pairs, "rag")})
     results["rag"] = res_rag
 
-    # rerank_gate
+    # rerank_gate — 1 generation, retrieval always runs, gate from stored score
     if can_rerank and best_tau is not None:
         def strat_rerank(p):
-            use_rag = p["top_rerank_score"] is not None and p["top_rerank_score"] >= best_tau
-            p["_used_rag"] = use_rag
-            return p["r_pred"] if use_rag else p["b_pred"]
+            use = p["top_rerank_score"] is not None and p["top_rerank_score"] >= best_tau
+            p["_used_rag"] = use
+            return p["r_pred"] if use else p["b_pred"]
 
-        res_rerank = compute_metrics(test_pairs, strat_rerank, base_test_correct=base_correct_list,
-                                     rag_test_correct=rag_correct_list, seed=42)
+        res_rerank = compute_metrics(test_pairs, strat_rerank, base_correct_list, rag_correct_list, seed=42)
         res_rerank.pop("correct_list")
         res_rerank.pop("used_rag_list")
-        res_rerank["cost_gens_per_q"] = COST_GENS["rerank_gate"]
-        res_rerank["cost_sec_per_q"] = compute_cost(test_pairs, "rerank_gate")
+        gens, retr = COST_META["rerank_gate"]
+        res_rerank.update({"cost_gens_per_q": gens, "cost_retrieval": retr,
+                           "cost_sec_per_q": compute_cost_sec(test_pairs, "rerank_gate")})
         results["rerank_gate"] = res_rerank
     else:
         results["rerank_gate"] = {"status": "skipped"}
 
-    # confidence_gate
+    # confidence_gate — 2 generations, retrieval always runs
     if can_conf:
         def strat_conf(p):
-            use_rag = (p["r_conf"] is not None and p["b_conf"] is not None and p["r_conf"] > p["b_conf"])
-            p["_used_rag"] = use_rag
-            return p["r_pred"] if use_rag else p["b_pred"]
+            use = (p["r_conf"] is not None and p["b_conf"] is not None
+                   and p["r_conf"] > p["b_conf"])
+            p["_used_rag"] = use
+            return p["r_pred"] if use else p["b_pred"]
 
-        res_conf = compute_metrics(test_pairs, strat_conf, base_test_correct=base_correct_list,
-                                   rag_test_correct=rag_correct_list, seed=42)
+        res_conf = compute_metrics(test_pairs, strat_conf, base_correct_list, rag_correct_list, seed=42)
         res_conf.pop("correct_list")
         res_conf.pop("used_rag_list")
-        res_conf["cost_gens_per_q"] = COST_GENS["confidence_gate"]
-        res_conf["cost_sec_per_q"] = compute_cost(test_pairs, "confidence_gate")
+        gens, retr = COST_META["confidence_gate"]
+        res_conf.update({"cost_gens_per_q": gens, "cost_retrieval": retr,
+                         "cost_sec_per_q": compute_cost_sec(test_pairs, "confidence_gate")})
         results["confidence_gate"] = res_conf
     else:
         results["confidence_gate"] = {"status": "skipped"}
 
-    # combined
+    # combined — 2 generations, retrieval always runs
     if can_combined and best_comb_tau is not None:
         def strat_comb(p):
-            use_rag = (
+            use = (
                 p["top_rerank_score"] is not None
                 and p["top_rerank_score"] >= best_comb_tau
                 and not (p["r_conf"] < p["b_conf"] - best_comb_delta)
             )
-            p["_used_rag"] = use_rag
-            return p["r_pred"] if use_rag else p["b_pred"]
+            p["_used_rag"] = use
+            return p["r_pred"] if use else p["b_pred"]
 
-        res_comb = compute_metrics(test_pairs, strat_comb, base_test_correct=base_correct_list,
-                                   rag_test_correct=rag_correct_list, seed=42)
+        res_comb = compute_metrics(test_pairs, strat_comb, base_correct_list, rag_correct_list, seed=42)
         res_comb.pop("correct_list")
         res_comb.pop("used_rag_list")
-        res_comb["cost_gens_per_q"] = COST_GENS["combined"]
-        res_comb["cost_sec_per_q"] = compute_cost(test_pairs, "combined")
+        gens, retr = COST_META["combined"]
+        res_comb.update({"cost_gens_per_q": gens, "cost_retrieval": retr,
+                         "cost_sec_per_q": compute_cost_sec(test_pairs, "combined")})
         results["combined"] = res_comb
     else:
         results["combined"] = {"status": "skipped"}
@@ -387,17 +401,15 @@ def analyze_model(model_dir):
     # --- Holm-Bonferroni correction on strategy-vs-baseline p-values ---
     strat_keys = ["rag", "rerank_gate", "confidence_gate", "combined"]
     raw_p_pairs = [
-        (s, results[s].get("mcnemar_p_vs_baseline"))
+        (s, results[s]["mcnemar_p_vs_baseline"])
         for s in strat_keys
         if isinstance(results.get(s), dict) and results[s].get("mcnemar_p_vs_baseline") is not None
     ]
     if raw_p_pairs:
         hb = holm_bonferroni(raw_p_pairs)
         for key, hb_vals in hb.items():
-            if key in results and isinstance(results[key], dict):
+            if isinstance(results.get(key), dict):
                 results[key]["holm_adj_p_vs_baseline"] = hb_vals["adj_p"]
-    else:
-        hb = {}
 
     print("\nHolm-Bonferroni corrected p vs baseline:")
     for s in strat_keys:
@@ -415,6 +427,12 @@ def analyze_model(model_dir):
         "model": model_name,
         "n_validation": len(val_pairs),
         "n_test": len(test_pairs),
+        "retr_sec_per_q": round(RETR_SEC_PER_Q, 5),
+        "retr_sec_derivation": (
+            f"Phase6 ({23.424:.3f}s) + Phase7 ({180.261:.3f}s) "
+            f"= {23.424+180.261:.3f}s / {N_RETRIEVAL_QUESTIONS} q "
+            f"= {RETR_SEC_PER_Q:.5f} s/q  (from outputs/kaggle_build/medrag-build.log)"
+        ),
         "tuning_validation": tuning_info,
         "test_results": results,
     }
@@ -425,37 +443,41 @@ def analyze_model(model_dir):
 
 
 def print_combined_table(all_model_data):
-    """Print one combined markdown table across all analyzed models."""
+    """Print combined markdown table across all analyzed models."""
     strat_order = ["baseline", "rag", "rerank_gate", "confidence_gate", "combined"]
     strat_labels = {
-        "baseline": "Baseline",
-        "rag": "Full RAG",
-        "rerank_gate": "Rerank Gate",
+        "baseline":        "Baseline",
+        "rag":             "Full RAG",
+        "rerank_gate":     "Rerank Gate",
         "confidence_gate": "Confidence Gate",
-        "combined": "Combined Gate",
+        "combined":        "Combined Gate",
     }
 
-    # --- Tuning table ---
-    print("\n" + "=" * 90)
-    print("VALIDATION TUNING SUMMARY")
-    print("=" * 90)
-    print(f"{'Model':<16} {'Strategy':<18} {'tau':>8} {'delta':>6} {'Val Acc':>9}")
-    print("-" * 60)
+    # Tuning summary
+    print("\n" + "=" * 95)
+    print("VALIDATION TUNING SUMMARY  (thresholds used on test set unchanged)")
+    print("=" * 95)
+    print(f"{'Model':<16} {'Strategy':<18} {'tau':>10} {'delta':>7} {'Val Acc':>9}")
+    print("-" * 65)
     for model_name, data in all_model_data:
-        tuning = data.get("tuning_validation", {})
-        for strat, info in tuning.items():
-            tau_str = f"{info['best_tau']:.4f}" if "best_tau" in info else "-"
-            delta_str = f"{info.get('best_delta', '-')}"
-            val_acc_str = f"{info['val_acc']:.4f}" if "val_acc" in info else "-"
-            print(f"{model_name:<16} {strat:<18} {tau_str:>8} {delta_str:>6} {val_acc_str:>9}")
-    print("=" * 90)
+        for strat, info in data.get("tuning_validation", {}).items():
+            tau_s   = f"{info['best_tau']:.4f}" if "best_tau" in info else "-"
+            delta_s = str(info.get("best_delta", "-"))
+            val_s   = f"{info['val_acc']:.4f}" if "val_acc" in info else "-"
+            print(f"{model_name:<16} {strat:<18} {tau_s:>10} {delta_s:>7} {val_s:>9}")
+    print("=" * 95)
 
-    # --- Main results table ---
+    # Cost note
+    print(f"\nRetrieval cost: retr_sec = {RETR_SEC_PER_Q:.5f} s/q  "
+          f"(Phase6 23.424 s + Phase7 180.261 s = 203.685 s / 1600 q, "
+          f"from outputs/kaggle_build/medrag-build.log)")
+
+    # Main table
     header = (
-        "| Model | Strategy | % RAG | Gens/Q | Sec/Q | "
+        "| Model | Strategy | Gens/Q | Retrieval | Sec/Q | % RAG | "
         "Test Acc [95% CI] | MedQA | PubMedQA | "
-        "p vs Base (raw/adj) | p vs RAG |\n"
-        "|---|---|---|---|---|---|---|---|---|---|"
+        "p vs Base (raw/adj-HB) | p vs RAG |\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|"
     )
     rows = []
 
@@ -464,69 +486,66 @@ def print_combined_table(all_model_data):
         for s in strat_order:
             info = test_res.get(s, {})
             if info.get("status") == "skipped":
-                rows.append(f"| {model_name} | {strat_labels[s]} | - | - | - | skipped | - | - | - | - |")
+                rows.append(f"| {model_name} | {strat_labels[s]} | - | - | - | - | skipped | - | - | - | - |")
                 continue
 
-            acc_str = (
-                f"{info['acc_overall']:.4f} "
-                f"[{info['ci_overall'][0]:.3f}, {info['ci_overall'][1]:.3f}]"
-            )
-            med_str = f"{info['acc_medqa']:.4f}" if info.get("acc_medqa") is not None else "-"
-            pub_str = f"{info['acc_pubmedqa']:.4f}" if info.get("acc_pubmedqa") is not None else "-"
-            rag_pct = f"{info['rag_pct']:.1f}%"
-            gens = str(info.get("cost_gens_per_q", "-"))
-            secs = f"{info['cost_sec_per_q']:.3f}" if info.get("cost_sec_per_q") is not None else "-"
+            gens  = str(info.get("cost_gens_per_q", "-"))
+            retr  = "yes" if info.get("cost_retrieval") else "no"
+            secs  = f"{info['cost_sec_per_q']:.3f}" if info.get("cost_sec_per_q") is not None else "-"
+            rag   = f"{info['rag_pct']:.1f}%"
+            acc   = (f"{info['acc_overall']:.4f} "
+                     f"[{info['ci_overall'][0]:.3f}, {info['ci_overall'][1]:.3f}]")
+            med   = f"{info['acc_medqa']:.4f}"   if info.get("acc_medqa")   is not None else "-"
+            pub   = f"{info['acc_pubmedqa']:.4f}" if info.get("acc_pubmedqa") is not None else "-"
 
             raw_p = info.get("mcnemar_p_vs_baseline")
             adj_p = info.get("holm_adj_p_vs_baseline")
             if raw_p is None:
-                p_base_str = "-"
+                p_base = "-"
             elif adj_p is not None:
-                p_base_str = f"{raw_p:.4f}/{adj_p:.4f}"
+                p_base = f"{raw_p:.4f} / {adj_p:.4f}"
             else:
-                p_base_str = f"{raw_p:.4f}"
+                p_base = f"{raw_p:.4f}"
 
             p_rag = info.get("mcnemar_p_vs_rag")
-            p_rag_str = f"{p_rag:.4f}" if p_rag is not None else "-"
+            p_rag_s = f"{p_rag:.4f}" if p_rag is not None else "-"
 
             rows.append(
-                f"| {model_name} | {strat_labels[s]} | {rag_pct} | {gens} | {secs} "
-                f"| {acc_str} | {med_str} | {pub_str} | {p_base_str} | {p_rag_str} |"
+                f"| {model_name} | {strat_labels[s]} | {gens} | {retr} | {secs} | {rag} "
+                f"| {acc} | {med} | {pub} | {p_base} | {p_rag_s} |"
             )
 
     table = header + "\n" + "\n".join(rows)
-    print("\n" + "=" * 110)
+    print("\n" + "=" * 120)
     print("COMBINED ADAPTIVE RAG TEST RESULTS")
     print("(% RAG = share of final answers taken from RAG)")
-    print("=" * 110)
+    print("=" * 120)
     print(table)
-    print("=" * 110)
+    print("=" * 120)
 
-    # --- Per-dataset McNemar table for Full RAG and best strategy per model ---
-    print("\n" + "=" * 80)
-    print("PER-DATASET McNEMAR (vs Baseline)  — Full RAG and each gated strategy")
-    print("=" * 80)
-    print(f"{'Model':<16} {'Strategy':<18} {'Dataset':<12} {'Acc':>7} {'p_raw':>9} {'discordant':>12}")
-    print("-" * 75)
+    # Per-dataset McNemar
+    print("\n" + "=" * 85)
+    print("PER-DATASET McNEMAR vs Baseline  (Full RAG + gated strategies)")
+    print("=" * 85)
+    print(f"{'Model':<16} {'Strategy':<18} {'Dataset':<12} {'Acc':>7} "
+          f"{'p_raw':>9} {'a_wins':>7} {'b_wins':>7}")
+    print("-" * 80)
     for model_name, data in all_model_data:
-        test_res = data["test_results"]
         for s in ["rag", "rerank_gate", "confidence_gate", "combined"]:
-            info = test_res.get(s, {})
-            if info.get("status") == "skipped" or not isinstance(info, dict):
+            info = data["test_results"].get(s, {})
+            if not isinstance(info, dict) or info.get("status") == "skipped":
                 continue
             pd = info.get("per_dataset_mcnemar_vs_baseline", {})
             for ds in ["medqa", "pubmedqa"]:
-                ds_acc = info.get(f"acc_{ds}") if ds == "medqa" else info.get("acc_pubmedqa")
+                ds_acc = info.get("acc_medqa") if ds == "medqa" else info.get("acc_pubmedqa")
                 ds_info = pd.get(ds, {})
-                p_str = f"{ds_info['p_vs_baseline']:.5f}" if "p_vs_baseline" in ds_info else "-"
+                p_s  = f"{ds_info['p_vs_baseline']:.5f}" if "p_vs_baseline" in ds_info else "-"
                 disc = ds_info.get("discordant", {})
-                disc_str = (
-                    f"a={disc.get('a_wins','?')},b={disc.get('b_wins','?')}"
-                    if disc else "-"
-                )
-                acc_str = f"{ds_acc:.4f}" if ds_acc is not None else "-"
-                print(f"{model_name:<16} {strat_labels[s]:<18} {ds:<12} {acc_str:>7} {p_str:>9} {disc_str:>12}")
-    print("=" * 80)
+                aw   = str(disc.get("a_wins", "-"))
+                bw   = str(disc.get("b_wins", "-"))
+                acc_s = f"{ds_acc:.4f}" if ds_acc is not None else "-"
+                print(f"{model_name:<16} {strat_labels[s]:<18} {ds:<12} {acc_s:>7} {p_s:>9} {aw:>7} {bw:>7}")
+    print("=" * 85)
 
     return table
 
@@ -535,17 +554,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Adaptive RAG analysis over Phase 5 and Phase 8 outputs."
     )
-    parser.add_argument("--base-dir", default="outputs/kaggle_qa/full",
-                        help="Base directory containing model folders")
-    parser.add_argument("--models", nargs="*",
-                        help="Specific model folder names to analyze (default: all)")
+    parser.add_argument("--base-dir", default="outputs/kaggle_qa/full")
+    parser.add_argument("--models", nargs="*")
     args = parser.parse_args()
 
-    candidates = sorted([
-        d for d in glob.glob(os.path.join(args.base_dir, "*"))
-        if os.path.isdir(d)
-    ])
-
+    candidates = sorted(d for d in glob.glob(os.path.join(args.base_dir, "*")) if os.path.isdir(d))
     if args.models:
         candidates = [d for d in candidates if os.path.basename(d) in args.models]
 
