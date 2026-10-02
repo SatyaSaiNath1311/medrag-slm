@@ -1,0 +1,134 @@
+{
+  "model": "qwen3-1.7b",
+  "n_validation": 400,
+  "n_test": 1000,
+  "tuning_validation": {
+    "rerank_gate": {
+      "best_tau": -12.6172,
+      "val_acc": 0.5225
+    },
+    "combined": {
+      "best_tau": -12.6172,
+      "best_delta": 0.0,
+      "val_acc": 0.5225
+    }
+  },
+  "test_results": {
+    "baseline": {
+      "acc_overall": 0.462,
+      "ci_overall": [
+        0.433,
+        0.493
+      ],
+      "acc_medqa": 0.446,
+      "ci_medqa": [
+        0.402,
+        0.49
+      ],
+      "acc_pubmedqa": 0.478,
+      "ci_pubmedqa": [
+        0.438,
+        0.526
+      ],
+      "rag_pct": 0.0,
+      "mcnemar_p_vs_baseline": null,
+      "mcnemar_discordant": null
+    },
+    "rag": {
+      "acc_overall": 0.479,
+      "ci_overall": [
+        0.45,
+        0.51
+      ],
+      "acc_medqa": 0.506,
+      "ci_medqa": [
+        0.462,
+        0.548
+      ],
+      "acc_pubmedqa": 0.452,
+      "ci_pubmedqa": [
+        0.406,
+        0.494
+      ],
+      "rag_pct": 100.0,
+      "mcnemar_p_vs_baseline": 0.31446,
+      "mcnemar_discordant": {
+        "base_wins": 118,
+        "strat_wins": 135,
+        "discordant_total": 253
+      }
+    },
+    "rerank_gate": {
+      "acc_overall": 0.479,
+      "ci_overall": [
+        0.45,
+        0.51
+      ],
+      "acc_medqa": 0.506,
+      "ci_medqa": [
+        0.462,
+        0.548
+      ],
+      "acc_pubmedqa": 0.452,
+      "ci_pubmedqa": [
+        0.406,
+        0.494
+      ],
+      "rag_pct": 100.0,
+      "mcnemar_p_vs_baseline": 0.31446,
+      "mcnemar_discordant": {
+        "base_wins": 118,
+        "strat_wins": 135,
+        "discordant_total": 253
+      }
+    },
+    "confidence_gate": {
+      "acc_overall": 0.495,
+      "ci_overall": [
+        0.466,
+        0.525
+      ],
+      "acc_medqa": 0.508,
+      "ci_medqa": [
+        0.464,
+        0.55
+      ],
+      "acc_pubmedqa": 0.482,
+      "ci_pubmedqa": [
+        0.44,
+        0.528
+      ],
+      "rag_pct": 33.6,
+      "mcnemar_p_vs_baseline": 0.00293,
+      "mcnemar_discordant": {
+        "base_wins": 42,
+        "strat_wins": 75,
+        "discordant_total": 117
+      }
+    },
+    "combined": {
+      "acc_overall": 0.499,
+      "ci_overall": [
+        0.471,
+        0.53
+      ],
+      "acc_medqa": 0.514,
+      "ci_medqa": [
+        0.47,
+        0.558
+      ],
+      "acc_pubmedqa": 0.484,
+      "ci_pubmedqa": [
+        0.44,
+        0.528
+      ],
+      "rag_pct": 65.9,
+      "mcnemar_p_vs_baseline": 0.00305,
+      "mcnemar_discordant": {
+        "base_wins": 56,
+        "strat_wins": 93,
+        "discordant_total": 149
+      }
+    }
+  }
+}

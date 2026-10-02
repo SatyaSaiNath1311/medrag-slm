@@ -44,3 +44,13 @@ Every folder has a manifest.json (counts, settings, file hashes).
 | model `FAILED format check` | open work/phase4/<model>.json, look at `unparsed_examples` |
 | Non-finite logits / garbage for Gemma | set Gemma `dtype: float32` in configs/base.yaml |
 | A model crashed mid-run | set `MODELS = ["<name>"]` in kaggle_runner/runner.py and push again (finished questions are skipped) |
+
+## Adaptive RAG Analysis
+The script `src/analysis_adaptive_rag.py` evaluates three adaptive routing strategies that dynamically select between the model's parametric baseline and retrieved RAG predictions per question:
+1. **Rerank Gate (`rerank_gate`)**: Use RAG if the top evidence reranker score $\ge \tau$, otherwise fall back to baseline.
+2. **Confidence Gate (`confidence_gate`)**: Compare the model's top letter probability between baseline and RAG, choosing the prediction with higher confidence.
+3. **Combined Gate (`combined`)**: Use Rerank Gate, but fall back to baseline if RAG confidence is lower than baseline confidence by more than $\delta$.
+
+**Validation-Only Tuning Rule**:
+All thresholds ($\tau$ over 101 validation rerank score quantiles, and $\delta \in \{0, 0.05, 0.1, 0.2\}$) are tuned strictly on the `validation` split to maximize validation accuracy. The selected parameters are then frozen and applied to the `test` split unchanged, preventing data leakage and ensuring test results remain unbiased.
+
