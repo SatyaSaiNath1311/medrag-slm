@@ -131,11 +131,15 @@ def compute_risk_coverage(
 
 def fit_temperature_scaling(
     val_ans_rows: List[Dict[str, Any]],
+    eps: float = 1e-12,
     t_min: float = 0.1,
     t_max: float = 30.0,
     steps: int = 300,
 ) -> Tuple[float, float, float]:
-    """Fit temperature T on validation answerable rows to minimize NLL."""
+    """Fit temperature T on validation answerable rows to minimize NLL using log-probs with epsilon floor.
+
+    Returns (best_T, initial_nll, best_nll).
+    """
     def compute_nll(t_val: float) -> float:
         total_nll = 0.0
         count = 0
@@ -144,9 +148,12 @@ def fit_temperature_scaling(
             gold = r.get("gold")
             if not lp or not gold:
                 continue
-            denom = sum(p ** (1.0 / t_val) for p in lp.values())
-            p_gold = (lp.get(gold, 1e-12) ** (1.0 / t_val)) / denom
-            total_nll -= math.log(max(p_gold, 1e-12))
+            log_probs = {k: math.log(max(v, eps)) for k, v in lp.items()}
+            max_z = max(log_probs.values()) / t_val
+            exps = {k: math.exp(v / t_val - max_z) for k, v in log_probs.items()}
+            denom = sum(exps.values())
+            p_gold = exps.get(gold, 0.0) / denom
+            total_nll -= math.log(max(p_gold, eps))
             count += 1
         return total_nll / count if count > 0 else 0.0
 
@@ -162,17 +169,20 @@ def fit_temperature_scaling(
             best_nll = cand_nll
             best_t = t_cand
 
-    return float(best_t), float(initial_nll), float(best_nll)
+    return float(best_t), float(compute_nll(1.0)), float(best_nll)
 
 
-def apply_temperature_scaling(row: Dict[str, Any], t_val: float) -> float:
-    """Return max probability after temperature scaling."""
+def apply_temperature_scaling(
+    row: Dict[str, Any], t_val: float, eps: float = 1e-12
+) -> float:
+    """Return max probability after temperature scaling on log-probabilities with epsilon floor."""
     lp = row.get("letter_probs", {})
     if not lp:
         return 0.0
-    denom = sum(p ** (1.0 / t_val) for p in lp.values())
-    scaled_probs = [(p ** (1.0 / t_val)) / denom for p in lp.values()]
-    return float(max(scaled_probs))
+    log_probs = {k: math.log(max(v, eps)) for k, v in lp.items()}
+    max_z = max(log_probs.values()) / t_val
+    exps = {k: math.exp(v / t_val - max_z) for k, v in log_probs.items()}
+    return float(max(exps.values()) / sum(exps.values()))
 
 
 def tune_fixed_coverage_tau(
@@ -401,7 +411,7 @@ def analyze_model_mode(
     val_rows = [r for r in rows if r["split"] == "validation"]
     val_ans = [r for r in val_rows if not r["should_abstain"]]
     test_rows = [r for r in rows if r["split"] == "test"]
-    test_ans = [r for r in test_rows if not r["should_abstain"]]
+    test_ans = sorted([r for r in test_rows if not r["should_abstain"]], key=lambda x: x["id"])
 
     # 1. Calibration: Fit T* on validation NLL
     best_T, init_nll, scaled_nll = fit_temperature_scaling(val_ans)
@@ -796,10 +806,10 @@ def write_markdown_report(
             f"| {m} | {mode} | **{aurc:.4f}** | {cov[100]:.4f} (100.0%) | {cov[80]:.4f} (80.0%) | "
             f"{cov[60]:.4f} (60.0%) | {cov[40]:.4f} (40.0%) | **{cov[20]:.4f}** (20.0%) |"
         )
-    lines.append("")
+    lines.append("\n> *Footnote on Confidence Definition*: Risk-coverage curves, selective accuracies, and AURC values in Table 4A are computed using **raw confidence** (max letter probability), identical to Table 4B.\n")
 
     lines.append("### Table 4B: Paired Test of RAG vs Baseline Reliability ($\\Delta\\text{AURC} = \\text{AURC}_{\\text{RAG}} - \\text{AURC}_{\\text{Baseline}}$)\n")
-    lines.append("> 95% CI from paired bootstrap (1 000 resamples, seed 42) over identical test answerable questions. Significant if upper CI bound $< 0$ (lower AURC is better).\n")
+    lines.append("> *Footnote on Confidence Definition*: Paired $\\Delta\\text{AURC}$ values are computed using **raw confidence** (identical to Table 4A). 95% CI from paired bootstrap (1 000 resamples, seed 42) over identical test answerable questions. Significant if upper CI bound $< 0$ (lower AURC is better).\n")
     lines.append("| Model | Baseline AURC | RAG AURC | $\\Delta\\text{AURC}$ [95% CI] | Statistically Significant? |")
     lines.append("|---|:---:|:---:|:---:|:---:|")
 
