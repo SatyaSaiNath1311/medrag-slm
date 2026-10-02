@@ -36,6 +36,11 @@ Every folder has a manifest.json (counts, settings, file hashes).
 4. When medrag-build is complete: `kaggle kernels push -p kaggle_runner`
 5. Download results: `kaggle kernels output satyasainath1311/medrag-slm-runner -p outputs/kaggle_qa`
 
+## Run the demo
+```bash
+pip install -r requirements-app.txt && streamlit run app/demo.py
+```
+
 ## If something fails
 | Message | Fix |
 |---|---|
