@@ -261,7 +261,121 @@ class TestChatAppLogic(unittest.TestCase):
              patch("torch.cuda.mem_get_info", return_value=(11 * 1024 * 1024 * 1024, 15 * 1024 * 1024 * 1024)):
             print_gpu_memory("Test Stage")
 
+    # -------------------------------------------------------------------------
+    # 5. Chat Pipeline Messages Format & Input Clearing Tests
+    # -------------------------------------------------------------------------
+    def test_chat_pipeline_yields_role_content_dicts(self):
+        """Verify chat_pipeline yields only list of role/content dicts and clears text inputs."""
+        import torch
+        from kaggle_chat.chat_app import chat_pipeline, normalize_history
+
+        # Test normalize_history with various formats
+        legacy_tuples = [("User question 1", "Assistant answer 1")]
+        norm = normalize_history(legacy_tuples)
+        self.assertEqual(len(norm), 2)
+        self.assertEqual(norm[0], {"role": "user", "content": "User question 1"})
+        self.assertEqual(norm[1], {"role": "assistant", "content": "Assistant answer 1"})
+
+        # Mock LLM and retrieval system
+        mock_llm = MagicMock()
+        mock_llm.is_reasoning = True
+        mock_llm.wrap_reasoning.return_value = "wrapped"
+        mock_param = torch.tensor([1.0])
+        mock_llm.model.parameters.return_value = iter([mock_param])
+        mock_llm.tok.return_value = {"input_ids": torch.tensor([[101, 102, 103]])}
+        mock_llm.tok.decode.return_value = "- First-line treatment is oral rehydration [1]."
+        mock_llm.eos = [2, 103]
+        mock_llm.pad_id = 0
+        mock_llm.model.generate.return_value = torch.tensor([[101, 102, 103, 201, 202, 2]])
+        mock_llm.generate_reasoning.return_value = [
+            {"truncated": False, "raw_output": "Answer: Option B", "_pred": "B"}
+        ]
+
+        mock_retr = {
+            "rerank_p20": 1.85,
+            "chunks": [],
+        }
+        mock_passages = [
+            {
+                "rank": 1,
+                "idx": 0,
+                "title": "Nelson Pediatrics",
+                "source": "Nelson",
+                "text": "Oral rehydration is standard therapy.",
+                "rerank_score": 5.2,
+            }
+        ]
+
+        with patch("kaggle_chat.chat_app.get_llm", return_value=mock_llm), \
+             patch("kaggle_chat.chat_app.get_retrieval_system", return_value=mock_retr), \
+             patch("kaggle_chat.chat_app.retrieve_top_passages", return_value=(mock_passages, 0.05)):
+
+            # Case A: Plain question with empty starting history
+            gen = chat_pipeline(
+                question="What is the first-line treatment for child dehydration?",
+                opt_a="", opt_b="", opt_c="", opt_d="",
+                model_choice="medpsy-4b (default)",
+                history=[],
+            )
+            yields = list(gen)
+            self.assertGreaterEqual(len(yields), 2, "Expected intermediate and final yields")
+
+            for hist_out, q_out, a_out, b_out, c_out, d_out in yields:
+                # History must strictly be a list
+                self.assertIsInstance(hist_out, list)
+                # Inputs must be cleared via valid strings, not invalid objects
+                self.assertEqual(q_out, "")
+                self.assertEqual(a_out, "")
+                self.assertEqual(b_out, "")
+                self.assertEqual(c_out, "")
+                self.assertEqual(d_out, "")
+
+                # Every message in history must be a dictionary with role and content
+                for msg in hist_out:
+                    self.assertIsInstance(msg, dict)
+                    self.assertIn("role", msg)
+                    self.assertIn("content", msg)
+                    self.assertIn(msg["role"], {"user", "assistant"})
+                    self.assertIsInstance(msg["content"], str)
+
+            # Check thinking update in place
+            intermediate_hist = yields[0][0]
+            final_hist = yields[-1][0]
+            self.assertEqual(len(intermediate_hist), 2)
+            self.assertEqual(len(final_hist), 2)
+            self.assertEqual(intermediate_hist[-1]["role"], "assistant")
+            self.assertIn("Thinking", intermediate_hist[-1]["content"])
+            self.assertEqual(final_hist[-1]["role"], "assistant")
+            self.assertIn("oral rehydration", final_hist[-1]["content"].lower())
+
+            # Case B: MCQ question with multi-turn history
+            existing_history = [
+                {"role": "user", "content": "Prior Q"},
+                {"role": "assistant", "content": "Prior A"},
+            ]
+            gen_mcq = chat_pipeline(
+                question="Which artery is occluded?",
+                opt_a="LAD", opt_b="RCA", opt_c="LCx", opt_d="LM",
+                model_choice="medpsy-4b (default)",
+                history=existing_history,
+            )
+            yields_mcq = list(gen_mcq)
+            self.assertGreaterEqual(len(yields_mcq), 2)
+            final_mcq_hist = yields_mcq[-1][0]
+            self.assertEqual(len(final_mcq_hist), 4)
+            for msg in final_mcq_hist:
+                self.assertIsInstance(msg, dict)
+                self.assertIn(msg["role"], {"user", "assistant"})
+                self.assertIsInstance(msg["content"], str)
+            self.assertIn("Option B", final_mcq_hist[-1]["content"])
+
+            # Case C: Empty question returns cleared inputs without crash
+            empty_yields = list(chat_pipeline("", "", "", "", "", "medpsy-4b", []))
+            self.assertEqual(len(empty_yields), 1)
+            self.assertEqual(empty_yields[0], ([], "", "", "", "", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

@@ -557,6 +557,25 @@ def retrieve_top_passages(query: str, top_k: int = 5) -> Tuple[List[Dict[str, An
 # -----------------------------------------------------------------------------
 # Core Chatbot Pipeline (Streaming Generator)
 # -----------------------------------------------------------------------------
+def normalize_history(history: Any) -> List[Dict[str, str]]:
+    """Normalize chat history into a list of {'role': str, 'content': str} dicts."""
+    if not history:
+        return []
+    cleaned: List[Dict[str, str]] = []
+    for item in history:
+        if isinstance(item, dict) and "role" in item and "content" in item:
+            cleaned.append({"role": str(item["role"]), "content": str(item["content"])})
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            u, a = item
+            if u:
+                cleaned.append({"role": "user", "content": str(u)})
+            if a:
+                cleaned.append({"role": "assistant", "content": str(a)})
+        elif hasattr(item, "role") and hasattr(item, "content"):
+            cleaned.append({"role": str(item.role), "content": str(item.content)})
+    return cleaned
+
+
 def chat_pipeline(
     question: str,
     opt_a: str,
@@ -564,11 +583,13 @@ def chat_pipeline(
     opt_c: str,
     opt_d: str,
     model_choice: str,
-    history: List[Tuple[str, str]],
-) -> Iterator[Tuple[List[Tuple[str, str]], str, str, str, str, str]]:
-    """Execute complete clinical QA dialogue turn with streaming progress."""
+    history: Optional[List[Dict[str, str]]],
+) -> Iterator[Tuple[List[Dict[str, str]], str, str, str, str, str]]:
+    """Execute complete clinical QA dialogue turn with streaming progress using messages format."""
+    messages = normalize_history(history)
+
     if not question or not question.strip():
-        yield history, "", opt_a, opt_b, opt_c, opt_d
+        yield messages, "", "", "", "", ""
         return
 
     user_q = question.strip()
@@ -592,9 +613,11 @@ def chat_pipeline(
     else:
         user_display = user_q
 
-    # Yield intermediate state: "Thinking... (about 20-40 s)"
-    interim_history = history + [(user_display, "🩺 Thinking… (about 20–40 s)")]
-    yield interim_history, "", opt_a, opt_b, opt_c, opt_d
+    # Append user message, then assistant thinking message (updated in place later)
+    messages.append({"role": "user", "content": user_display})
+    messages.append({"role": "assistant", "content": "🩺 Thinking… (about 20–40 s)"})
+    # Yield intermediate state; inputs are cleared via empty strings ""
+    yield list(messages), "", "", "", "", ""
 
     t_total_start = time.perf_counter()
 
@@ -756,8 +779,9 @@ def chat_pipeline(
         f"{MANDATORY_FOOTER}"
     )
 
-    final_history = history + [(user_display, final_bot_reply)]
-    yield final_history, "", opt_a, opt_b, opt_c, opt_d
+    # Update assistant message in place with final answer and yield updated history
+    messages[-1]["content"] = final_bot_reply
+    yield list(messages), "", "", "", "", ""
 
 
 # -----------------------------------------------------------------------------
@@ -765,19 +789,36 @@ def chat_pipeline(
 # -----------------------------------------------------------------------------
 def build_interface() -> Tuple[gr.Blocks, str]:
     """Build the clean Gradio interactive web application for community health workers."""
+    import inspect
+
     custom_css = """
     .gradio-container { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .chat-header { margin-bottom: 0.8rem; }
     """
 
-    with gr.Blocks(title="MedRAG-SLM Community Health Worker Assistant") as demo:
+    blocks_kwargs: Dict[str, Any] = {"title": "MedRAG-SLM Community Health Worker Assistant"}
+    blocks_params = inspect.signature(gr.Blocks.__init__).parameters
+    if "theme" in blocks_params:
+        blocks_kwargs["theme"] = gr.themes.Soft()
+    if "css" in blocks_params:
+        blocks_kwargs["css"] = custom_css
+
+    with gr.Blocks(**blocks_kwargs) as demo:
         gr.Markdown(
             "# 🩺 MedRAG-SLM: Community Health Worker Clinical Assistant\n"
             "**Authoritative Medical Decision Support for Primary Care & Field Health Workers.**\n"
             "*Powered by MedPsy-4B reasoning & MedCPT textbook retrieval with active emergency screening and abstention safety.*"
         )
 
-        chatbot = gr.Chatbot(label="Community Health Worker Dialogue & Clinical Guidance", height=500)
+        chatbot_kwargs: Dict[str, Any] = {
+            "label": "Community Health Worker Dialogue & Clinical Guidance",
+            "height": 500,
+        }
+        chatbot_params = inspect.signature(gr.Chatbot.__init__).parameters
+        if "type" in chatbot_params:
+            chatbot_kwargs["type"] = "messages"
+
+        chatbot = gr.Chatbot(**chatbot_kwargs)
 
         with gr.Row():
             with gr.Column(scale=4):
@@ -887,18 +928,15 @@ if __name__ == "__main__":
     app, custom_css = build_interface()
 
     print("\n" + "=" * 70)
-    print("🎉 LAUNCHING GRADIO APP WITH PUBLIC LINK (share=True)...")
+    print("🎉 STARTING GRADIO SERVER ON http://0.0.0.0:7860...")
     print("=" * 70 + "\n", flush=True)
 
-    launch_kwargs = {
-        "share": True,
+    launch_kwargs: Dict[str, Any] = {
         "server_name": "0.0.0.0",
         "server_port": 7860,
+        "share": False,
     }
     launch_params = inspect.signature(app.launch).parameters
-    if "theme" in launch_params:
-        launch_kwargs["theme"] = gr.themes.Soft()
-    if "css" in launch_params:
-        launch_kwargs["css"] = custom_css
+    launch_kwargs = {k: v for k, v in launch_kwargs.items() if k in launch_params}
 
-    app.queue().launch(**launch_kwargs)
+    app.launch(**launch_kwargs)

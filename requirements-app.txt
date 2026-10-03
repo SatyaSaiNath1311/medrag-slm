@@ -1,1 +1,3 @@
-streamlit>=1.42.0
+# MedRAG-SLM Chatbot Application Requirements
+# Tested on Kaggle GPU environment with messages-format Chatbot
+gradio==5.20.0
