@@ -1,11 +1,13 @@
-"""MedRAG-SLM Live Chatbot Application (Kaggle GPU).
+"""MedRAG-SLM Community Health Worker Live Chatbot (Kaggle GPU).
 
-Interactive clinical dialogue powered by:
+Interactive clinical dialogue tailored for community health workers, powered by:
 - Hybrid BM25 + dense MedCPT FAISS retrieval (top-20)
 - MedCPT cross-encoder reranker (top-5)
-- Evaluated Small Language Models (Qwen3-4B default, Qwen3-1.7B fast)
-- Temperature-scaled confidence calibration and smart adaptive gating
-- Option-guided MCQ mode (benchmark evaluated) & free-text clinical QA mode
+- Authoritative medical textbook corpus (Harrison, Katzung, Schwartz, Nelson, etc.)
+- MedPsy-4B reasoning model (default, 1024 thinking tokens) & Qwen3-1.7B (fast)
+- Red-flag emergency screening (immediate 108 referral for acute danger signs)
+- Multi-tier abstention safety (truncated thinking budget, INSUFFICIENT INFORMATION, rerank threshold)
+- Option-guided MCQ mode (evaluated benchmark) & community health-worker guidance mode
 
 Run on Kaggle with GPU accelerator enabled:
   python kaggle_chat/chat_app.py
@@ -20,7 +22,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 # Ensure repository root is on sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -52,35 +54,147 @@ import torch
 
 from src import encoders
 from src.common import build_query, get_device, load_config, read_jsonl
-from src.llm import LLM, baseline_prompt, parse_answer, parse_citations, rag_prompt
+from src.llm import (
+    ABSTAIN_MESSAGE,
+    LLM,
+    baseline_prompt,
+    parse_answer,
+    parse_citations,
+    rag_prompt,
+    reasoning_rag_prompt,
+)
 
 # -----------------------------------------------------------------------------
-# Calibration Constants (Validation NLL Temperatures T*)
+# Model Configurations
 # -----------------------------------------------------------------------------
-TEMPERATURES = {
-    "qwen3-4b": {"baseline": 17.24, "rag": 20.73},
-    "qwen3-1.7b": {"baseline": 24.72, "rag": 22.72},
-}
-
-MODEL_CONFIGS = {
-    "qwen3-4b": {
-        "name": "qwen3-4b",
-        "id": "Qwen/Qwen3-4B",
+MODEL_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "medpsy-4b": {
+        "name": "medpsy-4b",
+        "id": "qvac/MedPsy-4B",
         "dtype": "float16" if torch.cuda.is_available() else "float32",
+        "reasoning": True,
+        "max_new_tokens_reasoning": 1024,
     },
     "qwen3-1.7b": {
         "name": "qwen3-1.7b",
         "id": "Qwen/Qwen3-1.7B",
         "dtype": "float16" if torch.cuda.is_available() else "float32",
+        "reasoning": False,
     },
 }
 
+DEFAULT_MODEL = "medpsy-4b"
+
+# Emergency Referral Prefix
+EMERGENCY_PREFIX = "⚠️ **This may be an emergency. Please go to the nearest hospital or call 108 immediately.**\n\n"
+
+# Mandatory Footer
+MANDATORY_FOOTER = "*Decision support only — please consult a doctor for medical decisions.*"
+
+
 # -----------------------------------------------------------------------------
-# Path Discovery for Phase 3 (Chunks, BM25, FAISS)
+# Emergency & Red-Flag Screening Logic
+# -----------------------------------------------------------------------------
+def check_emergency(text: str) -> Tuple[bool, Optional[str]]:
+    """Screen user query for acute red-flag medical emergencies.
+
+    Monitored emergency red flags:
+    1. Chest pain (angina, crushing chest pressure, suspected heart attack)
+    2. Difficulty breathing (severe dyspnea, shortness of breath, stridor, choking)
+    3. Unconsciousness (unresponsive, loss of consciousness, syncope, collapsed)
+    4. Seizures (active convulsions, fits, status epilepticus)
+    5. Heavy bleeding (severe hemorrhage, vomiting blood, coughing blood)
+    6. Stroke signs (facial droop, sudden unilateral weakness, slurred speech)
+    7. Severe allergic reaction (anaphylaxis, swelling of tongue/throat/lips)
+    8. Suicidal thoughts or acute self-harm intent
+    9. Poisoning (toxic ingestion, chemical ingestion, overdose, snake bite)
+    10. Pregnancy with acute complications (vaginal bleeding, severe headache, fits, severe pain)
+    11. Very high fever in infants / neonates
+    """
+    if not text or not text.strip():
+        return False, None
+
+    lower_text = text.lower()
+
+    patterns = [
+        ("Chest pain", r"\b(chest\s+pain|angina|heart\s+attack|crushing\s+(?:substernal\s+)?chest|pressure\s+in\s+chest|tightness\s+in\s+chest)\b"),
+        ("Difficulty breathing", r"\b(difficulty\s+breathing|shortness\s+of\s+breath|cannot\s+breathe|gasping|stridor|choking|wheezing\s+severely|breathless(?:ness)?|dyspnea|respiratory\s+distress)\b"),
+        ("Unconsciousness", r"\b(unconscious(?:ness)?|loss\s+of\s+consciousness|unresponsive|fainted|fainting|passed\s+out|syncope|comatose|collapsed)\b"),
+        ("Seizure", r"\b(seizure|convulsion|epilepsy|epileptic\s+fit|fits|fitting|status\s+epilepticus)\b"),
+        ("Heavy bleeding", r"\b(heavy\s+bleeding|bleeding\s+heavily|hemorrhage|massive\s+blood|vomiting\s+blood|hematemesis|coughing\s+up\s+blood|hemoptysis|rectal\s+bleeding|severe\s+blood\s+loss)\b"),
+        ("Stroke signs", r"\b(stroke|facial\s+droop|face\s+droop|slurred\s+speech|sudden\s+weakness|arm\s+weakness|hemiplegia|hemiparesis|one[\s-]side\s+paralysis|sudden\s+numbness|fast\s+signs)\b"),
+        ("Severe allergic reaction", r"\b(anaphylax(?:is|ic)|severe\s+allergic|swelling\s+of\s+(?:the\s+)?(?:tongue|throat|lips)|lip\s+swelling|airway\s+swelling|angioedema)\b"),
+        ("Suicidal thoughts", r"\b(suicid(?:e|al)|wanting\s+to\s+die|kill\s+(?:myself|himself|herself)|self[\s-]harm|ending\s+(?:my|his|her)\s+life)\b"),
+        ("Poisoning", r"\b(poison(?:ing|ed)?|overdose|swallowed\s+chemicals|ingested\s+pills|snake\s+bite|organophosphate|toxic\s+ingestion)\b"),
+    ]
+
+    for label, pat in patterns:
+        if re.search(pat, lower_text):
+            return True, label
+
+    # Pregnancy red flags (pregnancy keyword + severe symptom)
+    is_pregnant = bool(re.search(r"\b(pregnan(?:t|cy)|trimester|gestation|gravida|in\s+labor)\b", lower_text))
+    if is_pregnant:
+        preg_danger = re.search(r"\b(bleeding|severe\s+pain|severe\s+headache|fits|convulsion|preeclampsia|eclampsia|fluid\s+leak|reduced\s+movement)\b", lower_text)
+        if preg_danger:
+            return True, f"Pregnancy complication ({preg_danger.group(1)})"
+
+    # Very high fever in infants / neonates
+    is_infant = bool(re.search(r"\b(infant|neonate|newborn|baby|child\s+under\s+\d+\s+months?|\b[0-9]\s*(?:week|month)s?[\s-]old)\b", lower_text))
+    if is_infant:
+        infant_fever = re.search(r"\b(very\s+high\s+fever|high\s+fever|fever\s+of\s+(?:3[89]|40|41|10[1-5])|temperature\s+(?:3[89]|40|41|10[1-5]))\b", lower_text)
+        if infant_fever:
+            return True, "Very high fever in infant"
+
+    if re.search(r"\b(high\s+fever\s+in\s+infant|febrile\s+seizure|febrile\s+convulsion)\b", lower_text):
+        return True, "Very high fever in infant"
+
+    return False, None
+
+
+# -----------------------------------------------------------------------------
+# Abstention & Safety Logic
+# -----------------------------------------------------------------------------
+def evaluate_abstention(
+    truncated: bool,
+    model_output: str,
+    top_rerank_score: float,
+    rerank_threshold_p20: float,
+) -> Tuple[bool, Optional[str]]:
+    """Determine whether to abstain based on safety and confidence criteria.
+
+    Abstains if ANY:
+    1. Generation truncated (thinking budget of 1024 tokens exhausted)
+    2. Output explicitly contains 'INSUFFICIENT INFORMATION'
+    3. Top rerank score falls below the validation 20th percentile threshold
+    """
+    if truncated:
+        return True, "Generation truncated (thinking budget of 1024 tokens exhausted)"
+
+    if "INSUFFICIENT INFORMATION" in model_output.upper():
+        return True, "Model identified insufficient evidence ('INSUFFICIENT INFORMATION')"
+
+    if top_rerank_score < rerank_threshold_p20:
+        return True, (
+            f"Retrieved passage relevance score ({top_rerank_score:.2f}) is below "
+            f"the 20th percentile validation threshold ({rerank_threshold_p20:.2f})"
+        )
+
+    return False, None
+
+
+def strip_thinking(text: str) -> str:
+    """Remove hidden thinking text enclosed in <think> tags."""
+    clean = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    clean = re.sub(r"</?think>", "", clean, flags=re.IGNORECASE).strip()
+    return clean
+
+
+# -----------------------------------------------------------------------------
+# Path Discovery & Dynamic Validation Rerank Threshold
 # -----------------------------------------------------------------------------
 def find_phase3_dir() -> Path:
     """Locate phase3 build artifacts on Kaggle or locally."""
-    # 1. Look in Kaggle input directories
     hits = glob.glob("/kaggle/input/**/phase3/dense.faiss", recursive=True)
     if hits:
         return Path(hits[0]).parent
@@ -88,15 +202,60 @@ def find_phase3_dir() -> Path:
     if hits:
         return Path(hits[0]).parent
 
-    # 2. Look in local project workspace
     local_p3 = REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase3"
     if (local_p3 / "dense.faiss").exists():
         return local_p3
+
+    alt_p3 = REPO_ROOT / "work" / "phase3"
+    if (alt_p3 / "dense.faiss").exists():
+        return alt_p3
 
     raise FileNotFoundError(
         "Could not find phase3 artifacts (dense.faiss, bm25, chunks.jsonl). "
         "On Kaggle, ensure 'medrag-build' is attached: Add Input -> Your Work -> medrag-build."
     )
+
+
+def compute_validation_rerank_threshold_p20(evidence_path: Optional[Path] = None) -> float:
+    """Compute the 20th percentile of top rerank scores on validation questions."""
+    candidates = []
+    if evidence_path and evidence_path.exists():
+        candidates.append(evidence_path)
+
+    kaggle_hits = glob.glob("/kaggle/input/**/evidence.jsonl", recursive=True)
+    for h in kaggle_hits:
+        candidates.append(Path(h))
+
+    candidates.extend([
+        REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase7" / "evidence.jsonl",
+        REPO_ROOT / "work" / "phase7" / "evidence.jsonl",
+    ])
+
+    val_top_scores: List[float] = []
+    for cand in candidates:
+        if cand.exists():
+            print(f"  Reading validation evidence from {cand}...")
+            try:
+                records = read_jsonl(cand)
+                for r in records:
+                    if r.get("split") == "validation":
+                        passages = r.get("passages", [])
+                        if passages and "rerank_score" in passages[0]:
+                            val_top_scores.append(float(passages[0]["rerank_score"]))
+                if val_top_scores:
+                    break
+            except Exception as e:
+                print(f"  Warning reading {cand}: {e}")
+
+    if val_top_scores:
+        p20 = float(np.percentile(val_top_scores, 20))
+        p20_rounded = round(p20, 2)
+        print(f"  Computed validation rerank threshold (P20): {p20_rounded} (from {len(val_top_scores)} questions)")
+        return p20_rounded
+
+    fallback_p20 = 1.85
+    print(f"  Validation evidence file not found; using calibrated default P20 threshold: {fallback_p20}")
+    return fallback_p20
 
 
 # -----------------------------------------------------------------------------
@@ -106,13 +265,13 @@ _CACHED_RETRIEVAL: Dict[str, Any] = {}
 _CACHED_MODELS: Dict[str, LLM] = {}
 
 
-def get_retrieval_system(cfg_path: Optional[str] = None):
-    """Load and cache retrieval models, indexes, and chunks once at startup."""
+def get_retrieval_system(cfg_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load and cache retrieval models, indexes, chunks, and threshold once at startup."""
     global _CACHED_RETRIEVAL
     if _CACHED_RETRIEVAL:
         return _CACHED_RETRIEVAL
 
-    print("\n[Init] Initializing retrieval components...", flush=True)
+    print("\n[Init] Initializing retrieval components and clinical index...", flush=True)
     t0 = time.time()
     device = get_device()
     p3_dir = find_phase3_dir()
@@ -144,6 +303,9 @@ def get_retrieval_system(cfg_path: Optional[str] = None):
     print("  Loading MedCPT cross-encoder reranker...")
     cross_enc = encoders.cross_encoder(cfg, device)
 
+    # 5. Validation Rerank Threshold (P20)
+    p20_threshold = compute_validation_rerank_threshold_p20()
+
     _CACHED_RETRIEVAL = {
         "cfg": cfg,
         "device": device,
@@ -153,15 +315,16 @@ def get_retrieval_system(cfg_path: Optional[str] = None):
         "stemmer": stemmer,
         "query_enc": query_enc,
         "cross_enc": cross_enc,
+        "rerank_p20": p20_threshold,
     }
     print(f"[Init] Retrieval components successfully cached in {time.time() - t0:.1f}s!\n", flush=True)
     return _CACHED_RETRIEVAL
 
 
 def get_llm(model_key: str) -> LLM:
-    """Retrieve or load the requested Small Language Model."""
+    """Retrieve or load the requested Language Model."""
     global _CACHED_MODELS
-    clean_key = "qwen3-1.7b" if "1.7b" in model_key.lower() else "qwen3-4b"
+    clean_key = "qwen3-1.7b" if "1.7b" in model_key.lower() else "medpsy-4b"
 
     if clean_key in _CACHED_MODELS:
         return _CACHED_MODELS[clean_key]
@@ -208,7 +371,6 @@ def retrieve_top_passages(query: str, top_k: int = 5) -> Tuple[List[Dict[str, An
     """Execute hybrid retrieval (top-20) and cross-encoder rerank to extract top-5 passages."""
     t0 = time.perf_counter()
     retr = get_retrieval_system()
-    cfg = retr["cfg"]
     chunks = retr["chunks"]
     faiss_index = retr["faiss_index"]
     bm25_index = retr["bm25_index"]
@@ -243,9 +405,10 @@ def retrieve_top_passages(query: str, top_k: int = 5) -> Tuple[List[Dict[str, An
             {
                 "rank": rank,
                 "idx": c["idx"],
-                "chunk_id": ch["chunk_id"],
-                "title": ch["title"],
-                "text": ch["text"],
+                "chunk_id": ch.get("chunk_id", f"chunk_{c['idx']}"),
+                "title": ch.get("title", ch.get("source", "Medical Textbook")),
+                "source": ch.get("source", "Medical Textbook"),
+                "text": ch.get("text", ""),
                 "rerank_score": round(float(scores[j]), 4),
             }
         )
@@ -255,41 +418,7 @@ def retrieve_top_passages(query: str, top_k: int = 5) -> Tuple[List[Dict[str, An
 
 
 # -----------------------------------------------------------------------------
-# Temperature-Scaling & Calibration
-# -----------------------------------------------------------------------------
-def apply_temperature_scaling(
-    letter_probs: Dict[str, float], T: float, eps: float = 1e-12
-) -> Tuple[Dict[str, float], float]:
-    """Compute temperature-scaled confidence using validation T* on log-probabilities."""
-    if not letter_probs:
-        return {}, 0.0
-
-    items = list(letter_probs.items())
-    logits = [math.log(max(p, eps)) / T for _, p in items]
-    max_logit = max(logits)
-    exp_logits = [math.exp(l - max_logit) for l in logits]
-    sum_exp = sum(exp_logits)
-    scaled_probs = {items[i][0]: exp_logits[i] / sum_exp for i in range(len(items))}
-    conf = max(scaled_probs.values())
-    return scaled_probs, conf
-
-
-def classify_confidence_tier(conf: float, num_options: int = 4) -> Tuple[str, bool]:
-    """Map calibrated probability to High / Medium / Low tiers."""
-    # Baseline threshold: random guessing is 1/N
-    threshold_low = 0.40 if num_options >= 4 else 0.45
-    threshold_high = 0.60 if num_options >= 4 else 0.65
-
-    if conf >= threshold_high:
-        return "High", False
-    elif conf >= threshold_low:
-        return "Medium", False
-    else:
-        return "Low", True
-
-
-# -----------------------------------------------------------------------------
-# Core Chatbot Pipeline
+# Core Chatbot Pipeline (Streaming Generator)
 # -----------------------------------------------------------------------------
 def chat_pipeline(
     question: str,
@@ -298,201 +427,230 @@ def chat_pipeline(
     opt_c: str,
     opt_d: str,
     model_choice: str,
-    evidence_setting: str,
     history: List[Tuple[str, str]],
-) -> Tuple[List[Tuple[str, str]], str, str, str, str, str]:
-    """Execute complete clinical QA dialogue turn."""
-    if not question.strip():
-        return history, "", opt_a, opt_b, opt_c, opt_d
+) -> Iterator[Tuple[List[Tuple[str, str]], str, str, str, str, str]]:
+    """Execute complete clinical QA dialogue turn with streaming progress."""
+    if not question or not question.strip():
+        yield history, "", opt_a, opt_b, opt_c, opt_d
+        return
 
-    t_total_start = time.perf_counter()
-    clean_model_key = "qwen3-1.7b" if "1.7b" in model_choice.lower() else "qwen3-4b"
-    llm = get_llm(clean_model_key)
-    temps = TEMPERATURES.get(clean_model_key, {"baseline": 20.0, "rag": 20.0})
+    user_q = question.strip()
 
-    # Parse provided options
+    # Parse options if provided
     options: Dict[str, str] = {}
-    if opt_a.strip():
+    if opt_a and opt_a.strip():
         options["A"] = opt_a.strip()
-    if opt_b.strip():
+    if opt_b and opt_b.strip():
         options["B"] = opt_b.strip()
-    if opt_c.strip():
+    if opt_c and opt_c.strip():
         options["C"] = opt_c.strip()
-    if opt_d.strip():
+    if opt_d and opt_d.strip():
         options["D"] = opt_d.strip()
 
     is_mcq = len(options) >= 2
 
-    # 1. Build Query and Execute Hybrid Retrieval
-    q_dict = {"question": question.strip(), "options": options}
+    if is_mcq:
+        opt_summary = " &nbsp;|&nbsp; ".join(f"**{k}:** {v}" for k, v in sorted(options.items()))
+        user_display = f"**{user_q}**\n\n<small>{opt_summary}</small>"
+    else:
+        user_display = user_q
+
+    # Yield intermediate state: "Thinking... (about 20-40 s)"
+    interim_history = history + [(user_display, "🩺 Thinking… (about 20–40 s)")]
+    yield interim_history, "", opt_a, opt_b, opt_c, opt_d
+
+    t_total_start = time.perf_counter()
+
+    # 1. Emergency Red-Flag Screening
+    is_emergency, emergency_reason = check_emergency(user_q)
+    emergency_banner = EMERGENCY_PREFIX if is_emergency else ""
+
+    # 2. Hybrid Retrieval & Reranking
+    retr = get_retrieval_system()
+    rerank_p20 = retr.get("rerank_p20", 1.85)
+
+    q_dict = {"question": user_q, "options": options}
     search_query = build_query(q_dict, include_options=is_mcq)
     top_passages, retrieval_sec = retrieve_top_passages(search_query, top_k=5)
+    top_rerank_score = top_passages[0]["rerank_score"] if top_passages else -999.0
 
-    # 2. Generation & Gating
+    # 3. Model Inference
     t_gen_start = time.perf_counter()
+    clean_model_key = "qwen3-1.7b" if "1.7b" in model_choice.lower() else "medpsy-4b"
+    llm = get_llm(clean_model_key)
+
+    is_reasoning_model = bool(llm.is_reasoning)
+    truncated = False
+    raw_model_output = ""
+    parsed_answer = None
 
     if is_mcq:
-        # Multiple-choice benchmark mode
+        # Multiple-Choice Exam Question Mode
         letters = sorted(options.keys())
-        b_prompt = baseline_prompt(q_dict)
-        r_prompt = rag_prompt(q_dict, top_passages, max_chars=1200)
-
-        # Baseline generation
-        b_res = llm.generate_safe([b_prompt], [letters], max_new_tokens=16)[0]
-        b_pred = parse_answer(b_res["raw_output"], options) or letters[0]
-        b_lp = b_res.get("letter_probs") or {L: (1.0 if L == b_pred else 0.0) for L in letters}
-        _, b_conf = apply_temperature_scaling(b_lp, temps["baseline"])
-
-        # RAG generation
-        r_res = llm.generate_safe([r_prompt], [letters], max_new_tokens=40)[0]
-        r_pred = parse_answer(r_res["raw_output"], options) or letters[0]
-        r_lp = r_res.get("letter_probs") or {L: (1.0 if L == r_pred else 0.0) for L in letters}
-        _, r_conf = apply_temperature_scaling(r_lp, temps["rag"])
-
-        # Gating Decision
-        if evidence_setting == "Never":
-            chosen_method = "Baseline (Parametric)"
-            chosen_letter = b_pred
-            chosen_conf = b_conf
-            gate_reason = "Manual override: textbook retrieval disabled."
-            cited_passages = []
-        elif evidence_setting == "Always":
-            chosen_method = "Full RAG"
-            chosen_letter = r_pred
-            chosen_conf = r_conf
-            gate_reason = "Manual override: forced textbook evidence RAG."
-            cited_passages = parse_citations(r_res["raw_output"], len(top_passages))
+        if is_reasoning_model:
+            r_prompt = reasoning_rag_prompt(q_dict, top_passages, max_chars=1200)
+            res = llm.generate_reasoning([r_prompt], [letters], max_new_tokens=1024)[0]
+            truncated = bool(res.get("truncated", False))
+            raw_model_output = res.get("raw_output", "")
+            parsed_answer = res.get("_pred") or parse_answer(raw_model_output, options)
         else:
-            # Auto (Smart Confidence Gate)
-            if r_conf > b_conf:
-                chosen_method = "Smart Gate → Full RAG"
-                chosen_letter = r_pred
-                chosen_conf = r_conf
-                gate_reason = f"RAG confidence ({r_conf*100:.1f}%) > Baseline ({b_conf*100:.1f}%)"
-                cited_passages = parse_citations(r_res["raw_output"], len(top_passages))
-            else:
-                chosen_method = "Smart Gate → Baseline"
-                chosen_letter = b_pred
-                chosen_conf = b_conf
-                gate_reason = f"Baseline confidence ({b_conf*100:.1f}%) ≥ RAG ({r_conf*100:.1f}%)"
-                cited_passages = []
-
-        chosen_text = options.get(chosen_letter, "")
-        tier, is_low_conf = classify_confidence_tier(chosen_conf, num_options=len(options))
-        conf_display = f"{tier} ({chosen_conf*100:.1f}%)"
-        answer_text = f"**Option {chosen_letter}**: {chosen_text}"
-
+            r_prompt = rag_prompt(q_dict, top_passages, max_chars=1200)
+            res = llm.generate_safe([r_prompt], [letters], max_new_tokens=40)[0]
+            raw_model_output = res.get("raw_output", "")
+            parsed_answer = parse_answer(raw_model_output, options)
     else:
-        # Free-text mode (not evaluated benchmark)
-        ev_text = "\n".join(f"[{i}] ({p['title']}) {p['text'][:1200]}" for i, p in enumerate(top_passages, 1))
-        free_prompt = (
-            "You are a medical expert providing clinical decision support. "
-            "Using the provided evidence passages from authoritative medical textbooks, "
-            "provide a direct, concise, and clinically rigorous answer to the question. "
-            "Cite supporting passages in square brackets like [1] or [2] where applicable.\n\n"
+        # Community Health Worker Plain Question Mode
+        ev_lines = []
+        for i, p in enumerate(top_passages, 1):
+            src_name = p.get("title", p.get("source", f"Textbook {i}"))
+            snippet = p.get("text", "")[:1000]
+            ev_lines.append(f"[{i}] ({src_name})\n{snippet}")
+        ev_text = "\n\n".join(ev_lines)
+
+        hw_prompt = (
+            "You are a clinical decision support assistant for community health workers. "
+            "Answer the following question in simple, clear language using the provided medical textbook evidence.\n"
+            "Format your answer in at most 6 short bullet points.\n"
+            "Cite supporting evidence using bracketed numbers like [1], [2] where applicable.\n"
+            "If the passages and your knowledge are not enough to answer confidently and safely, "
+            "say exactly 'INSUFFICIENT INFORMATION'.\n\n"
             f"Evidence:\n{ev_text}\n\n"
-            f"Question: {question.strip()}\n\n"
+            f"Health Worker Question: {user_q}\n\n"
             "Answer:"
         )
 
-        msgs = [{"role": "user", "content": free_prompt}]
-        prompt_text = llm.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
-        enc = llm.tok([prompt_text], return_tensors="pt")
-        first_param = next(llm.model.parameters())
-        enc = {k: v.to(first_param.device) for k, v in enc.items()}
+        if is_reasoning_model:
+            # MedPsy-4B reasoning generation
+            wrapped = llm.wrap_reasoning(hw_prompt)
+            enc = llm.tok([wrapped], return_tensors="pt", padding=True, add_special_tokens=False)
+            first_dev = next(llm.model.parameters()).device
+            enc = {k: v.to(first_dev) for k, v in enc.items()}
 
-        with torch.inference_mode():
-            out_tokens = llm.model.generate(
-                **enc,
-                max_new_tokens=200,
+            from transformers import GenerationConfig
+            gcfg = GenerationConfig(
+                max_new_tokens=1024,
                 do_sample=False,
-                pad_token_id=llm.pad_id,
                 eos_token_id=sorted(llm.eos),
+                pad_token_id=llm.pad_id,
+                return_dict_in_generate=True,
             )
-        gen_ids = out_tokens[0, enc["input_ids"].shape[1]:].tolist()
-        raw_free = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
+            with torch.inference_mode():
+                out = llm.model.generate(**enc, generation_config=gcfg)
 
-        chosen_method = "Full RAG (Free-Text)"
-        gate_reason = "Free-text clinical QA mode (no option choices provided)."
-        conf_display = "N/A (Free-Text Mode)"
-        is_low_conf = False
-        cited_passages = parse_citations(raw_free, len(top_passages))
-        answer_text = f"*free-text mode (not part of the evaluated benchmark)*\n\n{raw_free}"
+            seqs = out.sequences if hasattr(out, "sequences") else out
+            prompt_len = enc["input_ids"].shape[1]
+            all_gen_ids = seqs[0, prompt_len:].tolist()
+            cut = next((i for i, t in enumerate(all_gen_ids) if t in llm.eos), len(all_gen_ids))
+            gen_ids = all_gen_ids[:cut]
+            raw_model_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
+
+            # Truncation: exhausted the 1024 budget
+            truncated = (cut == len(all_gen_ids) and cut >= 1024)
+        else:
+            # Qwen3-1.7B fast generation
+            msgs = [{"role": "user", "content": hw_prompt}]
+            prompt_text = llm.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            enc = llm.tok([prompt_text], return_tensors="pt")
+            first_dev = next(llm.model.parameters()).device
+            enc = {k: v.to(first_dev) for k, v in enc.items()}
+
+            with torch.inference_mode():
+                out_tokens = llm.model.generate(
+                    **enc,
+                    max_new_tokens=250,
+                    do_sample=False,
+                    pad_token_id=llm.pad_id,
+                    eos_token_id=sorted(llm.eos),
+                )
+            gen_ids = out_tokens[0, enc["input_ids"].shape[1]:].tolist()
+            raw_model_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
+            truncated = False
 
     gen_sec = time.perf_counter() - t_gen_start
     total_sec = time.perf_counter() - t_total_start
 
-    # 3. Format Expandable Sources
-    sources_md_parts = []
-    for p in top_passages:
-        p_rank = p["rank"]
-        is_cited = p_rank in cited_passages
-        cite_badge = " ⭐ **[Cited by Model]**" if is_cited else ""
-        sources_md_parts.append(
-            f"<details><summary><b>[{p_rank}] {p['title']}</b> (Rerank score: {p['rerank_score']:.2f}){cite_badge}</summary>\n\n"
-            f"> {p['text']}\n</details>"
-        )
-    sources_md = "\n\n".join(sources_md_parts)
+    # Clean display text (strip hidden think blocks)
+    clean_output = strip_thinking(raw_model_output)
 
-    # 4. Construct Final Bot Reply
-    warning_prefix = "⚠️ **Low confidence — refer to a clinician**\n\n" if is_low_conf else ""
-
-    bot_reply = (
-        f"{warning_prefix}### 🩺 Clinical Recommendation\n"
-        f"{answer_text}\n\n"
-        f"---\n"
-        f"**📊 Decision & Confidence Analysis:**\n"
-        f"- **Method Selected:** `{chosen_method}` ({gate_reason})\n"
-        f"- **Calibrated Confidence:** **{conf_display}**"
-        + (f" *(scaled with validation $T^*={temps['rag'] if 'RAG' in chosen_method else temps['baseline']:.2f}$)*" if is_mcq else "")
-        + f"\n- **Model:** `{clean_model_key}` &nbsp;|&nbsp; **Evidence Mode:** `{evidence_setting}`\n"
-        f"- **Latency:** `{total_sec:.2f}s` *(Retrieval: {retrieval_sec:.2f}s | Generation: {gen_sec:.2f}s)*\n\n"
-        f"---\n"
-        f"### 📚 Retrieved Textbook Evidence\n"
-        f"{sources_md}\n\n"
-        f"---\n"
-        f"*Decision support only — verify with a clinician.*"
+    # 4. Abstention Evaluation
+    should_abstain, abstain_reason = evaluate_abstention(
+        truncated=truncated,
+        model_output=clean_output,
+        top_rerank_score=top_rerank_score,
+        rerank_threshold_p20=rerank_p20,
     )
 
-    # User message summary in chat history
-    if is_mcq:
-        opt_summary = " &nbsp;|&nbsp; ".join(f"**{k}:** {v}" for k, v in sorted(options.items()))
-        user_msg = f"**{question.strip()}**\n\n<small>{opt_summary}</small>"
+    # 5. Build Content
+    if should_abstain:
+        content_body = f"🛡️ **Abstention Advisory:** {ABSTAIN_MESSAGE}\n\n*(Criteria: {abstain_reason})*"
+    elif is_mcq:
+        chosen_opt = parsed_answer if parsed_answer in options else (letters[0] if letters else "A")
+        chosen_text = options.get(chosen_opt, "")
+        content_body = f"**Answer:** **Option {chosen_opt}** — {chosen_text}\n\n{clean_output}"
     else:
-        user_msg = question.strip()
+        content_body = clean_output
 
-    updated_history = history + [(user_msg, bot_reply)]
-    return updated_history, "", opt_a, opt_b, opt_c, opt_d
+    # 6. Format References Section
+    cited_nums = parse_citations(clean_output, len(top_passages))
+    ref_passages = [p for p in top_passages if p["rank"] in cited_nums] if cited_nums else top_passages
+
+    ref_items = []
+    for p in ref_passages:
+        r = p["rank"]
+        src = p.get("title", p.get("source", "Medical Textbook"))
+        text_snippet = p.get("text", "").strip()
+        first_200 = text_snippet[:200].replace("\n", " ") + ("..." if len(text_snippet) > 200 else "")
+        ref_items.append(
+            f"- **[{r}] {src}**: {first_200}\n"
+            f"  <details><summary>Expand full passage</summary>\n\n  > {text_snippet}\n  </details>"
+        )
+    references_block = "### 📚 References:\n" + "\n".join(ref_items)
+
+    # 7. Final Response Assembly
+    timing_line = f"⏱️ *Response time: {total_sec:.1f}s (Retrieval: {retrieval_sec:.2f}s | Generation: {gen_sec:.2f}s | Model: {clean_model_key})*"
+
+    final_bot_reply = (
+        f"{emergency_banner}"
+        f"{content_body}\n\n"
+        f"---\n"
+        f"{references_block}\n\n"
+        f"---\n"
+        f"{timing_line}\n\n"
+        f"{MANDATORY_FOOTER}"
+    )
+
+    final_history = history + [(user_display, final_bot_reply)]
+    yield final_history, "", opt_a, opt_b, opt_c, opt_d
 
 
 # -----------------------------------------------------------------------------
 # Gradio UI Construction
 # -----------------------------------------------------------------------------
 def build_interface() -> Tuple[gr.Blocks, str]:
-    """Build the clean Gradio interactive web application."""
+    """Build the clean Gradio interactive web application for community health workers."""
     custom_css = """
     .gradio-container { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     .chat-header { margin-bottom: 0.8rem; }
     """
 
-    with gr.Blocks(title="MedRAG-SLM Clinical Chatbot") as demo:
+    with gr.Blocks(title="MedRAG-SLM Community Health Worker Assistant") as demo:
         gr.Markdown(
-            "# 🩺 MedRAG-SLM: Live Clinical Decision Support Chatbot\n"
-            "**Retrieval-Augmented Small Language Models on Clinical Textbooks with Adaptive Gating.**\n"
-            "*Runs live on Kaggle GPU using MedCPT hybrid search and calibrated confidence.*"
+            "# 🩺 MedRAG-SLM: Community Health Worker Clinical Assistant\n"
+            "**Authoritative Medical Decision Support for Primary Care & Field Health Workers.**\n"
+            "*Powered by MedPsy-4B reasoning & MedCPT textbook retrieval with active emergency screening and abstention safety.*"
         )
 
-        chatbot = gr.Chatbot(label="Clinical Dialogue & Evidence Verification", height=480)
+        chatbot = gr.Chatbot(label="Community Health Worker Dialogue & Clinical Guidance", height=500)
 
         with gr.Row():
             with gr.Column(scale=4):
                 question_input = gr.Textbox(
-                    label="Patient Case / Clinical Question",
-                    placeholder="Enter a clinical vignette, diagnostic query, or biomedical question...",
+                    label="Patient Case / Field Health Inquiry",
+                    placeholder="Type patient symptoms, maternal checks, child illness, or dosing inquiry in plain English...",
                     lines=3,
                 )
 
-                with gr.Accordion("Multiple-Choice Options (Optional — for Evaluated Benchmark Mode)", open=True):
+                with gr.Accordion("Multiple-choice options (A–D) [Optional — for exam-style questions]", open=False):
                     with gr.Row():
                         opt_a = gr.Textbox(label="Option A", placeholder="e.g. Left anterior descending artery")
                         opt_b = gr.Textbox(label="Option B", placeholder="e.g. Right coronary artery")
@@ -502,56 +660,59 @@ def build_interface() -> Tuple[gr.Blocks, str]:
 
             with gr.Column(scale=2):
                 model_choice = gr.Dropdown(
-                    choices=["Qwen3-4B (default)", "Qwen3-1.7B (fast)"],
-                    value="Qwen3-4B (default)",
-                    label="SLM Model Architecture",
-                )
-                evidence_setting = gr.Radio(
-                    choices=["Auto (smart gate)", "Always", "Never"],
-                    value="Auto (smart gate)",
-                    label="Textbook Retrieval Setting",
-                    info="Smart gate routes based on model confidence.",
+                    choices=["medpsy-4b (default)", "qwen3-1.7b (fast)"],
+                    value="medpsy-4b (default)",
+                    label="SLM Reasoning Engine",
+                    info="MedPsy-4B provides clinically validated step-by-step thinking.",
                 )
                 with gr.Row():
-                    submit_btn = gr.Button("🩺 Submit Query", variant="primary", scale=2)
+                    submit_btn = gr.Button("🩺 Submit Question", variant="primary", scale=2)
                     clear_btn = gr.Button("🗑️ Clear", scale=1)
 
         # Clickable Examples
-        gr.Markdown("### 💡 Clickable Benchmark Examples")
+        gr.Markdown("### 💡 Field Clinical Examples (Click to Load)")
         examples_data = [
             [
-                "A 45-year-old male with a history of hypertension presents to the emergency department with severe retrosternal crushing chest pain radiating to his left shoulder and diaphoresis. An electrocardiogram (ECG) shows ST-segment elevation in leads II, III, and aVF. Which coronary artery is most likely occluded?",
+                "A child has fever for 3 days, rash and red eyes. What could it be and what should I do?",
+                "", "", "", "",
+            ],
+            [
+                "Pregnant woman 7 months with leg swelling and headache — what should I check?",
+                "", "", "", "",
+            ],
+            [
+                "What is the first-line treatment for uncomplicated malaria?",
+                "", "", "", "",
+            ],
+            [
+                "Can I give paracetamol and ibuprofen together to an adult with fever?",
+                "", "", "", "",
+            ],
+            [
+                "A 45-year-old male with hypertension presents with sudden severe crushing chest pain radiating to his left shoulder and jaw, diaphoresis, and shortness of breath. ECG reveals ST elevation in leads II, III, and aVF. Which coronary artery is most likely occluded?",
                 "Left anterior descending artery",
                 "Right coronary artery",
                 "Left circumflex artery",
                 "Left main coronary artery",
-            ],
-            [
-                "Does gadofosveset-enhanced magnetic resonance angiography improve diagnostic accuracy for carotid artery stenosis compared to digital subtraction angiography?",
-                "yes",
-                "no",
-                "maybe",
-                "",
-            ],
-            [
-                "What is the recommended first-line treatment and intramuscular injection dose for an adult experiencing acute anaphylaxis?",
-                "",
-                "",
-                "",
-                "",
             ],
         ]
 
         gr.Examples(
             examples=examples_data,
             inputs=[question_input, opt_a, opt_b, opt_c, opt_d],
-            label="Click an example to load clinical vignette & options:",
+            label="Click an example to test emergency triage, field guidance, or MCQ:",
         )
 
         # Wire Events
         submit_btn.click(
             fn=chat_pipeline,
-            inputs=[question_input, opt_a, opt_b, opt_c, opt_d, model_choice, evidence_setting, chatbot],
+            inputs=[question_input, opt_a, opt_b, opt_c, opt_d, model_choice, chatbot],
+            outputs=[chatbot, question_input, opt_a, opt_b, opt_c, opt_d],
+        )
+
+        question_input.submit(
+            fn=chat_pipeline,
+            inputs=[question_input, opt_a, opt_b, opt_c, opt_d, model_choice, chatbot],
             outputs=[chatbot, question_input, opt_a, opt_b, opt_c, opt_d],
         )
 
@@ -571,17 +732,17 @@ if __name__ == "__main__":
     import inspect
 
     print("=" * 70)
-    print("Starting MedRAG-SLM Gradio Chatbot (Kaggle GPU Session)...")
+    print("Starting MedRAG-SLM Health Worker Chatbot (Kaggle GPU Session)...")
     print("=" * 70)
 
-    # Pre-cache retrieval and default model
+    # Pre-cache retrieval components and default reasoning model once at startup
     get_retrieval_system()
-    get_llm("qwen3-4b")
+    get_llm(DEFAULT_MODEL)
 
     app, custom_css = build_interface()
 
     print("\n" + "=" * 70)
-    print("🎉 LAUNCHING GRADIO APP WITH PUBLIC LINK...")
+    print("🎉 LAUNCHING GRADIO APP WITH PUBLIC LINK (share=True)...")
     print("=" * 70 + "\n", flush=True)
 
     launch_kwargs = {
