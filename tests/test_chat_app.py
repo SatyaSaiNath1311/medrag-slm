@@ -187,6 +187,25 @@ class TestChatAppLogic(unittest.TestCase):
         import os
         self.assertEqual(os.environ.get("PYTORCH_CUDA_ALLOC_CONF"), "expandable_segments:True")
 
+    def test_gpu_framework_environment_variables(self):
+        """Verify JAX, TensorFlow, and XLA GPU preallocation variables are set at import time."""
+        import os
+        expected_vars = {
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+            "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+            "XLA_PYTHON_CLIENT_ALLOCATOR": "platform",
+            "TF_FORCE_GPU_ALLOW_GROWTH": "true",
+            "USE_TF": "0",
+            "USE_JAX": "0",
+            "USE_FLAX": "0",
+        }
+        for var, expected_val in expected_vars.items():
+            self.assertEqual(
+                os.environ.get(var),
+                expected_val,
+                f"Expected environment variable {var}={expected_val!r} to be set at import time, but got {os.environ.get(var)!r}",
+            )
+
     def test_device_placement_no_gpu(self):
         with patch("torch.cuda.is_available", return_value=False):
             llm_dev, enc_dev = get_device_placement()

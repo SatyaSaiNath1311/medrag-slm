@@ -20,6 +20,14 @@ import os
 # Configure PyTorch CUDA memory allocator before importing torch to mitigate memory fragmentation on 16GB GPUs
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
+# Prevent JAX and TensorFlow from preallocating GPU VRAM on Kaggle (can consume ~75% / 11.3 GB)
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
+os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
+os.environ["USE_TF"] = "0"
+os.environ["USE_JAX"] = "0"
+os.environ["USE_FLAX"] = "0"
+
 import glob
 import math
 import re
