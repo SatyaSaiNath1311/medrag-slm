@@ -29,10 +29,10 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
-PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
+PILOT = True                # run medpsy-4b pilot
 PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
 TINY = False                # set to True for tiny check on Kaggle
-MODELS = []
+MODELS = ["medpsy-4b"]
 MODES = ["baseline", "rag"]
 
 # Override from env var if provided
