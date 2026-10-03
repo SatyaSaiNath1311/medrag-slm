@@ -1,6 +1,6 @@
 """Phases 4, 5 and 8 in one loop, so each model is downloaded and loaded only once.
 
-For each of the 5 models:
+For each of the 5+1 models:
   Phase 4  format check: 20 validation questions, baseline + RAG prompts; parse rate must be >= threshold.
            A model that fails is skipped (no GPU time wasted) and reported.
   Phase 5  Baseline QA   (no retrieval)        -> work/phase5/<model>.jsonl
@@ -8,10 +8,29 @@ For each of the 5 models:
 Runs on test AND validation (validation is needed later to tune abstention in Phase 9).
 Resumable: questions already in an output file are skipped.
 
+Reasoning model (medpsy-4b):
+  Uses generate_reasoning_safe instead of generate_safe.  Prompts are built by the
+  reasoning_* prompt functions.  The row schema is identical to standard models
+  (same fields: letter_probs, confidence, pred, pred_source, parsed, gen_tokens, seconds, …)
+  so all downstream analysis scripts work unchanged.
+
+  Extra field in reasoning rows: "truncated" (bool) — true when the model hit
+  max_new_tokens_reasoning without producing a final "Answer:" line.
+
+Split flag (--split):
+  test         run on test questions only
+  val_subset   run on a 80-question stratified sample of the validation set (seed 42):
+               60 MedQA + 20 PubMedQA, used for the PILOT run of medpsy-4b
+  all_needed   run on test + validation (default, same as previous behaviour)
+
+Pilot mode is controlled externally by runner.py (PILOT=True): it selects medpsy-4b,
+modes=["baseline","context"], split="val_subset", single GPU.
+
 Usage:
-  python -m src.qa_pipeline --work <dir>                      all 5 models
+  python -m src.qa_pipeline --work <dir>                      all 5+1 models
   python -m src.qa_pipeline --work <dir> --models qwen3-4b    one model
   python -m src.qa_pipeline --work <dir> --tiny               laptop check with the tiny model
+  python -m src.qa_pipeline --work <dir> --split val_subset --models medpsy-4b
 """
 import json
 import random
@@ -25,7 +44,9 @@ import torch
 from src.common import (append_jsonl, banner, get_device, load_config, phase_args, phase_dir, read_jsonl,
                         set_seed, write_manifest)
 from src.llm import (LLM, baseline_idk_prompt, baseline_prompt, context_prompt, get_idk_letter, get_idk_options,
-                     parse_answer, parse_citations, rag_idk_prompt, rag_prompt)
+                     parse_answer, parse_citations, rag_idk_prompt, rag_prompt,
+                     reasoning_baseline_prompt, reasoning_context_prompt, reasoning_rag_prompt,
+                     extract_final_answer_from_reasoning)
 
 
 class RSSProfiler:
@@ -80,23 +101,52 @@ def sample_stratified_tiny(rows, n_per_group, seed):
     return selected
 
 
+def sample_val_subset(val_rows, seed=42):
+    """Stratified 80-question sample of the validation set for the PILOT run.
+
+    Draws 60 MedQA (non-abstain) + 20 PubMedQA (non-abstain) questions, sorted
+    by id for reproducibility, then sampled with the fixed seed.
+    Used only when --split val_subset is requested.
+    """
+    rng = random.Random(seed)
+    medqa = sorted([r for r in val_rows if r.get("dataset") == "medqa" and not r.get("should_abstain")],
+                   key=lambda x: x["id"])
+    pubmedqa = sorted([r for r in val_rows if r.get("dataset") == "pubmedqa" and not r.get("should_abstain")],
+                      key=lambda x: x["id"])
+    n_medqa = min(60, len(medqa))
+    n_pubmedqa = min(20, len(pubmedqa))
+    return rng.sample(medqa, n_medqa) + rng.sample(pubmedqa, n_pubmedqa)
+
+
 def run_mode(llm, mode, questions, evidence, qcfg, out_path):
     done = {json.loads(l)["id"] for l in open(out_path)} if out_path.exists() else set()
     todo = [q for q in questions if q["id"] not in done]
     if not todo:
         print(f"  {mode}: already complete ({len(done)} rows)")
         return
+
+    is_reasoning = getattr(llm, "is_reasoning", False)
+
     if mode == "baseline":
-        prompts = {q["id"]: baseline_prompt(q) for q in todo}
+        if is_reasoning:
+            prompts = {q["id"]: reasoning_baseline_prompt(q) for q in todo}
+        else:
+            prompts = {q["id"]: baseline_prompt(q) for q in todo}
         options_map = {q["id"]: q["options"] for q in todo}
         letters_map = {q["id"]: list(q["options"]) for q in todo}
     elif mode == "rag":
-        prompts = {q["id"]: rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in todo}
+        if is_reasoning:
+            prompts = {q["id"]: reasoning_rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in todo}
+        else:
+            prompts = {q["id"]: rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in todo}
         options_map = {q["id"]: q["options"] for q in todo}
         letters_map = {q["id"]: list(q["options"]) for q in todo}
     elif mode == "context":
         max_chars = qcfg["passage_max_chars"] * 3
-        prompts = {q["id"]: context_prompt(q, max_chars) for q in todo}
+        if is_reasoning:
+            prompts = {q["id"]: reasoning_context_prompt(q, max_chars) for q in todo}
+        else:
+            prompts = {q["id"]: context_prompt(q, max_chars) for q in todo}
         options_map = {q["id"]: q["options"] for q in todo}
         letters_map = {q["id"]: list(q["options"]) for q in todo}
     elif mode == "baseline_idk":
@@ -110,54 +160,82 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
-    todo.sort(key=lambda q: -len(prompts[q["id"]]))  # longest first: memory problems appear immediately
-    if "baseline" in mode:
-        max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_baseline"]
-        bs = llm.cfg.get("batch_size_baseline") or qcfg["batch_size"]
-        source_desc = "model config (batch_size_baseline)" if llm.cfg.get("batch_size_baseline") else "qa config"
+    # Sort longest prompt first: memory problems appear immediately
+    todo.sort(key=lambda q: -len(prompts[q["id"]]))
+
+    if is_reasoning:
+        # Reasoning model: always use model-level batch_size (default 8), max_new_tokens_reasoning
+        max_new = llm.cfg.get("max_new_tokens_reasoning") or qcfg.get("max_new_tokens_reasoning") or qcfg["max_new_tokens_rag"]
+        bs = llm.cfg.get("batch_size") or qcfg["batch_size"]
+        source_desc = "model config (batch_size)" if llm.cfg.get("batch_size") else "qa config"
+        print(f"  {mode} [reasoning]: batch_size={bs} (from {source_desc}), max_new={max_new}", flush=True)
     else:
-        max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_rag"]
-        bs = llm.cfg.get("batch_size_rag") or qcfg["batch_size"]
-        source_desc = "model config (batch_size_rag)" if llm.cfg.get("batch_size_rag") else "qa config"
+        if "baseline" in mode:
+            max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_baseline"]
+            bs = llm.cfg.get("batch_size_baseline") or qcfg["batch_size"]
+            source_desc = "model config (batch_size_baseline)" if llm.cfg.get("batch_size_baseline") else "qa config"
+        else:
+            max_new = qcfg.get(f"max_new_tokens_{mode}") or qcfg["max_new_tokens_rag"]
+            bs = llm.cfg.get("batch_size_rag") or qcfg["batch_size"]
+            source_desc = "model config (batch_size_rag)" if llm.cfg.get("batch_size_rag") else "qa config"
+        print(f"  {mode}: batch_size={bs} (from {source_desc})", flush=True)
 
     t0 = time.time()
-    print(f"  {mode}: batch_size={bs} (from {source_desc})", flush=True)
     is_idk = "idk" in mode
     for s in range(0, len(todo), bs):
         batch = todo[s:s + bs]
-        res = llm.generate_safe([prompts[q["id"]] for q in batch], [letters_map[q["id"]] for q in batch], max_new)
+        batch_prompts = [prompts[q["id"]] for q in batch]
+        batch_letters = [letters_map[q["id"]] for q in batch]
+
+        if is_reasoning:
+            res = llm.generate_reasoning_safe(batch_prompts, batch_letters, max_new)
+        else:
+            res = llm.generate_safe(batch_prompts, batch_letters, max_new)
+
         rows = []
         for q, r in zip(batch, res):
             opts = options_map[q["id"]]
             idk_let = get_idk_letter(q) if is_idk else None
-            parsed_pred = parse_answer(r["raw_output"], opts, idk_letter=idk_let)
-            parsed = parsed_pred is not None
+
+            if is_reasoning:
+                # Fields are pre-computed inside generate_reasoning
+                pred = r.pop("_pred", None)
+                pred_source = r.pop("_pred_source", "none")
+                parsed = r.pop("_parsed", False)
+            else:
+                parsed_pred = parse_answer(r["raw_output"], opts, idk_letter=idk_let)
+                parsed = parsed_pred is not None
+                lp = r["letter_probs"]
+                prob_pred_raw = max(lp, key=lp.get) if lp else None
+
+                if is_idk and prob_pred_raw == idk_let:
+                    prob_pred = "ABSTAIN"
+                else:
+                    prob_pred = prob_pred_raw
+
+                if parsed:
+                    pred = parsed_pred
+                    pred_source = "parsed"
+                elif prob_pred is not None:
+                    pred = prob_pred
+                    pred_source = "logprob_fallback"
+                else:
+                    pred = None
+                    pred_source = "none"
+
             lp = r["letter_probs"]
-            prob_pred_raw = max(lp, key=lp.get) if lp else None
-
-            if is_idk and prob_pred_raw == idk_let:
-                prob_pred = "ABSTAIN"
-            else:
-                prob_pred = prob_pred_raw
-
-            if parsed:
-                pred = parsed_pred
-                pred_source = "parsed"
-            elif prob_pred is not None:
-                pred = prob_pred
-                pred_source = "logprob_fallback"
-            else:
-                pred = None
-                pred_source = "none"
-
             abstained = (pred == "ABSTAIN")
             correct = pred is not None and pred == q["answer"]
             row = {"id": q["id"], "split": q["split"], "dataset": q["dataset"], "model": llm.cfg["name"],
                    "mode": mode, "should_abstain": q["should_abstain"], "gold": q["answer"], "pred": pred,
                    "correct": correct, "parsed": parsed, "pred_source": pred_source,
                    "letter_probs": lp, "confidence": max(lp.values()) if lp else None,
-                   "prob_pred": prob_pred, "load_source": getattr(llm, "load_source", None),
+                   "prob_pred": max(lp, key=lp.get) if lp else None,
+                   "load_source": getattr(llm, "load_source", None),
                    "abstained": abstained, **r}
+            # Reasoning-specific field (set to False for non-reasoning models for schema consistency)
+            if "truncated" not in row:
+                row["truncated"] = False
             if mode in ("rag", "rag_idk"):
                 passages = evidence[q["id"]]["passages"]
                 cites = parse_citations(r["raw_output"], len(passages))
@@ -169,9 +247,14 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
                 row["citations"] = parse_citations(r["raw_output"], 1)
             rows.append(row)
         append_jsonl(out_path, rows)
-        n = min(s + bs, len(todo))
-        if (s // bs) % 10 == 0 or n == len(todo):
-            print(f"  {mode}: {n}/{len(todo)}  ({time.time() - t0:.0f}s)", flush=True)
+        n_done = min(s + bs, len(todo))
+        elapsed = time.time() - t0
+        eta_str = ""
+        if n_done > 0 and n_done < len(todo):
+            eta_sec = elapsed / n_done * (len(todo) - n_done)
+            eta_str = f"  ETA {eta_sec:.0f}s"
+        if (s // bs) % 10 == 0 or n_done == len(todo):
+            print(f"  {mode}: {n_done}/{len(todo)}  ({elapsed:.0f}s){eta_str}", flush=True)
 
 
 def summarise(path):
@@ -219,32 +302,46 @@ def sample_format_check(val, seed):
 
 
 def format_check(llm, val, evidence, qcfg, threshold, seed):
+    is_reasoning = getattr(llm, "is_reasoning", False)
     sample = sample_format_check(val, seed)
     report = {"load_source": getattr(llm, "load_source", None)}
     for mode in ("baseline", "rag"):
-        prompts = [baseline_prompt(q) if mode == "baseline"
-                   else rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in sample]
+        if is_reasoning:
+            prompts = [reasoning_baseline_prompt(q) if mode == "baseline"
+                       else reasoning_rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"])
+                       for q in sample]
+        else:
+            prompts = [baseline_prompt(q) if mode == "baseline"
+                       else rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in sample]
         res = []
         for s in range(0, len(sample), qcfg["batch_size"]):
-            res += llm.generate_safe(prompts[s:s + qcfg["batch_size"]],
-                                     [list(q["options"]) for q in sample[s:s + qcfg["batch_size"]]],
-                                     qcfg[f"max_new_tokens_{mode}"])
+            letters_batch = [list(q["options"]) for q in sample[s:s + qcfg["batch_size"]]]
+            if is_reasoning:
+                max_new = llm.cfg.get("max_new_tokens_reasoning") or qcfg["max_new_tokens_rag"]
+                res += llm.generate_reasoning_safe(prompts[s:s + qcfg["batch_size"]], letters_batch, max_new)
+            else:
+                res += llm.generate_safe(prompts[s:s + qcfg["batch_size"]], letters_batch,
+                                         qcfg[f"max_new_tokens_{mode}"])
         rows = []
         for q, r in zip(sample, res):
-            parsed_pred = parse_answer(r["raw_output"], q["options"])
-            parsed = parsed_pred is not None
-            lp = r.get("letter_probs")
-            prob_pred = max(lp, key=lp.get) if lp else None
-
-            if parsed:
-                pred = parsed_pred
-                pred_source = "parsed"
-            elif prob_pred is not None:
-                pred = prob_pred
-                pred_source = "logprob_fallback"
+            if is_reasoning:
+                pred = r.pop("_pred", None)
+                pred_source = r.pop("_pred_source", "none")
+                parsed = r.pop("_parsed", False)
             else:
-                pred = None
-                pred_source = "none"
+                parsed_pred = parse_answer(r["raw_output"], q["options"])
+                parsed = parsed_pred is not None
+                lp = r.get("letter_probs")
+                prob_pred = max(lp, key=lp.get) if lp else None
+                if parsed:
+                    pred = parsed_pred
+                    pred_source = "parsed"
+                elif prob_pred is not None:
+                    pred = prob_pred
+                    pred_source = "logprob_fallback"
+                else:
+                    pred = None
+                    pred_source = "none"
 
             if mode == "rag":
                 passages = evidence[q["id"]]["passages"]
@@ -358,24 +455,40 @@ def run_profiling(models, cfg, qcfg, questions, evidence, work_dir, device, keep
         m_profile["model_load_time_sec"] = round(load_time, 3)
         print(f"  Model loaded in {load_time:.2f}s")
 
+        is_reasoning = getattr(llm, "is_reasoning", False)
+
         # Run modes: baseline, rag, context (PubMedQA only)
         for mode in ("baseline", "rag", "context"):
             if mode == "baseline":
                 mode_questions = questions_20
-                prompts = {q["id"]: baseline_prompt(q) for q in mode_questions}
-                bs = m.get("batch_size_baseline") or qcfg["batch_size"]
-                max_new = qcfg.get("max_new_tokens_baseline") or qcfg["max_new_tokens_rag"]
+                if is_reasoning:
+                    prompts = {q["id"]: reasoning_baseline_prompt(q) for q in mode_questions}
+                else:
+                    prompts = {q["id"]: baseline_prompt(q) for q in mode_questions}
+                bs = m.get("batch_size_baseline") or m.get("batch_size") or qcfg["batch_size"]
+                max_new = (m.get("max_new_tokens_reasoning") if is_reasoning
+                           else qcfg.get("max_new_tokens_baseline") or qcfg["max_new_tokens_rag"])
             elif mode == "rag":
                 mode_questions = questions_20
-                prompts = {q["id"]: rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"]) for q in mode_questions}
-                bs = m.get("batch_size_rag") or qcfg["batch_size"]
-                max_new = qcfg.get("max_new_tokens_rag") or qcfg["max_new_tokens_rag"]
+                if is_reasoning:
+                    prompts = {q["id"]: reasoning_rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"])
+                               for q in mode_questions}
+                else:
+                    prompts = {q["id"]: rag_prompt(q, evidence[q["id"]]["passages"], qcfg["passage_max_chars"])
+                               for q in mode_questions}
+                bs = m.get("batch_size_rag") or m.get("batch_size") or qcfg["batch_size"]
+                max_new = (m.get("max_new_tokens_reasoning") if is_reasoning
+                           else qcfg.get("max_new_tokens_rag") or qcfg["max_new_tokens_rag"])
             elif mode == "context":
                 mode_questions = sample_pubmedqa  # PubMedQA only
                 max_chars = qcfg["passage_max_chars"] * 3
-                prompts = {q["id"]: context_prompt(q, max_chars) for q in mode_questions}
-                bs = m.get("batch_size_rag") or qcfg["batch_size"]
-                max_new = qcfg.get("max_new_tokens_context") or qcfg["max_new_tokens_rag"]
+                if is_reasoning:
+                    prompts = {q["id"]: reasoning_context_prompt(q, max_chars) for q in mode_questions}
+                else:
+                    prompts = {q["id"]: context_prompt(q, max_chars) for q in mode_questions}
+                bs = m.get("batch_size_rag") or m.get("batch_size") or qcfg["batch_size"]
+                max_new = (m.get("max_new_tokens_reasoning") if is_reasoning
+                           else qcfg.get("max_new_tokens_context") or qcfg["max_new_tokens_rag"])
 
             sorted_questions = sorted(mode_questions, key=lambda q: -len(prompts[q["id"]]))
 
@@ -391,7 +504,10 @@ def run_profiling(models, cfg, qcfg, questions, evidence, work_dir, device, keep
                 batch = sorted_questions[s:s + bs]
                 batch_prompts = [prompts[q["id"]] for q in batch]
                 batch_options = [list(q["options"]) for q in batch]
-                llm.generate_safe(batch_prompts, batch_options, max_new)
+                if is_reasoning:
+                    llm.generate_reasoning_safe(batch_prompts, batch_options, max_new)
+                else:
+                    llm.generate_safe(batch_prompts, batch_options, max_new)
 
             mode_duration = time.time() - t_mode0
             peak_rss = rss_profiler.stop()
@@ -445,6 +561,10 @@ def main():
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
     ap.add_argument("--dry-run", action="store_true", help="Print selected models and exit without running")
     ap.add_argument("--check-only", action="store_true", help="Run only Phase 4 format check for selected models and exit")
+    ap.add_argument("--split", choices=["test", "val_subset", "all_needed"], default="all_needed",
+                    help=("Questions to run: 'test' = test split only; "
+                          "'val_subset' = stratified 80-question validation sample (seed 42, PILOT use); "
+                          "'all_needed' = test + validation (default)."))
     args = ap.parse_args()
     cfg = load_config(args.config)
     set_seed(cfg["seed"])
@@ -475,14 +595,24 @@ def main():
         mode_str = " (profile)" if args.profile else (" (check-only)" if args.check_only else "")
         print(f"Selected {len(models)} model(s){mode_str}: {[m['name'] for m in models]}")
         print(f"QA modes: {run_modes}" + ("  [skip Phase 4 + Phase 5]" if skip_checks else ""))
+        print(f"Split: {args.split}")
         return
 
     print(f"QA modes to run: {run_modes}" + ("  [skip Phase 4 + Phase 5]" if skip_checks else ""), flush=True)
+    print(f"Split: {args.split}", flush=True)
 
     test, val = read_jsonl(p1 / "test.jsonl"), read_jsonl(p1 / "validation.jsonl")
-    questions = test + val
-    ensure_pubmedqa_contexts(questions, cfg)
+    ensure_pubmedqa_contexts(test + val, cfg)
     val_pool = list(val)
+
+    # Build question set based on --split
+    if args.split == "test":
+        questions = test
+    elif args.split == "val_subset":
+        questions = sample_val_subset(val, seed=cfg["seed"])
+        print(f"  val_subset: {len(questions)} questions (60 MedQA + 20 PubMedQA, seed {cfg['seed']})", flush=True)
+    else:  # all_needed
+        questions = test + val
 
     if "rag" in run_modes or "rag_idk" in run_modes or args.check_only or args.profile:
         p7 = phase_dir(args.work, 7)
@@ -657,11 +787,11 @@ def main():
         Path(p12 / "summary.json").write_text(json.dumps(summary, indent=2))
     batch_sizes_used = {
         m["name"]: {
-            "baseline":     m.get("batch_size_baseline") or qcfg["batch_size"],
-            "rag":          m.get("batch_size_rag")      or qcfg["batch_size"],
-            "context":      m.get("batch_size_rag")      or qcfg["batch_size"],
-            "baseline_idk": m.get("batch_size_baseline") or qcfg["batch_size"],
-            "rag_idk":      m.get("batch_size_rag")      or qcfg["batch_size"],
+            "baseline":     m.get("batch_size_baseline") or m.get("batch_size") or qcfg["batch_size"],
+            "rag":          m.get("batch_size_rag")      or m.get("batch_size") or qcfg["batch_size"],
+            "context":      m.get("batch_size_rag")      or m.get("batch_size") or qcfg["batch_size"],
+            "baseline_idk": m.get("batch_size_baseline") or m.get("batch_size") or qcfg["batch_size"],
+            "rag_idk":      m.get("batch_size_rag")      or m.get("batch_size") or qcfg["batch_size"],
         }
         for m in models
     }
@@ -675,7 +805,8 @@ def main():
     for p, n in manifest_phases:
         write_manifest(p, {"phase": n, "tiny": args.tiny, "device": device, "status": status,
                             "load_sources": load_sources, "settings": qcfg,
-                            "batch_sizes_used": batch_sizes_used, "modes": run_modes})
+                            "batch_sizes_used": batch_sizes_used, "modes": run_modes,
+                            "split": args.split})
     ok = all(v == "DONE" for v in status.values())
     mode_desc = ", ".join(run_modes)
     print(f"\nQA PIPELINE ({mode_desc}) {'COMPLETE' if ok else 'FINISHED WITH PROBLEMS (see above)'}")

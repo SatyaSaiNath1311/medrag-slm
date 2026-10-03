@@ -24,6 +24,12 @@ models:
   - name: smollm3-3b
     id: HuggingFaceTB/SmolLM3-3B
     dtype: float16
+  - name: medpsy-4b
+    id: qvac/MedPsy-4B
+    dtype: float16
+    reasoning: true
+    max_new_tokens_reasoning: 1024
+    batch_size: 8
 
 # Used only for quick local checks on your laptop (CPU), never for results.
 tiny_model:

@@ -1,7 +1,24 @@
-"""Kaggle runner B: question answering with the 5 models (Phases 4, 5, 8).
+"""Kaggle runner B: question answering with the 5+1 models (Phases 4, 5, 8).
 Input: output of runner A (medrag-build), attached as a notebook input.
-Change MODE to "smoke" to re-run the setup smoke test instead."""
+Change MODE to "smoke" to re-run the setup smoke test instead.
+
+PILOT mode (PILOT=True):
+  Runs only medpsy-4b on a seeded 80-question validation subset (60 MedQA + 20 PubMedQA).
+  Modes: baseline + context.  Single GPU (CUDA_VISIBLE_DEVICES=0).
+  Output written to {WORK}/pilot/.
+  A human-readable pilot_summary.txt is printed after the run.
+
+PARALLEL_GPUS mode (PARALLEL_GPUS=True):
+  Splits the model list across two GPUs by launching two subprocesses:
+    - GPU 0: first half of MODELS
+    - GPU 1: second half of MODELS
+  Each subprocess gets CUDA_VISIBLE_DEVICES set so it sees only one T4.
+  Results are merged (both write to the same WORK directory; phase dirs are model-specific
+  JSONL files so there is no collision).
+  Not compatible with PILOT or PROFILE modes.
+"""
 import glob
+import json
 import os
 import subprocess
 import sys
@@ -12,15 +29,21 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
-TINY = False                               # set to True for tiny check on Kaggle
-MODELS = ["qwen3-4b"]
-MODES = ["baseline_idk", "rag_idk"]
+PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
+PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
+TINY = False                # set to True for tiny check on Kaggle
+MODELS = []
+MODES = ["baseline", "rag"]
 
 # Override from env var if provided
 if "CHECK_ONLY" in os.environ:
     CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
 if "PROFILE" in os.environ:
     PROFILE = os.environ["PROFILE"].lower() in ("1", "true", "yes")
+if "PILOT" in os.environ:
+    PILOT = os.environ["PILOT"].lower() in ("1", "true", "yes")
+if "PARALLEL_GPUS" in os.environ:
+    PARALLEL_GPUS = os.environ["PARALLEL_GPUS"].lower() in ("1", "true", "yes")
 if "TINY" in os.environ:
     TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
 if "MODELS" in os.environ:
@@ -51,9 +74,21 @@ def print_kaggle_input_configs(max_depth=7):
 print_kaggle_input_configs()
 
 
-def run(cmd):
+def run(cmd, extra_env=None):
     print(">>", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    subprocess.run(cmd, check=True, env=env)
+
+
+def run_bg(cmd, extra_env=None):
+    """Launch a subprocess in the background and return the Popen object."""
+    print(">> [bg]", " ".join(cmd), flush=True)
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.Popen(cmd, env=env)
 
 
 # 1. Hugging Face token from Kaggle Secrets
@@ -82,6 +117,10 @@ if MODES:
     print(f"Selected modes to run: {MODES}")
 if PROFILE:
     print("PROFILE mode enabled: running profiling benchmarks")
+if PILOT:
+    print("PILOT mode enabled: medpsy-4b pilot on 80-question val subset, single GPU")
+if PARALLEL_GPUS:
+    print("PARALLEL_GPUS mode enabled: splitting model list across 2 GPUs")
 if TINY:
     print("TINY mode enabled: running on tiny scale")
 
@@ -117,17 +156,122 @@ for n in (1, 2, 3, 6, 7):
     if os.path.isdir(src_dir) and not os.path.exists(dst):
         os.symlink(src_dir, dst)
 
-# 4. Run phases 4, 5, 8
-cmd = [sys.executable, "-m", "src.qa_pipeline", "--config", "configs/base.yaml", "--work", WORK]
-if CHECK_ONLY:
-    cmd.append("--check-only")
-if PROFILE:
-    cmd.append("--profile")
-if TINY:
-    cmd.append("--tiny")
-if MODELS:
-    cmd += ["--models", *MODELS]
-if MODES:
-    cmd += ["--modes", *MODES]
+
+# ── Helper to build the qa_pipeline command ────────────────────────────────────
+
+def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=False,
+                 profile=False, tiny=False):
+    cmd = [sys.executable, "-m", "src.qa_pipeline",
+           "--config", "configs/base.yaml",
+           "--work", work_dir or WORK]
+    if check_only:
+        cmd.append("--check-only")
+    if profile:
+        cmd.append("--profile")
+    if tiny:
+        cmd.append("--tiny")
+    if models_list:
+        cmd += ["--models", *models_list]
+    if modes_list:
+        cmd += ["--modes", *modes_list]
+    if split:
+        cmd += ["--split", split]
+    return cmd
+
+
+# ── PILOT mode ─────────────────────────────────────────────────────────────────
+
+if PILOT:
+    if PARALLEL_GPUS or PROFILE:
+        sys.exit("ERROR: PILOT is not compatible with PARALLEL_GPUS or PROFILE modes.")
+
+    pilot_work = os.path.join(WORK, "pilot")
+    os.makedirs(pilot_work, exist_ok=True)
+
+    # Symlink build phases into pilot_work as well (re-use same phase1..7 data)
+    for n in (1, 2, 3, 6, 7):
+        src_dir = os.path.join(WORK, f"phase{n}")
+        dst = os.path.join(pilot_work, f"phase{n}")
+        if os.path.isdir(src_dir) and not os.path.exists(dst):
+            os.symlink(src_dir, dst)
+
+    pilot_cmd = build_qa_cmd(
+        models_list=["medpsy-4b"],
+        modes_list=["baseline", "context"],
+        split="val_subset",
+        work_dir=pilot_work,
+    )
+    print("\n=== PILOT RUN: medpsy-4b, 80-question val subset, GPU 0 ===", flush=True)
+    run(pilot_cmd, extra_env={"CUDA_VISIBLE_DEVICES": "0"})
+
+    # Print pilot summary
+    print("\n=== PILOT SUMMARY ===", flush=True)
+    for mode, phase in [("baseline", "phase5"), ("context", "phase10")]:
+        phase_dir = os.path.join(pilot_work, phase)
+        jsonl_path = os.path.join(phase_dir, "medpsy-4b.jsonl")
+        if not os.path.exists(jsonl_path):
+            print(f"  [{mode}] output not found at {jsonl_path}", flush=True)
+            continue
+        rows = [json.loads(l) for l in open(jsonl_path) if l.strip()]
+        n_total = len(rows)
+        answerable = [r for r in rows if not r.get("should_abstain")]
+        n_ans = len(answerable)
+        n_correct = sum(1 for r in answerable if r.get("correct"))
+        acc = round(n_correct / n_ans, 4) if n_ans else None
+        n_parsed = sum(1 for r in rows if r.get("parsed"))
+        n_truncated = sum(1 for r in rows if r.get("truncated"))
+        n_refeed = sum(1 for r in rows if r.get("pred_source") == "logprob_refeed")
+        medqa_rows = [r for r in answerable if r.get("dataset") == "medqa"]
+        pubmedqa_rows = [r for r in answerable if r.get("dataset") == "pubmedqa"]
+        acc_medqa = round(sum(r["correct"] for r in medqa_rows) / len(medqa_rows), 4) if medqa_rows else None
+        acc_pubmedqa = round(sum(r["correct"] for r in pubmedqa_rows) / len(pubmedqa_rows), 4) if pubmedqa_rows else None
+        summary_lines = [
+            f"  [{mode}] n={n_total}, accuracy={acc} (MedQA={acc_medqa}, PubMedQA={acc_pubmedqa})",
+            f"    parsed={n_parsed}/{n_total}, truncated={n_truncated}, logprob_refeed={n_refeed}",
+        ]
+        for line in summary_lines:
+            print(line, flush=True)
+    print("=== END PILOT SUMMARY ===\n", flush=True)
+    sys.exit(0)
+
+
+# ── PARALLEL_GPUS mode ─────────────────────────────────────────────────────────
+
+if PARALLEL_GPUS:
+    if not MODELS:
+        sys.exit("ERROR: PARALLEL_GPUS requires an explicit MODELS list.")
+    if PROFILE or CHECK_ONLY:
+        # Profiling and check-only don't benefit from GPU split; run normally
+        print("WARNING: PARALLEL_GPUS with PROFILE/CHECK_ONLY — running sequentially on all GPUs.", flush=True)
+        PARALLEL_GPUS = False
+    else:
+        mid = len(MODELS) // 2
+        models_gpu0 = MODELS[:mid] if mid > 0 else MODELS
+        models_gpu1 = MODELS[mid:] if mid > 0 and mid < len(MODELS) else []
+
+        procs = []
+        if models_gpu0:
+            cmd0 = build_qa_cmd(models_gpu0, MODES, work_dir=WORK, check_only=CHECK_ONLY, tiny=TINY)
+            procs.append(("GPU-0", run_bg(cmd0, extra_env={"CUDA_VISIBLE_DEVICES": "0"})))
+        if models_gpu1:
+            cmd1 = build_qa_cmd(models_gpu1, MODES, work_dir=WORK, check_only=CHECK_ONLY, tiny=TINY)
+            procs.append(("GPU-1", run_bg(cmd1, extra_env={"CUDA_VISIBLE_DEVICES": "1"})))
+
+        print(f"\nWaiting for {len(procs)} GPU subprocess(es)...", flush=True)
+        exit_codes = {}
+        for label, proc in procs:
+            rc = proc.wait()
+            exit_codes[label] = rc
+            print(f"  {label} finished with exit code {rc}", flush=True)
+
+        any_failed = any(rc != 0 for rc in exit_codes.values())
+        print("\nRUNNER B PARALLEL COMPLETE:", exit_codes)
+        if any_failed:
+            sys.exit(1)
+        sys.exit(0)
+
+# ── Sequential run (default) ───────────────────────────────────────────────────
+
+cmd = build_qa_cmd(MODELS, MODES, work_dir=WORK, check_only=CHECK_ONLY, profile=PROFILE, tiny=TINY)
 run(cmd)
 print("\nRUNNER B COMPLETE: " + ("profiling benchmark" if PROFILE else ("phase 4 format check" if CHECK_ONLY else f"modes {MODES}")))
