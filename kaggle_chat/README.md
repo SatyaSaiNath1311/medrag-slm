@@ -6,6 +6,7 @@ The chatbot runs on a free **Kaggle GPU accelerator (T4)** with:
 - **Authoritative Textbook Knowledge Base**: 124,077 chunks across 18 medical textbooks (Harrison's Internal Medicine, Katzung Pharmacology, Schwartz's Surgery, Nelson Pediatrics, Novak Gynecology, etc.).
 - **Hybrid Retrieval & Reranking**: BM25 sparse lexical search + MedCPT dense FAISS embeddings (top-20) reranked by MedCPT Cross-Encoder (top-5).
 - **MedPsy-4B Clinical Reasoning**: 1,024-token reasoning budget with concise health-worker bullet points.
+- **Optimized 2x T4 Memory Architecture**: MedPsy-4B is loaded first and placed exclusively on `cuda:0` (~8 GB in fp16). MedCPT encoders run on `cuda:1` (or CPU on 1-GPU setups), with FAISS strictly on CPU and `PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"` to prevent VRAM fragmentation and CUDA OOM.
 - **Active Red-Flag Emergency Screening**: Detects acute danger signs (chest pain, severe breathlessness, convulsions, pregnancy complications, infant high fever) and immediately outputs a call-108 emergency referral banner.
 - **Three-Tier Abstention Safety**: Seamlessly falls back to `ABSTAIN_MESSAGE` ("*I don't have enough information to answer this confidently. Please consult a doctor.*") if thinking budget is exhausted, the model signals `"INSUFFICIENT INFORMATION"`, or the top retrieval score falls below the validation 20th percentile.
 - **Expandable References**: Textbook sources cited with [n], title, and first 200 characters with expandable full text.

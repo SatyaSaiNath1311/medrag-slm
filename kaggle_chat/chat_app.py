@@ -15,9 +15,13 @@ Run on Kaggle with GPU accelerator enabled:
 
 from __future__ import annotations
 
+import os
+
+# Configure PyTorch CUDA memory allocator before importing torch to mitigate memory fragmentation on 16GB GPUs
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import glob
 import math
-import os
 import re
 import sys
 import time
@@ -327,19 +331,69 @@ def compute_validation_rerank_threshold_p20(evidence_path: Optional[Path] = None
 # -----------------------------------------------------------------------------
 # Global Cached Retrieval & Generation State
 # -----------------------------------------------------------------------------
+def print_gpu_memory(label: str = "") -> None:
+    """Print per-GPU memory using torch.cuda.memory_allocated and torch.cuda.mem_get_info for cuda:0 and cuda:1."""
+    if not torch.cuda.is_available():
+        print(f"[Memory] {label} - CUDA not available (CPU mode)", flush=True)
+        return
+    n_dev = torch.cuda.device_count()
+    print(f"[Memory] {label}:", flush=True)
+    for dev_idx in [0, 1]:
+        dev_name = f"cuda:{dev_idx}"
+        if dev_idx < n_dev:
+            alloc_b = torch.cuda.memory_allocated(dev_name)
+            free_b, total_b = torch.cuda.mem_get_info(dev_name)
+            alloc_mb = alloc_b / (1024 ** 2)
+            free_mb = free_b / (1024 ** 2)
+            total_mb = total_b / (1024 ** 2)
+            used_mb = total_mb - free_mb
+            print(
+                f"  {dev_name}: torch.cuda.memory_allocated = {alloc_mb:.1f} MB | "
+                f"torch.cuda.mem_get_info = free {free_mb:.1f} MB / total {total_mb:.1f} MB (used: {used_mb:.1f} MB)",
+                flush=True,
+            )
+        else:
+            print(f"  {dev_name}: Not available (system has {n_dev} GPU(s))", flush=True)
+
+
+def get_device_placement() -> Tuple[str, str]:
+    """Determine explicit device placement for LLM and retrieval encoders.
+
+    Rules:
+    - MedPsy-4B (and the qwen3-1.7b fallback): cuda:0 ONLY (or cpu if no GPU).
+    - MedCPT query encoder and MedCPT cross-encoder: cuda:1 if available (else CPU).
+    - If only one GPU exists, put encoders on CPU.
+    - FAISS index: CPU only (faiss.read_index, never index_cpu_to_gpu, never StandardGpuResources).
+    """
+    if not torch.cuda.is_available():
+        return "cpu", "cpu"
+    llm_device = "cuda:0"
+    encoder_device = "cuda:1" if torch.cuda.device_count() > 1 else "cpu"
+    return llm_device, encoder_device
+
+
 _CACHED_RETRIEVAL: Dict[str, Any] = {}
 _CACHED_MODELS: Dict[str, LLM] = {}
 
 
-def get_retrieval_system(cfg_path: Optional[str] = None) -> Dict[str, Any]:
-    """Load and cache retrieval models, indexes, chunks, and threshold once at startup."""
+def get_retrieval_system(cfg_path: Optional[str] = None, device: Optional[str] = None) -> Dict[str, Any]:
+    """Load and cache retrieval models, indexes, chunks, and threshold once at startup.
+
+    Encoders are placed on `device` (cuda:1 if multiple GPUs exist, else cpu; NEVER on cuda:0).
+    FAISS index is loaded on CPU with faiss.read_index and NEVER moved to GPU.
+    """
     global _CACHED_RETRIEVAL
     if _CACHED_RETRIEVAL:
         return _CACHED_RETRIEVAL
 
     print("\n[Init] Initializing retrieval components and clinical index...", flush=True)
     t0 = time.time()
-    device = get_device()
+
+    if device is None:
+        _, encoder_device = get_device_placement()
+    else:
+        encoder_device = device
+
     p3_dir = find_phase3_dir()
     print(f"  Using phase3 directory: {p3_dir}")
 
@@ -351,30 +405,37 @@ def get_retrieval_system(cfg_path: Optional[str] = None) -> Dict[str, Any]:
     print(f"  Loading textbook chunks from {chunks_file.name}...")
     chunks = read_jsonl(chunks_file)
     print(f"  Loaded {len(chunks):,} textbook chunks.")
+    print_gpu_memory("After loading textbook chunks (CPU)")
 
-    # 2. Load FAISS Dense Index
+    # 2. Load FAISS Dense Index (Strictly on CPU: faiss.read_index, never index_cpu_to_gpu, never StandardGpuResources)
     faiss_file = p3_dir / "dense.faiss"
-    print(f"  Loading FAISS index from {faiss_file.name}...")
+    print(f"  Loading FAISS index on CPU from {faiss_file.name}...")
     faiss_index = faiss.read_index(str(faiss_file))
+    print(f"  Loaded FAISS CPU index with {faiss_index.ntotal:,} vectors.")
+    print_gpu_memory("After loading FAISS index (CPU)")
 
     # 3. Load BM25 Sparse Index
     bm25_dir = p3_dir / "bm25"
     print(f"  Loading BM25 index from {bm25_dir.name}...")
     bm25_index = bm25s.BM25.load(str(bm25_dir))
     stemmer = Stemmer.Stemmer("english")
+    print_gpu_memory("After loading BM25 index (CPU)")
 
-    # 4. Encoders
-    print("  Loading MedCPT query encoder...")
-    query_enc = encoders.query_encoder(cfg, device)
-    print("  Loading MedCPT cross-encoder reranker...")
-    cross_enc = encoders.cross_encoder(cfg, device)
+    # 4. Encoders (placed on cuda:1 if multiple GPUs, else cpu; NEVER on cuda:0)
+    print(f"  Loading MedCPT query encoder on {encoder_device}...")
+    query_enc = encoders.query_encoder(cfg, encoder_device)
+    print_gpu_memory(f"After loading query encoder on {encoder_device}")
+
+    print(f"  Loading MedCPT cross-encoder reranker on {encoder_device}...")
+    cross_enc = encoders.cross_encoder(cfg, encoder_device)
+    print_gpu_memory(f"After loading cross-encoder on {encoder_device}")
 
     # 5. Validation Rerank Threshold (P20)
     p20_threshold = compute_validation_rerank_threshold_p20()
 
     _CACHED_RETRIEVAL = {
         "cfg": cfg,
-        "device": device,
+        "device": encoder_device,
         "chunks": chunks,
         "faiss_index": faiss_index,
         "bm25_index": bm25_index,
@@ -384,24 +445,26 @@ def get_retrieval_system(cfg_path: Optional[str] = None) -> Dict[str, Any]:
         "rerank_p20": p20_threshold,
     }
     print(f"[Init] Retrieval components successfully cached in {time.time() - t0:.1f}s!\n", flush=True)
+    print_gpu_memory("After completing retrieval system init")
     return _CACHED_RETRIEVAL
 
 
-def get_llm(model_key: str) -> LLM:
-    """Retrieve or load the requested Language Model."""
+def get_llm(model_key: str, device: Optional[str] = None) -> LLM:
+    """Retrieve or load the requested Language Model (cuda:0 ONLY, or cpu if no GPU)."""
     global _CACHED_MODELS
     clean_key = "qwen3-1.7b" if "1.7b" in model_key.lower() else "medpsy-4b"
 
     if clean_key in _CACHED_MODELS:
         return _CACHED_MODELS[clean_key]
 
-    print(f"\n[Model] Loading SLM '{clean_key}' on {get_device()}...", flush=True)
+    target_device = device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"\n[Model] Loading SLM '{clean_key}' on {target_device}...", flush=True)
     t0 = time.time()
     mcfg = MODEL_CONFIGS[clean_key]
-    device = get_device()
-    llm = LLM(mcfg, device)
+    llm = LLM(mcfg, target_device)
     _CACHED_MODELS[clean_key] = llm
     print(f"[Model] '{clean_key}' loaded in {time.time() - t0:.1f}s!\n", flush=True)
+    print_gpu_memory(f"After loading LLM '{clean_key}' on {target_device}")
     return llm
 
 
@@ -801,9 +864,17 @@ if __name__ == "__main__":
     print("Starting MedRAG-SLM Health Worker Chatbot (Kaggle GPU Session)...")
     print("=" * 70)
 
-    # Pre-cache retrieval components and default reasoning model once at startup
-    get_retrieval_system()
-    get_llm(DEFAULT_MODEL)
+    llm_device, encoder_device = get_device_placement()
+    print(f"[Device Placement] LLM: {llm_device} (cuda:0 only) | Encoders: {encoder_device} | FAISS: CPU")
+    print_gpu_memory("Startup memory state before loading")
+
+    # Step 1: Load LLM FIRST on cuda:0 so the model always secures its memory
+    print(f"\n--- [Startup Step 1] Loading LLM ({DEFAULT_MODEL}) FIRST on {llm_device} ---", flush=True)
+    get_llm(DEFAULT_MODEL, device=llm_device)
+
+    # Step 2: Load retrieval components (CPU FAISS, encoders on cuda:1 if available, else CPU)
+    print(f"\n--- [Startup Step 2] Loading retrieval components on {encoder_device} ---", flush=True)
+    get_retrieval_system(device=encoder_device)
 
     app, custom_css = build_interface()
 

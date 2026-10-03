@@ -16,7 +16,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from kaggle_chat.chat_app import check_emergency, evaluate_abstention, strip_thinking
+from unittest.mock import MagicMock, patch
+
+from kaggle_chat.chat_app import (
+    check_emergency,
+    evaluate_abstention,
+    get_device_placement,
+    print_gpu_memory,
+    strip_thinking,
+)
 from src.llm import ABSTAIN_MESSAGE
 
 
@@ -172,6 +180,69 @@ class TestChatAppLogic(unittest.TestCase):
         self.assertNotIn("<think>", cleaned)
         self.assertIn("Clinical step 1", cleaned)
 
+    # -------------------------------------------------------------------------
+    # 4. Device Placement, Allocation Conf, and Memory Tests
+    # -------------------------------------------------------------------------
+    def test_pytorch_cuda_alloc_conf(self):
+        import os
+        self.assertEqual(os.environ.get("PYTORCH_CUDA_ALLOC_CONF"), "expandable_segments:True")
+
+    def test_device_placement_no_gpu(self):
+        with patch("torch.cuda.is_available", return_value=False):
+            llm_dev, enc_dev = get_device_placement()
+            self.assertEqual(llm_dev, "cpu")
+            self.assertEqual(enc_dev, "cpu")
+
+    def test_device_placement_single_gpu(self):
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.device_count", return_value=1):
+            llm_dev, enc_dev = get_device_placement()
+            self.assertEqual(llm_dev, "cuda:0")
+            self.assertEqual(enc_dev, "cpu")
+
+    def test_device_placement_dual_gpu(self):
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.device_count", return_value=2):
+            llm_dev, enc_dev = get_device_placement()
+            self.assertEqual(llm_dev, "cuda:0")
+            self.assertEqual(enc_dev, "cuda:1")
+
+    def test_llm_explicit_cuda0_device_map(self):
+        """Verify LLM does not use device_map='auto' when device='cuda:0' is passed."""
+        with patch("transformers.AutoTokenizer.from_pretrained") as mock_tok, \
+             patch("transformers.AutoModelForCausalLM.from_pretrained") as mock_causal:
+            mock_model = MagicMock()
+            mock_model.generation_config.eos_token_id = 2
+            mock_causal.return_value = mock_model
+            mock_tokenizer = MagicMock()
+            mock_tokenizer.pad_token = None
+            mock_tokenizer.eos_token = "<eos>"
+            mock_tokenizer.eos_token_id = 2
+            mock_tokenizer.pad_token_id = 2
+            mock_tok.return_value = mock_tokenizer
+
+            mcfg = {
+                "name": "medpsy-4b",
+                "id": "qvac/MedPsy-4B",
+                "dtype": "float16",
+                "reasoning": True,
+            }
+            from src.llm import LLM
+            llm = LLM(mcfg, device="cuda:0")
+            _, kwargs = mock_causal.call_args
+            self.assertIn("device_map", kwargs)
+            self.assertEqual(kwargs["device_map"], {"": 0})
+            self.assertNotEqual(kwargs["device_map"], "auto")
+
+    def test_print_gpu_memory_execution(self):
+        """Ensure print_gpu_memory formats and executes without exception."""
+        with patch("torch.cuda.is_available", return_value=True), \
+             patch("torch.cuda.device_count", return_value=2), \
+             patch("torch.cuda.memory_allocated", return_value=4 * 1024 * 1024 * 1024), \
+             patch("torch.cuda.mem_get_info", return_value=(11 * 1024 * 1024 * 1024, 15 * 1024 * 1024 * 1024)):
+            print_gpu_memory("Test Stage")
+
 
 if __name__ == "__main__":
     unittest.main()
+

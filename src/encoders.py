@@ -11,7 +11,7 @@ def _load(name, kind, device):
     tok = AutoTokenizer.from_pretrained(name)
     cls = AutoModelForSequenceClassification if kind == "cross" else AutoModel
     model = cls.from_pretrained(name).to(device).eval()
-    if device == "cuda":
+    if device == "cuda" or (isinstance(device, str) and device.startswith("cuda")):
         model = model.half()
     return tok, model, torch
 

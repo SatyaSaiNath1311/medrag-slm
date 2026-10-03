@@ -301,6 +301,14 @@ class LLM:
         if device == "cuda":
             many = torch.cuda.device_count() > 1 and mcfg["dtype"] == "float32"
             kwargs["device_map"] = "auto" if many else {"": 0}
+        elif isinstance(device, str) and device.startswith("cuda:"):
+            try:
+                gpu_id = int(device.split(":")[-1])
+                kwargs["device_map"] = {"": gpu_id}
+            except ValueError:
+                kwargs["device_map"] = {"": device}
+        elif isinstance(device, int):
+            kwargs["device_map"] = {"": device}
         self.model = cls.from_pretrained(load_path, **kwargs)
         if device == "cpu":
             self.model.to("cpu")
@@ -413,12 +421,12 @@ class LLM:
         enc = {k: v.to(first) for k, v in enc.items()}
         gcfg = GenerationConfig(max_new_tokens=max_new_tokens, do_sample=False, eos_token_id=sorted(self.eos),
                                 pad_token_id=self.pad_id, return_dict_in_generate=True, output_scores=True)
-        if self.device == "cuda":
+        if self.device == "cuda" or (isinstance(self.device, str) and self.device.startswith("cuda")):
             torch.cuda.synchronize()
         t0 = time.perf_counter()
         with torch.inference_mode():
             out = self.model.generate(**enc, generation_config=gcfg)
-        if self.device == "cuda":
+        if self.device == "cuda" or (isinstance(self.device, str) and self.device.startswith("cuda")):
             torch.cuda.synchronize()
         seconds = time.perf_counter() - t0
         L = enc["input_ids"].shape[1]
@@ -506,11 +514,11 @@ class LLM:
                 pad_token_id=self.pad_id,
                 return_dict_in_generate=True,   # ask for ModelOutput; some models return Tensor anyway
             )
-            if self.device == "cuda":
+            if self.device == "cuda" or (isinstance(self.device, str) and self.device.startswith("cuda")):
                 torch.cuda.synchronize()
             with torch.inference_mode():
                 out = self.model.generate(**enc, generation_config=gcfg)
-            if self.device == "cuda":
+            if self.device == "cuda" or (isinstance(self.device, str) and self.device.startswith("cuda")):
                 torch.cuda.synchronize()
 
             # Normalise: some models return a plain Tensor even when return_dict_in_generate=True
@@ -597,5 +605,5 @@ class LLM:
         import gc
         del self.model
         gc.collect()
-        if self.device == "cuda":
+        if self.device == "cuda" or (isinstance(self.device, str) and self.device.startswith("cuda")):
             self.torch.cuda.empty_cache()
