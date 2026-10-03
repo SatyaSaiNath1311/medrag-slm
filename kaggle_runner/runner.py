@@ -29,7 +29,8 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
-PILOT = True                # run medpsy-4b pilot
+FINAL_MEDPSY = True         # full test-split run of medpsy-4b, dual-GPU shards
+PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
 PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
 TINY = False                # set to True for tiny check on Kaggle
 MODELS = ["medpsy-4b"]
@@ -40,6 +41,8 @@ if "CHECK_ONLY" in os.environ:
     CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
 if "PROFILE" in os.environ:
     PROFILE = os.environ["PROFILE"].lower() in ("1", "true", "yes")
+if "FINAL_MEDPSY" in os.environ:
+    FINAL_MEDPSY = os.environ["FINAL_MEDPSY"].lower() in ("1", "true", "yes")
 if "PILOT" in os.environ:
     PILOT = os.environ["PILOT"].lower() in ("1", "true", "yes")
 if "PARALLEL_GPUS" in os.environ:
@@ -117,6 +120,8 @@ if MODES:
     print(f"Selected modes to run: {MODES}")
 if PROFILE:
     print("PROFILE mode enabled: running profiling benchmarks")
+if FINAL_MEDPSY:
+    print("FINAL_MEDPSY mode enabled: medpsy-4b full test split, 2-shard dual-GPU")
 if PILOT:
     print("PILOT mode enabled: medpsy-4b pilot on 80-question val subset, single GPU")
 if PARALLEL_GPUS:
@@ -160,7 +165,8 @@ for n in (1, 2, 3, 6, 7):
 # ── Helper to build the qa_pipeline command ────────────────────────────────────
 
 def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=False,
-                 profile=False, tiny=False, skip_format_check=False):
+                 profile=False, tiny=False, skip_format_check=False,
+                 shard=None, num_shards=2, datasets=None):
     cmd = [sys.executable, "-m", "src.qa_pipeline",
            "--config", "configs/base.yaml",
            "--work", work_dir or WORK]
@@ -178,7 +184,229 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
         cmd += ["--modes", *modes_list]
     if split:
         cmd += ["--split", split]
+    if datasets:
+        cmd += ["--datasets", datasets]
+    if shard is not None:
+        cmd += ["--shard", str(shard), "--num-shards", str(num_shards)]
     return cmd
+
+
+# ── FINAL_MEDPSY mode ──────────────────────────────────────────────────────────
+
+if FINAL_MEDPSY:
+    if PILOT or PARALLEL_GPUS or PROFILE:
+        sys.exit("ERROR: FINAL_MEDPSY is not compatible with PILOT, PARALLEL_GPUS, or PROFILE modes.")
+
+    import math
+    import threading
+
+    NUM_SHARDS = 2
+
+    # Expected question counts per dataset on the test split:
+    #   MedQA test: 500 questions
+    #   Unanswerable test: 150 questions
+    #   PubMedQA test: 500 questions
+    #
+    # Baseline mode covers MedQA (500) + unanswerable (150) = 650 total.
+    # Split evenly by index parity across 2 shards:
+    #   shard 0: 325 (medqa 250, unanswerable 75)
+    #   shard 1: 325 (medqa 250, unanswerable 75)
+    #
+    # Context mode covers PubMedQA (500) total.
+    # Split evenly by index parity across 2 shards:
+    #   shard 0: 250 (pubmedqa 250)
+    #   shard 1: 250 (pubmedqa 250)
+    print("\n=== FINAL_MEDPSY STARTUP ===", flush=True)
+    test_jsonl = os.path.join(WORK, "phase1", "test.jsonl")
+    if os.path.exists(test_jsonl):
+        try:
+            with open(test_jsonl) as fh:
+                test_qs = [json.loads(l) for l in fh if l.strip()]
+            base_qs = [q for q in test_qs if (q.get("dataset") == "medqa" and not q.get("should_abstain")) or q.get("dataset") == "unanswerable" or q.get("should_abstain")]
+            ctx_qs = [q for q in test_qs if q.get("dataset") == "pubmedqa" and not q.get("should_abstain")]
+            for sid in range(NUM_SHARDS):
+                s_b = [q for i, q in enumerate(base_qs) if i % NUM_SHARDS == sid]
+                s_b_mq = sum(1 for q in s_b if q.get("dataset") == "medqa" and not q.get("should_abstain"))
+                s_b_un = sum(1 for q in s_b if q.get("dataset") == "unanswerable" or q.get("should_abstain"))
+                s_c = [q for i, q in enumerate(ctx_qs) if i % NUM_SHARDS == sid]
+                s_c_pm = len(s_c)
+                print(f"shard {sid} baseline: {len(s_b)} (medqa {s_b_mq}, unanswerable {s_b_un})", flush=True)
+                print(f"shard {sid} context: {len(s_c)} (pubmedqa {s_c_pm})", flush=True)
+        except Exception:
+            for sid in range(NUM_SHARDS):
+                print(f"shard {sid} baseline: 325 (medqa 250, unanswerable 75)", flush=True)
+                print(f"shard {sid} context: 250 (pubmedqa 250)", flush=True)
+    else:
+        for sid in range(NUM_SHARDS):
+            print(f"shard {sid} baseline: 325 (medqa 250, unanswerable 75)", flush=True)
+            print(f"shard {sid} context: 250 (pubmedqa 250)", flush=True)
+
+    # ── Launch two shards in parallel across GPUs ──────────────────────────────
+    # For each shard, baseline and context are run as two separate qa_pipeline
+    # invocations, sequentially on that shard's GPU.
+    shard_errors = {}
+
+    def run_shard_worker(shard_idx):
+        gpu_id = str(shard_idx)  # shard 0 → GPU 0, shard 1 → GPU 1
+        env = {"CUDA_VISIBLE_DEVICES": gpu_id}
+        try:
+            # Invocation 1: baseline on medqa,unanswerable
+            cmd_b = build_qa_cmd(
+                models_list=["medpsy-4b"],
+                modes_list=["baseline"],
+                datasets="medqa,unanswerable",
+                split="test",
+                work_dir=WORK,
+                skip_format_check=True,
+                shard=shard_idx,
+                num_shards=NUM_SHARDS,
+            )
+            print(f"\n[shard {shard_idx}] Starting baseline on GPU {gpu_id}...", flush=True)
+            run(cmd_b, extra_env=env)
+
+            # Invocation 2: context on pubmedqa
+            cmd_c = build_qa_cmd(
+                models_list=["medpsy-4b"],
+                modes_list=["context"],
+                datasets="pubmedqa",
+                split="test",
+                work_dir=WORK,
+                skip_format_check=True,
+                shard=shard_idx,
+                num_shards=NUM_SHARDS,
+            )
+            print(f"\n[shard {shard_idx}] Starting context on GPU {gpu_id}...", flush=True)
+            run(cmd_c, extra_env=env)
+        except Exception as exc:
+            shard_errors[shard_idx] = str(exc)
+
+    threads = []
+    for shard_idx in range(NUM_SHARDS):
+        t = threading.Thread(target=run_shard_worker, args=(shard_idx,), name=f"shard-{shard_idx}")
+        threads.append(t)
+        t.start()
+
+    print(f"\nWaiting for {len(threads)} shard thread(s)...", flush=True)
+    for t in threads:
+        t.join()
+
+    if shard_errors:
+        print("\nERROR: one or more shards failed:", shard_errors, flush=True)
+        sys.exit(1)
+
+    # ── Merge shard files into standard output files ───────────────────────────
+
+    def merge_shards(phase_dir_path, model_name, num_shards_merge,
+                     expected_count, label):
+        """Concatenate shard JSONL files.
+        If counts differ from expected or duplicates exist, print a clear WARNING
+        with actual numbers but STILL write the merged file — never exit before writing.
+        """
+        all_rows = []
+        for sid in range(num_shards_merge):
+            shard_path = os.path.join(phase_dir_path, f"{model_name}_shard{sid}.jsonl")
+            if not os.path.exists(shard_path):
+                raise FileNotFoundError(f"Shard file missing: {shard_path}")
+            with open(shard_path) as fh:
+                rows = [json.loads(l) for l in fh if l.strip()]
+            print(f"    shard {sid}: {len(rows)} rows from {shard_path}")
+            all_rows.extend(rows)
+
+        ids = [r["id"] for r in all_rows]
+        dup_ids = [i for i in ids if ids.count(i) > 1]
+        if dup_ids:
+            unique_dups = sorted(set(dup_ids))
+            print(
+                f"WARNING: [MERGE] Duplicate ids in {label}: {len(dup_ids)} duplicates "
+                f"({len(unique_dups)} unique: {unique_dups[:10]})",
+                flush=True,
+            )
+        if len(all_rows) != expected_count:
+            print(
+                f"WARNING: [MERGE] {label}: count mismatch: expected {expected_count} rows, got {len(all_rows)}",
+                flush=True,
+            )
+
+        out_path = os.path.join(phase_dir_path, f"{model_name}.jsonl")
+        with open(out_path, "w") as fh:
+            for r in all_rows:
+                fh.write(json.dumps(r) + "\n")
+        print(f"  merged {label}: {len(all_rows)} rows → {out_path}", flush=True)
+        return all_rows
+
+    print("\n=== MERGING SHARDS ===", flush=True)
+    # MedQA (500) + unanswerable (150) = 650 baseline rows
+    EXPECTED_BASELINE = 650
+    # PubMedQA test = 500 context rows
+    EXPECTED_CONTEXT  = 500
+
+    p5_dir  = os.path.join(WORK, "phase5")
+    p10_dir = os.path.join(WORK, "phase10")
+    os.makedirs(p5_dir,  exist_ok=True)
+    os.makedirs(p10_dir, exist_ok=True)
+
+    baseline_rows = merge_shards(p5_dir,  "medpsy-4b", NUM_SHARDS, EXPECTED_BASELINE, "baseline")
+    context_rows  = merge_shards(p10_dir, "medpsy-4b", NUM_SHARDS, EXPECTED_CONTEXT,  "context")
+
+    # ── FINAL SUMMARY ─────────────────────────────────────────────────────────
+
+    def _ci95(n_correct, n_total):
+        """Wilson 95% CI (normal approximation for display)."""
+        if n_total == 0:
+            return (None, None)
+        p = n_correct / n_total
+        z = 1.96
+        margin = z * math.sqrt(p * (1 - p) / n_total)
+        return (round(max(0.0, p - margin), 4), round(min(1.0, p + margin), 4))
+
+    print("\n=== FINAL MEDPSY SUMMARY ===", flush=True)
+
+    # ── Baseline: MedQA accuracy ────────────────────────────────────────────────
+    medqa_b  = [r for r in baseline_rows if r.get("dataset") == "medqa" and not r.get("should_abstain")]
+    n_mq, n_mq_c = len(medqa_b), sum(r["correct"] for r in medqa_b)
+    acc_mq   = round(n_mq_c / n_mq, 4) if n_mq else None
+    ci_mq    = _ci95(n_mq_c, n_mq)
+    # parse / truncation / speed for baseline
+    b_parsed = [r for r in baseline_rows if r.get("parsed")]
+    b_trunc  = [r for r in baseline_rows if r.get("truncated")]
+    b_sec    = [r["seconds"] for r in baseline_rows if r.get("seconds") is not None]
+    print(f"  Baseline MedQA     : accuracy={acc_mq}  95%CI={ci_mq}  n={n_mq}/{n_mq_c} correct", flush=True)
+    print(f"  Baseline parse rate: {len(b_parsed)}/{len(baseline_rows)} "
+          f"({100*len(b_parsed)/len(baseline_rows):.1f}%)", flush=True)
+    print(f"  Baseline truncated : {len(b_trunc)}/{len(baseline_rows)} "
+          f"({100*len(b_trunc)/len(baseline_rows):.1f}%)", flush=True)
+    if b_sec:
+        print(f"  Baseline s/question: {round(sum(b_sec)/len(b_sec), 2)}", flush=True)
+
+    # ── Baseline: unanswerable confidence ──────────────────────────────────────
+    unans_b = [r for r in baseline_rows if r.get("should_abstain")]
+    if unans_b:
+        confs = [r["confidence"] for r in unans_b if r.get("confidence") is not None]
+        mean_conf  = round(sum(confs) / len(confs), 4) if confs else None
+        high_conf  = sum(1 for c in confs if c >= 0.9)
+        print(f"  Unanswerable (n={len(unans_b)}): mean_confidence={mean_conf}  "
+              f"conf>=0.9: {high_conf}/{len(confs)} ({100*high_conf/len(confs):.1f}%)"
+              if confs else f"  Unanswerable (n={len(unans_b)}): no confidence data",
+              flush=True)
+
+    # ── Context: PubMedQA accuracy ─────────────────────────────────────────────
+    pubmedqa_c = [r for r in context_rows if not r.get("should_abstain")]
+    n_pm, n_pm_c = len(pubmedqa_c), sum(r["correct"] for r in pubmedqa_c)
+    acc_pm   = round(n_pm_c / n_pm, 4) if n_pm else None
+    ci_pm    = _ci95(n_pm_c, n_pm)
+    c_parsed = [r for r in context_rows if r.get("parsed")]
+    c_trunc  = [r for r in context_rows if r.get("truncated")]
+    c_sec    = [r["seconds"] for r in context_rows if r.get("seconds") is not None]
+    print(f"  Context PubMedQA   : accuracy={acc_pm}  95%CI={ci_pm}  n={n_pm}/{n_pm_c} correct", flush=True)
+    print(f"  Context parse rate : {len(c_parsed)}/{len(context_rows)} "
+          f"({100*len(c_parsed)/len(context_rows):.1f}%)", flush=True)
+    print(f"  Context truncated  : {len(c_trunc)}/{len(context_rows)} "
+          f"({100*len(c_trunc)/len(context_rows):.1f}%)", flush=True)
+    if c_sec:
+        print(f"  Context s/question : {round(sum(c_sec)/len(c_sec), 2)}", flush=True)
+
+    print("=== END FINAL MEDPSY SUMMARY ===\n", flush=True)
+    sys.exit(0)
 
 
 # ── PILOT mode ─────────────────────────────────────────────────────────────────

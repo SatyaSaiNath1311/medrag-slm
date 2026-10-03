@@ -118,7 +118,12 @@ def sample_val_subset(val_rows, seed=42):
     return rng.sample(medqa, n_medqa) + rng.sample(pubmedqa, n_pubmedqa)
 
 
-def run_mode(llm, mode, questions, evidence, qcfg, out_path):
+def run_mode(llm, mode, questions, evidence, qcfg, out_path, eta_every_n=None):
+    """Run a single QA mode for one model, writing results to out_path (resumable).
+
+    eta_every_n: if set, print progress after every this many *questions* processed
+                 (not batches). Defaults to every 10 batches.
+    """
     done = {json.loads(l)["id"] for l in open(out_path)} if out_path.exists() else set()
     todo = [q for q in questions if q["id"] not in done]
     if not todo:
@@ -182,6 +187,11 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
 
     t0 = time.time()
     is_idk = "idk" in mode
+    n_questions_done = 0
+    # How many questions between progress prints:
+    # - if eta_every_n is given (sharding): print every eta_every_n questions
+    # - otherwise: print every 10 batches (legacy behaviour)
+    _last_print_q = 0
     for s in range(0, len(todo), bs):
         batch = todo[s:s + bs]
         batch_prompts = [prompts[q["id"]] for q in batch]
@@ -247,14 +257,24 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path):
                 row["citations"] = parse_citations(r["raw_output"], 1)
             rows.append(row)
         append_jsonl(out_path, rows)
-        n_done = min(s + bs, len(todo))
+        n_questions_done += len(batch)
         elapsed = time.time() - t0
         eta_str = ""
-        if n_done > 0 and n_done < len(todo):
-            eta_sec = elapsed / n_done * (len(todo) - n_done)
+        if n_questions_done > 0 and n_questions_done < len(todo):
+            eta_sec = elapsed / n_questions_done * (len(todo) - n_questions_done)
             eta_str = f"  ETA {eta_sec:.0f}s"
-        if (s // bs) % 10 == 0 or n_done == len(todo):
-            print(f"  {mode}: {n_done}/{len(todo)}  ({elapsed:.0f}s){eta_str}", flush=True)
+        should_print = False
+        if eta_every_n is not None:
+            # shard mode: print every eta_every_n questions processed
+            if n_questions_done - _last_print_q >= eta_every_n or n_questions_done == len(todo):
+                should_print = True
+                _last_print_q = n_questions_done
+        else:
+            # default: every 10 batches
+            if (s // bs) % 10 == 0 or n_questions_done == len(todo):
+                should_print = True
+        if should_print:
+            print(f"  {mode}: {n_questions_done}/{len(todo)}  ({elapsed:.0f}s){eta_str}", flush=True)
 
 
 def summarise(path):
@@ -568,6 +588,15 @@ def main():
                     help=("Questions to run: 'test' = test split only; "
                           "'val_subset' = stratified 80-question validation sample (seed 42, PILOT use); "
                           "'all_needed' = test + validation (default)."))
+    ap.add_argument("--datasets", default=None,
+                    help="Comma-separated datasets to include (e.g. medqa,pubmedqa,unanswerable). "
+                         "Applied per mode before sharding.")
+    ap.add_argument("--shard", type=int, default=None, metavar="N",
+                    help="Shard index (0-based).  When set, only questions whose global index "
+                         "satisfies index % num_shards == shard are processed.  Output files "
+                         "are suffixed _shardN.  Must be used together with --num-shards.")
+    ap.add_argument("--num-shards", type=int, default=2, metavar="K",
+                    help="Total number of shards (default 2).  Used with --shard.")
     args = ap.parse_args()
     cfg = load_config(args.config)
     set_seed(cfg["seed"])
@@ -611,6 +640,13 @@ def main():
     ensure_pubmedqa_contexts(test + val, cfg)
     val_pool = list(val)
 
+    # Sharding config (parity-based, deterministic)
+    shard_idx = args.shard
+    num_shards = args.num_shards
+    sharding = shard_idx is not None
+    if sharding and not (0 <= shard_idx < num_shards):
+        raise ValueError(f"--shard {shard_idx} out of range for --num-shards {num_shards}")
+
     # Build question set based on --split
     if args.split == "test":
         questions = test
@@ -619,6 +655,33 @@ def main():
         print(f"  val_subset: {len(questions)} questions (60 MedQA + 20 PubMedQA, seed {cfg['seed']})", flush=True)
     else:  # all_needed
         questions = test + val
+
+    # Filter by --datasets if specified (before sharding)
+    if args.datasets:
+        allowed = {d.strip().lower() for d in args.datasets.split(",") if d.strip()}
+        def _matches_dataset(q):
+            ds = q.get("dataset", "").lower()
+            is_unans = ds == "unanswerable" or q.get("should_abstain") is True
+            if is_unans:
+                return "unanswerable" in allowed
+            return ds in allowed
+        questions = [q for q in questions if _matches_dataset(q)]
+        print(f"  --datasets {args.datasets}: {len(questions)} questions selected", flush=True)
+
+    # Apply parity shard filter: questions are enumerated in a stable order, and only
+    # those whose position index % num_shards == shard_idx are kept.
+    if sharding:
+        questions = [q for i, q in enumerate(questions) if i % num_shards == shard_idx]
+        n_mq = sum(1 for q in questions if q.get("dataset") == "medqa" and not q.get("should_abstain"))
+        n_un = sum(1 for q in questions if q.get("dataset") == "unanswerable" or q.get("should_abstain"))
+        n_pm = sum(1 for q in questions if q.get("dataset") == "pubmedqa" and not q.get("should_abstain"))
+        parts = []
+        if n_mq: parts.append(f"medqa {n_mq}")
+        if n_un: parts.append(f"unanswerable {n_un}")
+        if n_pm: parts.append(f"pubmedqa {n_pm}")
+        breakdown_str = f" ({', '.join(parts)})" if parts else ""
+        mode_str = f" {run_modes[0]}" if len(run_modes) == 1 else ""
+        print(f"shard {shard_idx}{mode_str}: {len(questions)}{breakdown_str}", flush=True)
 
     if "rag" in run_modes or "rag_idk" in run_modes or args.check_only or args.profile:
         p7 = phase_dir(args.work, 7)
@@ -668,20 +731,22 @@ def main():
                         continue
                 if not args.check_only:
                     print(f"  --modes {run_modes}: skipping Phase 4 (format check) and Phase 5 (baseline)", flush=True)
+                    shard_suffix = f"_shard{shard_idx}" if sharding else ""
+                    _eta_n = 25 if sharding else None
                     for mode in run_modes:
                         if mode == "baseline":
                             p_out, q_subset = p5, questions
-                            out_file = p_out / f"{m['name']}.jsonl"
+                            out_file = p_out / f"{m['name']}{shard_suffix}.jsonl"
                         elif mode == "rag":
                             p_out, q_subset = p8, questions
-                            out_file = p_out / f"{m['name']}.jsonl"
+                            out_file = p_out / f"{m['name']}{shard_suffix}.jsonl"
                         elif mode == "context":
                             p_out, q_subset = p10, [q for q in questions if q["dataset"] == "pubmedqa"]
-                            out_file = p_out / f"{m['name']}.jsonl"
+                            out_file = p_out / f"{m['name']}{shard_suffix}.jsonl"
                         elif mode in ("baseline_idk", "rag_idk"):
                             p_out, q_subset = p12, questions
-                            out_file = p_out / f"{m['name']}_{mode}.jsonl"
-                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file)
+                            out_file = p_out / f"{m['name']}_{mode}{shard_suffix}.jsonl"
+                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file, eta_every_n=_eta_n)
                 status[m["name"]] = "DONE"
             else:
                 check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
@@ -691,20 +756,22 @@ def main():
                     status[m["name"]] = "FAILED format check (see phase4/%s.json)" % m["name"]
                     print(f"  !! {status[m['name']]}")
                 else:
+                    shard_suffix = f"_shard{shard_idx}" if sharding else ""
+                    _eta_n = 25 if sharding else None
                     for mode in run_modes:
                         if mode == "baseline":
                             p_out, q_subset = p5, questions
-                            out_file = p_out / f"{m['name']}.jsonl"
+                            out_file = p_out / f"{m['name']}{shard_suffix}.jsonl"
                         elif mode == "rag":
                             p_out, q_subset = p8, questions
-                            out_file = p_out / f"{m['name']}.jsonl"
+                            out_file = p_out / f"{m['name']}{shard_suffix}.jsonl"
                         elif mode == "context":
                             p_out, q_subset = p10, [q for q in questions if q["dataset"] == "pubmedqa"]
-                            out_file = p_out / f"{m['name']}.jsonl"
+                            out_file = p_out / f"{m['name']}{shard_suffix}.jsonl"
                         elif mode in ("baseline_idk", "rag_idk"):
                             p_out, q_subset = p12, questions
-                            out_file = p_out / f"{m['name']}_{mode}.jsonl"
-                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file)
+                            out_file = p_out / f"{m['name']}_{mode}{shard_suffix}.jsonl"
+                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file, eta_every_n=_eta_n)
                     status[m["name"]] = "DONE"
             llm.close()
         except Exception as e:  # noqa: BLE001 - one broken model must not stop the others
