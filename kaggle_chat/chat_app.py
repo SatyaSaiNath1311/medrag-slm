@@ -617,7 +617,7 @@ def chat_pipeline(
     messages.append({"role": "user", "content": user_display})
     messages.append({"role": "assistant", "content": "🩺 Thinking… (about 20–40 s)"})
     # Yield intermediate state; inputs are cleared via empty strings ""
-    yield list(messages), "", "", "", "", ""
+    yield [dict(m) for m in messages], "", "", "", "", ""
 
     t_total_start = time.perf_counter()
 
@@ -669,10 +669,15 @@ def chat_pipeline(
 
         hw_prompt = (
             "You are a clinical decision support assistant for community health workers. "
-            "Answer the following question in simple, clear language using the provided medical textbook evidence.\n"
-            "Format your answer in at most 6 short bullet points.\n"
-            "Cite supporting evidence using bracketed numbers like [1], [2] where applicable.\n"
-            "If the passages and your knowledge are not enough to answer confidently and safely, "
+            "Answer the following question in simple, clear language using only the provided medical textbook evidence.\n\n"
+            "Instructions:\n"
+            "1. List the 2–3 most likely causes, ordered with the most likely first.\n"
+            "2. Give simple first steps for patient care.\n"
+            "3. ALWAYS list danger signs that need urgent referral.\n"
+            "4. Cite a passage [n] ONLY if that passage directly supports that exact sentence — otherwise give no citation for that line.\n"
+            "5. Never state numbers or timelines that are not in the passages.\n"
+            "6. Keep your answer to at most 7 short bullet points.\n"
+            "7. If the passages and your knowledge are not enough to answer confidently and safely, "
             "say exactly 'INSUFFICIENT INFORMATION'.\n\n"
             f"Evidence:\n{ev_text}\n\n"
             f"Health Worker Question: {user_q}\n\n"
@@ -750,38 +755,39 @@ def chat_pipeline(
     else:
         content_body = clean_output
 
-    # 6. Format References Section
+    # 6. Format References Section (show only passages actually cited in final answer)
     cited_nums = parse_citations(clean_output, len(top_passages))
-    ref_passages = [p for p in top_passages if p["rank"] in cited_nums] if cited_nums else top_passages
+    ref_passages = [p for p in top_passages if p["rank"] in cited_nums]
 
-    ref_items = []
-    for p in ref_passages:
-        r = p["rank"]
-        src = p.get("title", p.get("source", "Medical Textbook"))
-        text_snippet = p.get("text", "").strip()
-        first_200 = text_snippet[:200].replace("\n", " ") + ("..." if len(text_snippet) > 200 else "")
-        ref_items.append(
-            f"- **[{r}] {src}**: {first_200}\n"
-            f"  <details><summary>Expand full passage</summary>\n\n  > {text_snippet}\n  </details>"
-        )
-    references_block = "### 📚 References:\n" + "\n".join(ref_items)
+    if ref_passages:
+        ref_items = []
+        for p in ref_passages:
+            r = p["rank"]
+            src = p.get("title", p.get("source", "Medical Textbook"))
+            text_snippet = p.get("text", "").strip()
+            first_200 = text_snippet[:200].replace("\n", " ") + ("..." if len(text_snippet) > 200 else "")
+            ref_items.append(
+                f"- **[{r}] {src}**: {first_200}\n"
+                f"  <details><summary>Expand full passage</summary>\n\n  > {text_snippet}\n  </details>"
+            )
+        references_block = "### 📚 References:\n" + "\n".join(ref_items)
+    else:
+        references_block = ""
 
     # 7. Final Response Assembly
     timing_line = f"⏱️ *Response time: {total_sec:.1f}s (Retrieval: {retrieval_sec:.2f}s | Generation: {gen_sec:.2f}s | Model: {clean_model_key})*"
 
-    final_bot_reply = (
-        f"{emergency_banner}"
-        f"{content_body}\n\n"
-        f"---\n"
-        f"{references_block}\n\n"
-        f"---\n"
-        f"{timing_line}\n\n"
-        f"{MANDATORY_FOOTER}"
-    )
+    reply_sections = [f"{emergency_banner}{content_body}"]
+    if references_block:
+        reply_sections.append(references_block)
+    reply_sections.append(timing_line)
+    reply_sections.append(MANDATORY_FOOTER)
 
-    # Update assistant message in place with final answer and yield updated history
-    messages[-1]["content"] = final_bot_reply
-    yield list(messages), "", "", "", "", ""
+    final_bot_reply = "\n\n---\n\n".join(reply_sections)
+
+    # Update assistant message with final answer and yield updated history
+    messages[-1] = {"role": "assistant", "content": final_bot_reply}
+    yield [dict(m) for m in messages], "", "", "", "", ""
 
 
 # -----------------------------------------------------------------------------
