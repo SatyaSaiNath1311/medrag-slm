@@ -9,6 +9,7 @@ Tables:
 3. Efficiency: Latency per question, Generation Throughput (tokens/sec), Prompt Tokens, Peak Memory (VRAM/RAM).
 """
 import argparse
+import fractions
 import json
 import math
 import os
@@ -84,27 +85,91 @@ def text_contains_option(passage_text: str, option_text: str) -> bool:
     return text_contains_option_exact(passage_text, option_text) or text_contains_option_first_word_removed(passage_text, option_text)
 
 
+def mcnemar_exact(a_correct: List[bool], b_correct: List[bool]) -> float:
+    """Exact two-sided binomial McNemar test using high-precision arithmetic.
+
+    Computes exact binomial p-value using arbitrary-precision integers/fractions
+    and log-space arithmetic (math.lgamma) for extreme tails.
+    """
+    a_wins = sum(1 for a, b in zip(a_correct, b_correct) if a and not b)
+    b_wins = sum(1 for a, b in zip(a_correct, b_correct) if not a and b)
+    n = a_wins + b_wins
+    if n == 0:
+        return 1.0
+    k = min(a_wins, b_wins)
+    if k == n / 2.0:
+        return 1.0
+
+    # 1. Exact calculation using arbitrary-precision integers and fractions
+    try:
+        num = 2 * sum(math.comb(n, i) for i in range(k + 1))
+        den = 1 << n
+        if num >= den:
+            return 1.0
+        frac = fractions.Fraction(num, den)
+        p_val = float(frac)
+        if p_val > 0.0:
+            return p_val
+    except Exception:
+        pass
+
+    # 2. Log-space arithmetic with math.lgamma for extreme tails / underflow
+    ln2 = math.log(2.0)
+    lgamma_n1 = math.lgamma(n + 1)
+    log_terms = [
+        lgamma_n1 - math.lgamma(i + 1) - math.lgamma(n - i + 1) - n * ln2
+        for i in range(k + 1)
+    ]
+    max_log = max(log_terms)
+    sum_scaled = sum(math.exp(t - max_log) for t in log_terms)
+    log_p = ln2 + max_log + math.log(sum_scaled)
+    if log_p >= 0.0:
+        return 1.0
+    log10_p = log_p / math.log(10.0)
+    if log10_p < -300.0:
+        return 0.0
+    return math.pow(10.0, log10_p)
+
+
+def format_p_value(p: Any) -> str:
+    """Format p-value: scientific notation if < 0.001, '< 1e-300' if below 1e-300, never 0.00e+00."""
+    if p is None or p == "" or p == "n/a":
+        return "n/a"
+    if isinstance(p, str):
+        return p
+    if p <= 0.0 or p < 1e-300:
+        return "< 1e-300"
+    if p < 0.001:
+        return f"{p:.2e}"
+    return f"{p:.5f}"
+
+
 # ---------- Main Data Assembly ----------
 
 def load_data(qa_dir: Path, build_dir: Path, context_dir: Path):
-    """Load all relevant artifacts across the 5 models."""
-    models = ["qwen3-4b", "phi4-mini", "gemma3-4b", "qwen3-1.7b", "smollm3-3b"]
+    """Load all relevant artifacts across models including medpsy-4b."""
+    candidate_models = ["medpsy-4b", "qwen3-4b", "phi4-mini", "gemma3-4b", "qwen3-1.7b", "smollm3-3b"]
+    models = []
     data = {}
 
     test_q_path = build_dir / "work" / "phase1" / "test.jsonl"
     ev_path = build_dir / "work" / "phase7" / "evidence.jsonl"
 
-    test_dict = {r["id"]: r for r in map(json.loads, open(test_q_path)) if r.get("id")}
-    ev_dict = {r["id"]: r for r in map(json.loads, open(ev_path)) if r.get("id")}
+    test_dict = {r["id"]: r for r in map(json.loads, open(test_q_path)) if r.get("id")} if test_q_path.exists() else {}
+    ev_dict = {r["id"]: r for r in map(json.loads, open(ev_path)) if r.get("id")} if ev_path.exists() else {}
 
-    for m in models:
+    for m in candidate_models:
         p5 = qa_dir / m / "work" / "phase5" / f"{m}.jsonl"
         p8 = qa_dir / m / "work" / "phase8" / f"{m}.jsonl"
         p10 = context_dir / "work" / "phase10" / f"{m}.jsonl"
         adapt_json = Path("outputs/analysis") / f"adaptive_rag_{m}.json"
 
-        b_rows = [json.loads(l) for l in open(p5) if l.strip()]
-        r_rows = [json.loads(l) for l in open(p8) if l.strip()]
+        if not (p5.exists() or p8.exists() or p10.exists()):
+            continue
+
+        models.append(m)
+        b_rows = [json.loads(l) for l in open(p5) if l.strip()] if p5.exists() else []
+        r_rows = [json.loads(l) for l in open(p8) if l.strip()] if p8.exists() else []
         c_rows = [json.loads(l) for l in open(p10) if l.strip()] if p10.exists() else []
         adapt_meta = json.load(open(adapt_json)) if adapt_json.exists() else {}
 
@@ -130,57 +195,62 @@ def assemble_variant_records(model: str, model_data: Dict[str, Any], test_dict: 
     b_map = {r["id"]: r for r in b_test}
     r_map = {r["id"]: r for r in r_test}
 
-    # Identify best adaptive gate
-    adapt_meta = model_data["adaptive_meta"]
-    tr = adapt_meta.get("test_results", {})
-    candidate_gates = ["rerank_gate", "confidence_gate", "combined"]
-    best_gate = max(candidate_gates, key=lambda g: tr.get(g, {}).get("acc_overall", -1.0))
-    best_gate_tr = tr.get(best_gate, {})
+    variants = {}
 
-    gate_name_map = {
-        "rerank_gate": "Adaptive (Rerank Gate)",
-        "confidence_gate": "Adaptive (Confidence Gate)",
-        "combined": "Adaptive (Combined Gate)",
-    }
-    adaptive_display_name = gate_name_map.get(best_gate, f"Adaptive ({best_gate})")
-
-    # Reconstruct predictions for best adaptive gate
-    adapt_records = []
-    tuning = adapt_meta.get("tuning_validation", {})
-    tau_rerank = tuning.get("rerank_gate", {}).get("best_tau")
-    comb_tau = tuning.get("combined", {}).get("best_tau")
-    comb_delta = tuning.get("combined", {}).get("best_delta", 0.0)
-
-    for r in r_test:
-        qid = r["id"]
-        b = b_map.get(qid, {})
-        use_rag = False
-        if best_gate == "rerank_gate" and tau_rerank is not None:
-            use_rag = r.get("top_rerank_score") is not None and r.get("top_rerank_score") >= tau_rerank
-        elif best_gate == "confidence_gate":
-            use_rag = (r.get("confidence") is not None and b.get("confidence") is not None and r.get("confidence") > b.get("confidence"))
-        elif best_gate == "combined" and comb_tau is not None:
-            use_rag = (r.get("top_rerank_score") is not None and r.get("top_rerank_score") >= comb_tau) and not (r.get("confidence", 0.0) < b.get("confidence", 0.0) - comb_delta)
-
-        chosen = r if use_rag else b
-        rec = dict(chosen)
-        rec["_used_rag"] = use_rag
-        adapt_records.append(rec)
-
-    variants = {
-        "Baseline": {
+    if b_test:
+        variants["Baseline"] = {
             "records": b_test,
             "unanswerable": b_unans,
             "is_rag": False,
             "is_adaptive": False,
-        },
-        "Full RAG": {
+        }
+
+    if r_test:
+        variants["Full RAG"] = {
             "records": r_test,
             "unanswerable": r_unans,
             "is_rag": True,
             "is_adaptive": False,
-        },
-        adaptive_display_name: {
+        }
+
+        # Identify best adaptive gate if metadata is available
+        adapt_meta = model_data.get("adaptive_meta", {})
+        tr = adapt_meta.get("test_results", {})
+        candidate_gates = ["rerank_gate", "confidence_gate", "combined"]
+        best_gate = max(candidate_gates, key=lambda g: tr.get(g, {}).get("acc_overall", -1.0))
+        best_gate_tr = tr.get(best_gate, {})
+
+        gate_name_map = {
+            "rerank_gate": "Adaptive (Rerank Gate)",
+            "confidence_gate": "Adaptive (Confidence Gate)",
+            "combined": "Adaptive (Combined Gate)",
+        }
+        adaptive_display_name = gate_name_map.get(best_gate, f"Adaptive ({best_gate})")
+
+        # Reconstruct predictions for best adaptive gate
+        adapt_records = []
+        tuning = adapt_meta.get("tuning_validation", {})
+        tau_rerank = tuning.get("rerank_gate", {}).get("best_tau")
+        comb_tau = tuning.get("combined", {}).get("best_tau")
+        comb_delta = tuning.get("combined", {}).get("best_delta", 0.0)
+
+        for r in r_test:
+            qid = r["id"]
+            b = b_map.get(qid, {})
+            use_rag = False
+            if best_gate == "rerank_gate" and tau_rerank is not None:
+                use_rag = r.get("top_rerank_score") is not None and r.get("top_rerank_score") >= tau_rerank
+            elif best_gate == "confidence_gate":
+                use_rag = (r.get("confidence") is not None and b.get("confidence") is not None and r.get("confidence") > b.get("confidence"))
+            elif best_gate == "combined" and comb_tau is not None:
+                use_rag = (r.get("top_rerank_score") is not None and r.get("top_rerank_score") >= comb_tau) and not (r.get("confidence", 0.0) < b.get("confidence", 0.0) - comb_delta)
+
+            chosen = r if use_rag else b
+            rec = dict(chosen)
+            rec["_used_rag"] = use_rag
+            adapt_records.append(rec)
+
+        variants[adaptive_display_name] = {
             "records": adapt_records,
             "unanswerable": b_unans,
             "is_rag": False,
@@ -188,8 +258,7 @@ def assemble_variant_records(model: str, model_data: Dict[str, Any], test_dict: 
             "gate_key": best_gate,
             "cost_sec_per_q": best_gate_tr.get("cost_sec_per_q"),
             "rag_pct": best_gate_tr.get("rag_pct"),
-        },
-    }
+        }
 
     if c_test:
         variants["+Abstract (PubMedQA)"] = {
@@ -234,45 +303,67 @@ def build_table_1(models, test_dict, all_data):
             if is_ctx:
                 # PubMedQA only
                 p_recs = [r for r in recs if r.get("dataset") == "pubmedqa"]
-                p_correct = [1 if r["correct"] else 0 for r in p_recs]
-                p_acc = sum(p_correct) / len(p_correct)
-                p_ci = bootstrap_ci(p_correct)
-                p_f1 = macro_f1([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
-                p_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
+                if p_recs:
+                    p_correct = [1 if r["correct"] else 0 for r in p_recs]
+                    p_acc = sum(p_correct) / len(p_correct)
+                    p_ci = bootstrap_ci(p_correct)
+                    p_f1 = macro_f1([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
+                    p_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
+                    p_acc_str = f"{p_acc:.1%} [{p_ci[0]:.3f}, {p_ci[1]:.3f}]"
+                    p_em_str = f"{p_acc:.1%}"
+                    p_f1_str = f"{p_f1:.3f} [{p_f1_ci[0]:.3f}, {p_f1_ci[1]:.3f}]"
+                else:
+                    p_acc_str = p_em_str = p_f1_str = "n/a"
 
                 lines.append(
                     f"| **{m}** | {v_name} | — | — | — | — | — | — | "
-                    f"{p_acc:.1%} [{p_ci[0]:.3f}, {p_ci[1]:.3f}] | {p_acc:.1%} | {p_f1:.3f} [{p_f1_ci[0]:.3f}, {p_f1_ci[1]:.3f}] |"
+                    f"{p_acc_str} | {p_em_str} | {p_f1_str} |"
                 )
             else:
-                # Overall
-                ov_correct = [1 if r["correct"] else 0 for r in recs]
-                ov_acc = sum(ov_correct) / len(ov_correct)
-                ov_ci = bootstrap_ci(ov_correct)
-                ov_f1 = macro_f1([r["gold"] for r in recs], [r["pred"] for r in recs], labels_all)
-                ov_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in recs], [r["pred"] for r in recs], labels_all)
-
-                # MedQA
                 m_recs = [r for r in recs if r.get("dataset") == "medqa"]
-                m_correct = [1 if r["correct"] else 0 for r in m_recs]
-                m_acc = sum(m_correct) / len(m_correct)
-                m_ci = bootstrap_ci(m_correct)
-                m_f1 = macro_f1([r["gold"] for r in m_recs], [r["pred"] for r in m_recs], labels_medqa)
-                m_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in m_recs], [r["pred"] for r in m_recs], labels_medqa)
-
-                # PubMedQA
                 p_recs = [r for r in recs if r.get("dataset") == "pubmedqa"]
-                p_correct = [1 if r["correct"] else 0 for r in p_recs]
-                p_acc = sum(p_correct) / len(p_correct)
-                p_ci = bootstrap_ci(p_correct)
-                p_f1 = macro_f1([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
-                p_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
+
+                if m_recs:
+                    m_correct = [1 if r["correct"] else 0 for r in m_recs]
+                    m_acc = sum(m_correct) / len(m_correct)
+                    m_ci = bootstrap_ci(m_correct)
+                    m_f1 = macro_f1([r["gold"] for r in m_recs], [r["pred"] for r in m_recs], labels_medqa)
+                    m_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in m_recs], [r["pred"] for r in m_recs], labels_medqa)
+                    m_acc_str = f"{m_acc:.1%} [{m_ci[0]:.3f}, {m_ci[1]:.3f}]"
+                    m_em_str = f"{m_acc:.1%}"
+                    m_f1_str = f"{m_f1:.3f} [{m_f1_ci[0]:.3f}, {m_f1_ci[1]:.3f}]"
+                else:
+                    m_acc_str = m_em_str = m_f1_str = "n/a"
+
+                if p_recs:
+                    p_correct = [1 if r["correct"] else 0 for r in p_recs]
+                    p_acc = sum(p_correct) / len(p_correct)
+                    p_ci = bootstrap_ci(p_correct)
+                    p_f1 = macro_f1([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
+                    p_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in p_recs], [r["pred"] for r in p_recs], labels_pubmed)
+                    p_acc_str = f"{p_acc:.1%} [{p_ci[0]:.3f}, {p_ci[1]:.3f}]"
+                    p_em_str = f"{p_acc:.1%}"
+                    p_f1_str = f"{p_f1:.3f} [{p_f1_ci[0]:.3f}, {p_f1_ci[1]:.3f}]"
+                else:
+                    p_acc_str = p_em_str = p_f1_str = "n/a"
+
+                if m_recs and p_recs:
+                    ov_correct = [1 if r["correct"] else 0 for r in recs]
+                    ov_acc = sum(ov_correct) / len(ov_correct)
+                    ov_ci = bootstrap_ci(ov_correct)
+                    ov_f1 = macro_f1([r["gold"] for r in recs], [r["pred"] for r in recs], labels_all)
+                    ov_f1_ci = bootstrap_macro_f1_ci([r["gold"] for r in recs], [r["pred"] for r in recs], labels_all)
+                    ov_acc_str = f"{ov_acc:.1%} [{ov_ci[0]:.3f}, {ov_ci[1]:.3f}]"
+                    ov_em_str = f"{ov_acc:.1%}"
+                    ov_f1_str = f"{ov_f1:.3f} [{ov_f1_ci[0]:.3f}, {ov_f1_ci[1]:.3f}]"
+                else:
+                    ov_acc_str = ov_em_str = ov_f1_str = "n/a"
 
                 lines.append(
                     f"| **{m}** | {v_name} | "
-                    f"{ov_acc:.1%} [{ov_ci[0]:.3f}, {ov_ci[1]:.3f}] | {ov_acc:.1%} | {ov_f1:.3f} [{ov_f1_ci[0]:.3f}, {ov_f1_ci[1]:.3f}] | "
-                    f"{m_acc:.1%} [{m_ci[0]:.3f}, {m_ci[1]:.3f}] | {m_acc:.1%} | {m_f1:.3f} [{m_f1_ci[0]:.3f}, {m_f1_ci[1]:.3f}] | "
-                    f"{p_acc:.1%} [{p_ci[0]:.3f}, {p_ci[1]:.3f}] | {p_acc:.1%} | {p_f1:.3f} [{p_f1_ci[0]:.3f}, {p_f1_ci[1]:.3f}] |"
+                    f"{ov_acc_str} | {ov_em_str} | {ov_f1_str} | "
+                    f"{m_acc_str} | {m_em_str} | {m_f1_str} | "
+                    f"{p_acc_str} | {p_em_str} | {p_f1_str} |"
                 )
     lines.append("")
     return "\n".join(lines)
@@ -427,9 +518,9 @@ def build_table_3(models, test_dict, all_data):
         "> 2. **gemma3-4b**: Loaded in float32 across 2×T4; RAG used batch size 2 vs 8 for baseline, so peak VRAM is not directly comparable across its modes.\n"
     )
     lines.append(
-        "| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Peak VRAM | Peak RAM |"
+        "| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Parse Rate | Trunc Rate | Peak VRAM | Peak RAM |"
     )
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|")
 
     for m in models:
         variants = assemble_variant_records(m, all_data[m], test_dict)
@@ -449,6 +540,12 @@ def build_table_3(models, test_dict, all_data):
             gen_toks = sum(r.get("gen_tokens", 0) for r in recs)
             gen_secs = sum(r.get("seconds", 0.0) for r in recs)
             tps = (gen_toks / gen_secs) if gen_secs > 0 else 0.0
+
+            # Compute parse and truncation rates
+            parse_cnt = sum(1 for r in recs if r.get("parsed"))
+            parse_str = f"{parse_cnt / len(recs):.1%}" if recs else "n/a"
+            trunc_cnt = sum(1 for r in recs if r.get("truncated"))
+            trunc_str = f"{trunc_cnt / len(recs):.1%}" if recs else "0.0%"
 
             # Compute average latency
             if is_adapt:
@@ -476,14 +573,75 @@ def build_table_3(models, test_dict, all_data):
                         ram_str = f"{rss_mb / 1024:.1f} GB"
 
             lines.append(
-                f"| **{m}** | {v_name} | {avg_lat:.3f} s | {tps:.1f} tok/s | {mean_prompt:.1f} | {vram_str} | {ram_str} |"
+                f"| **{m}** | {v_name} | {avg_lat:.3f} s | {tps:.1f} tok/s | {mean_prompt:.1f} | {parse_str} | {trunc_str} | {vram_str} | {ram_str} |"
             )
 
     lines.append("")
-    lines.append("4 of 5 models run on a single 16 GB T4 including RAG; RAG adds ~1.2–1.8 GB VRAM.")
+    lines.append("4 of 5 SLM models run on a single 16 GB T4 including RAG; RAG adds ~1.2–1.8 GB VRAM. MedPsy-4B utilizes test-time reasoning (~1,024 max tokens).")
     lines.append("")
     return "\n".join(lines)
 
+
+# ---------- Build Table 4: MedPsy Pairwise McNemar Comparisons ----------
+
+def build_table_4(models, all_data):
+    """Build pairwise McNemar comparison table of medpsy-4b vs SLM baselines on MedQA test IDs."""
+    if "medpsy-4b" not in all_data:
+        return ""
+
+    medpsy_b_test = [r for r in all_data["medpsy-4b"]["baseline"] if r.get("split") == "test" and r.get("dataset") == "medqa"]
+    if not medpsy_b_test:
+        return ""
+
+    medpsy_map = {r["id"]: bool(r["correct"]) for r in medpsy_b_test}
+    medpsy_ci = bootstrap_ci([1 if c else 0 for c in medpsy_map.values()])
+
+    lines = []
+    lines.append("## Table 4: MedPsy-4B Baseline vs SLM Baselines Pairwise Comparison (MedQA Test, $N=500$)")
+    lines.append(
+        "> **Setup**: Exact two-sided binomial McNemar test comparing `medpsy-4b` baseline against standard SLM baselines "
+        "on the identical held-out MedQA test questions ($N=500$).  \n"
+        "> **Contingency Matrix**: $b$ = MedPsy correct & Other incorrect; $c$ = MedPsy incorrect & Other correct.  \n"
+        "> **Significance**: *** $p < 0.001$, ** $p < 0.01$, * $p < 0.05$.\n"
+    )
+    lines.append(
+        "| Comparison Baseline | MedPsy-4B Acc [95% CI] | Other Model Acc [95% CI] | Δ Acc (pts) | MedPsy+ / Other- ($b$) | MedPsy- / Other+ ($c$) | McNemar $p$-value | Significance |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|")
+
+    for m in models:
+        if m == "medpsy-4b":
+            continue
+        m_b_test = [r for r in all_data[m]["baseline"] if r.get("split") == "test" and r.get("dataset") == "medqa"]
+        m_map = {r["id"]: bool(r["correct"]) for r in m_b_test}
+
+        shared_ids = [qid for qid in medpsy_map if qid in m_map]
+        if not shared_ids:
+            continue
+
+        medpsy_flags = [medpsy_map[qid] for qid in shared_ids]
+        other_flags = [m_map[qid] for qid in shared_ids]
+
+        b = sum(1 for mp, ot in zip(medpsy_flags, other_flags) if mp and not ot)
+        c = sum(1 for mp, ot in zip(medpsy_flags, other_flags) if not mp and ot)
+        p_val = mcnemar_exact(medpsy_flags, other_flags)
+
+        other_ci = bootstrap_ci([1 if f else 0 for f in other_flags])
+        mp_acc = sum(medpsy_flags) / len(shared_ids)
+        ot_acc = sum(other_flags) / len(shared_ids)
+        delta_pts = (mp_acc - ot_acc) * 100
+
+        sig = "***" if (p_val < 0.001 or p_val < 1e-300) else ("**" if p_val < 0.01 else ("*" if p_val < 0.05 else "ns"))
+        p_str = format_p_value(p_val)
+
+        lines.append(
+            f"| vs **{m}** | {mp_acc:.1%} [{medpsy_ci[0]:.3f}, {medpsy_ci[1]:.3f}] | "
+            f"{ot_acc:.1%} [{other_ci[0]:.3f}, {other_ci[1]:.3f}] | "
+            f"+{delta_pts:.1f} | {b} | {c} | {p_str} | {sig} |"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ---------- Main ----------
@@ -509,8 +667,8 @@ def main():
     lines = []
     lines.append("# Medical RAG Small Language Model (SLM) Benchmark: Presentation Tables\n")
     lines.append(
-        "Comprehensive empirical evaluation comparing five open-weight small language models (1.7B to 4B parameters) "
-        "across **Baseline (parametric-only)**, **Full RAG**, **Best Adaptive Gate**, and **+Abstract (PubMedQA oracle context)**.\n"
+        "Comprehensive empirical evaluation comparing open-weight small language models (1.7B to 4B parameters) "
+        "and medical reasoning models across **Baseline (parametric-only)**, **Full RAG**, **Best Adaptive Gate**, and **+Abstract (PubMedQA oracle context)**.\n"
     )
 
     print("Building Table 1: QA Performance...")
@@ -521,6 +679,11 @@ def main():
 
     print("Building Table 3: Efficiency & Cost...")
     lines.append(build_table_3(models, test_dict, all_data))
+
+    print("Building Table 4: MedPsy-4B Baseline Comparisons...")
+    table_4 = build_table_4(models, all_data)
+    if table_4:
+        lines.append(table_4)
 
     out_file = out_dir / "presentation_tables.md"
     out_file.write_text("\n".join(lines))

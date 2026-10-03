@@ -1,6 +1,6 @@
 # Medical RAG Small Language Model (SLM) Benchmark: Presentation Tables
 
-Comprehensive empirical evaluation comparing five open-weight small language models (1.7B to 4B parameters) across **Baseline (parametric-only)**, **Full RAG**, **Best Adaptive Gate**, and **+Abstract (PubMedQA oracle context)**.
+Comprehensive empirical evaluation comparing open-weight small language models (1.7B to 4B parameters) and medical reasoning models across **Baseline (parametric-only)**, **Full RAG**, **Best Adaptive Gate**, and **+Abstract (PubMedQA oracle context)**.
 
 ## Table 1: Question-Answering Performance across Architectures and Inference Modes
 > **Setup**: Evaluated on the held-out test split ($N=1,000$ answerable: 500 MedQA + 500 PubMedQA).  
@@ -13,6 +13,8 @@ Comprehensive empirical evaluation comparing five open-weight small language mod
 
 | Model | Variant | Overall Acc [95% CI] | Overall EM | Overall Macro-F1 [95% CI] | MedQA Acc [95% CI] | MedQA EM | MedQA Macro-F1 [95% CI] | PubMedQA Acc [95% CI] | PubMedQA EM | PubMedQA Macro-F1 [95% CI] |
 |---|---|---|---|---|---|---|---|---|---|---|
+| **medpsy-4b** | Baseline | n/a | n/a | n/a | 87.6% [0.846, 0.904] | 87.6% | 0.875 [0.845, 0.903] | n/a | n/a | n/a |
+| **medpsy-4b** | +Abstract (PubMedQA) | — | — | — | — | — | — | 78.0% [0.746, 0.814] | 78.0% | 0.630 [0.583, 0.679] |
 | **qwen3-4b** | Baseline | 55.4% [0.523, 0.584] | 55.4% | 0.520 [0.486, 0.553] | 58.4% [0.538, 0.626] | 58.4% | 0.582 [0.536, 0.622] | 52.4% [0.478, 0.568] | 52.4% | 0.355 [0.313, 0.397] |
 | **qwen3-4b** | Full RAG | 54.4% [0.513, 0.574] | 54.4% | 0.526 [0.490, 0.561] | 60.4% [0.560, 0.648] | 60.4% | 0.597 [0.552, 0.640] | 48.4% [0.442, 0.528] | 48.4% | 0.403 [0.361, 0.446] |
 | **qwen3-4b** | Adaptive (Combined Gate) | 58.3% [0.553, 0.614] | 58.3% | 0.555 [0.519, 0.589] | 61.4% [0.572, 0.660] | 61.4% | 0.610 [0.567, 0.656] | 55.2% [0.512, 0.596] | 55.2% | 0.413 [0.372, 0.458] |
@@ -56,6 +58,7 @@ Comprehensive empirical evaluation comparing five open-weight small language mod
 ### Model Reliability and Hallucination Breakdown
 | Model | Variant | Wrong Answers ($N$) | Faithfulness % (Count / $N_{\text{RAG}}$) | Hallucination Rate: Wrong $\ge 0.90$ % (Count/$N$) | Hallucination Rate: Unanswerable $\ge 0.90$ % (Count/150) | Citation Validity % |
 |---|---|---|---|---|---|---|
+| **medpsy-4b** | Baseline | 62 | — | 85.5% (53/62) | 86.0% (129/150) | — |
 | **qwen3-4b** | Baseline | 208 | — | 82.7% (172/208) | 82.7% (124/150) | — |
 | **qwen3-4b** | Full RAG | 198 | 31.2% (156/500) | 82.8% (164/198) | 88.0% (132/150) | 100.0% |
 | **qwen3-4b** | Adaptive (Combined Gate) | 193 | 33.3% (117/351) | 95.3% (184/193) | 82.7% (124/150) | 100.0% |
@@ -84,27 +87,42 @@ Comprehensive empirical evaluation comparing five open-weight small language mod
 > 1. **Timing source**: Latency and throughput are computed over full test runs ($N=1,000$ questions); profiling used 20 questions per mode (10 for context) on Kaggle 2×T4.  
 > 2. **gemma3-4b**: Loaded in float32 across 2×T4; RAG used batch size 2 vs 8 for baseline, so peak VRAM is not directly comparable across its modes.
 
-| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Peak VRAM | Peak RAM |
-|---|---|---|---|---|---|---|
-| **qwen3-4b** | Baseline | 0.223 s | 71.8 tok/s | 161.2 | 8.4 GB | 3.5 GB |
-| **qwen3-4b** | Full RAG | 1.579 s | 12.7 tok/s | 1200.1 | 10.2 GB | 3.5 GB |
-| **qwen3-4b** | Adaptive (Combined Gate) | 1.802 s | 17.3 tok/s | 843.9 | 10.2 GB | 3.5 GB |
-| **qwen3-4b** | +Abstract (PubMedQA) | 0.406 s | 21.8 tok/s | 440.8 | 8.7 GB | 3.5 GB |
-| **phi4-mini** | Baseline | 0.162 s | 60.5 tok/s | 146.2 | 8.0 GB | 4.3 GB |
-| **phi4-mini** | Full RAG | 1.256 s | 20.1 tok/s | 1138.9 | 9.6 GB | 4.3 GB |
-| **phi4-mini** | Adaptive (Confidence Gate) | 1.418 s | 23.9 tok/s | 722.5 | 9.6 GB | 4.3 GB |
-| **phi4-mini** | +Abstract (PubMedQA) | 0.485 s | 25.4 tok/s | 411.8 | 8.3 GB | 4.3 GB |
-| **gemma3-4b** | Baseline | 0.611 s | 18.7 tok/s | 157.8 | 18.4 GB | 5.8 GB |
-| **gemma3-4b** | Full RAG | 3.449 s | 3.4 tok/s | 1144.7 | 17.6 GB | 5.6 GB |
-| **gemma3-4b** | Adaptive (Rerank Gate) | 1.842 s | 6.5 tok/s | 555.9 | 17.6 GB | 5.6 GB |
-| **gemma3-4b** | +Abstract (PubMedQA) | 1.422 s | 5.0 tok/s | 431.6 | 16.8 GB | 5.6 GB |
-| **qwen3-1.7b** | Baseline | 0.117 s | 136.6 tok/s | 161.2 | 4.5 GB | 6.2 GB |
-| **qwen3-1.7b** | Full RAG | 0.823 s | 52.3 tok/s | 1200.1 | 5.8 GB | 6.2 GB |
-| **qwen3-1.7b** | Adaptive (Combined Gate) | 0.940 s | 59.0 tok/s | 839.9 | 5.8 GB | 6.2 GB |
-| **qwen3-1.7b** | +Abstract (PubMedQA) | 0.333 s | 106.4 tok/s | 440.8 | 4.7 GB | 6.2 GB |
-| **smollm3-3b** | Baseline | 0.162 s | 98.6 tok/s | 213.5 | 6.4 GB | 5.2 GB |
-| **smollm3-3b** | Full RAG | 1.067 s | 42.3 tok/s | 1225.1 | 7.6 GB | 5.2 GB |
-| **smollm3-3b** | Adaptive (Rerank Gate) | 0.691 s | 49.6 tok/s | 736.0 | 7.6 GB | 5.2 GB |
-| **smollm3-3b** | +Abstract (PubMedQA) | 0.464 s | 32.5 tok/s | 480.2 | 6.6 GB | 5.0 GB |
+| Model | Variant | Avg Latency (s/q) | End-to-End Tokens/s (includes prompt processing) | Mean Prompt Tokens | Parse Rate | Trunc Rate | Peak VRAM | Peak RAM |
+|---|---|---|---|---|---|---|---|---|
+| **medpsy-4b** | Baseline | 37.303 s | 15.1 tok/s | 305.8 | 90.4% | 10.6% | pending | pending |
+| **medpsy-4b** | +Abstract (PubMedQA) | 30.279 s | 16.1 tok/s | 496.8 | 99.8% | 0.2% | pending | pending |
+| **qwen3-4b** | Baseline | 0.223 s | 71.8 tok/s | 161.2 | 100.0% | 0.0% | 8.4 GB | 3.5 GB |
+| **qwen3-4b** | Full RAG | 1.579 s | 12.7 tok/s | 1200.1 | 100.0% | 0.0% | 10.2 GB | 3.5 GB |
+| **qwen3-4b** | Adaptive (Combined Gate) | 1.802 s | 17.3 tok/s | 843.9 | 100.0% | 0.0% | 10.2 GB | 3.5 GB |
+| **qwen3-4b** | +Abstract (PubMedQA) | 0.406 s | 21.8 tok/s | 440.8 | 100.0% | 0.0% | 8.7 GB | 3.5 GB |
+| **phi4-mini** | Baseline | 0.162 s | 60.5 tok/s | 146.2 | 100.0% | 0.0% | 8.0 GB | 4.3 GB |
+| **phi4-mini** | Full RAG | 1.256 s | 20.1 tok/s | 1138.9 | 100.0% | 0.0% | 9.6 GB | 4.3 GB |
+| **phi4-mini** | Adaptive (Confidence Gate) | 1.418 s | 23.9 tok/s | 722.5 | 100.0% | 0.0% | 9.6 GB | 4.3 GB |
+| **phi4-mini** | +Abstract (PubMedQA) | 0.485 s | 25.4 tok/s | 411.8 | 100.0% | 0.0% | 8.3 GB | 4.3 GB |
+| **gemma3-4b** | Baseline | 0.611 s | 18.7 tok/s | 157.8 | 100.0% | 0.0% | 18.4 GB | 5.8 GB |
+| **gemma3-4b** | Full RAG | 3.449 s | 3.4 tok/s | 1144.7 | 100.0% | 0.0% | 17.6 GB | 5.6 GB |
+| **gemma3-4b** | Adaptive (Rerank Gate) | 1.842 s | 6.5 tok/s | 555.9 | 100.0% | 0.0% | 17.6 GB | 5.6 GB |
+| **gemma3-4b** | +Abstract (PubMedQA) | 1.422 s | 5.0 tok/s | 431.6 | 100.0% | 0.0% | 16.8 GB | 5.6 GB |
+| **qwen3-1.7b** | Baseline | 0.117 s | 136.6 tok/s | 161.2 | 100.0% | 0.0% | 4.5 GB | 6.2 GB |
+| **qwen3-1.7b** | Full RAG | 0.823 s | 52.3 tok/s | 1200.1 | 100.0% | 0.0% | 5.8 GB | 6.2 GB |
+| **qwen3-1.7b** | Adaptive (Combined Gate) | 0.940 s | 59.0 tok/s | 839.9 | 100.0% | 0.0% | 5.8 GB | 6.2 GB |
+| **qwen3-1.7b** | +Abstract (PubMedQA) | 0.333 s | 106.4 tok/s | 440.8 | 100.0% | 0.0% | 4.7 GB | 6.2 GB |
+| **smollm3-3b** | Baseline | 0.162 s | 98.6 tok/s | 213.5 | 100.0% | 0.0% | 6.4 GB | 5.2 GB |
+| **smollm3-3b** | Full RAG | 1.067 s | 42.3 tok/s | 1225.1 | 100.0% | 0.0% | 7.6 GB | 5.2 GB |
+| **smollm3-3b** | Adaptive (Rerank Gate) | 0.691 s | 49.6 tok/s | 736.0 | 100.0% | 0.0% | 7.6 GB | 5.2 GB |
+| **smollm3-3b** | +Abstract (PubMedQA) | 0.464 s | 32.5 tok/s | 480.2 | 100.0% | 0.0% | 6.6 GB | 5.0 GB |
 
-4 of 5 models run on a single 16 GB T4 including RAG; RAG adds ~1.2–1.8 GB VRAM.
+4 of 5 SLM models run on a single 16 GB T4 including RAG; RAG adds ~1.2–1.8 GB VRAM. MedPsy-4B utilizes test-time reasoning (~1,024 max tokens).
+
+## Table 4: MedPsy-4B Baseline vs SLM Baselines Pairwise Comparison (MedQA Test, $N=500$)
+> **Setup**: Exact two-sided binomial McNemar test comparing `medpsy-4b` baseline against standard SLM baselines on the identical held-out MedQA test questions ($N=500$).  
+> **Contingency Matrix**: $b$ = MedPsy correct & Other incorrect; $c$ = MedPsy incorrect & Other correct.  
+> **Significance**: *** $p < 0.001$, ** $p < 0.01$, * $p < 0.05$.
+
+| Comparison Baseline | MedPsy-4B Acc [95% CI] | Other Model Acc [95% CI] | Δ Acc (pts) | MedPsy+ / Other- ($b$) | MedPsy- / Other+ ($c$) | McNemar $p$-value | Significance |
+|---|---|---|---|---|---|---|---|
+| vs **qwen3-4b** | 87.6% [0.846, 0.904] | 58.4% [0.540, 0.624] | +29.2 | 176 | 30 | 2.49e-26 | *** |
+| vs **phi4-mini** | 87.6% [0.846, 0.904] | 53.4% [0.488, 0.578] | +34.2 | 189 | 18 | 3.81e-37 | *** |
+| vs **gemma3-4b** | 87.6% [0.846, 0.904] | 48.6% [0.440, 0.532] | +39.0 | 217 | 22 | 1.75e-41 | *** |
+| vs **qwen3-1.7b** | 87.6% [0.846, 0.904] | 44.6% [0.402, 0.488] | +43.0 | 235 | 20 | 9.75e-48 | *** |
+| vs **smollm3-3b** | 87.6% [0.846, 0.904] | 41.6% [0.374, 0.460] | +46.0 | 250 | 20 | 9.70e-52 | *** |

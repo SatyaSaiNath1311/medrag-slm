@@ -5,6 +5,7 @@ All figures are rendered at 300 DPI (`.png`) and vector graphics (`.svg`) using 
 - **Full RAG**: Strong Blue (`#1F77B4`)
 - **Adaptive Gate**: Green (`#2CA02C`)
 - **+Abstract Context**: Vivid Orange (`#FF7F0E`)
+- **MedPsy-4B Reasoning**: Royal Purple (`#7E57C2`) / Forest Green (`#1B5E20`)
 
 ---
 
@@ -22,3 +23,5 @@ All figures are rendered at 300 DPI (`.png`) and vector graphics (`.svg`) using 
 | **fig8_overconfidence** | Persistent Overconfidence | Both baseline and RAG exhibit severe overconfidence, assigning >=0.90 probability to 20–95% of wrong answers and unanswerable questions alike. |
 | **fig9_calibration** | Phi-4-mini Reliability Diagram | Temperature scaling reduces calibration error (ECE) from 25.9% to 4.9% for Phi-4-mini (RAG). |
 | **fig10_memory** | Peak VRAM Footprint | Four out of five models run comfortably on a single 16 GB T4 GPU with RAG adding only 1.2–1.8 GB of VRAM overhead. |
+| **fig11_improvement_ladder** | MedQA Accuracy Improvement Ladder | Clinical accuracy rises from 58.4% (best SLM baseline) to 61.4% (+adaptive RAG), leaps to 87.6% with MedPsy-4B reasoning, and reaches 93.1% when abstaining on truncated thinking (89.4% coverage). |
+| **fig12_medpsy_abstention** | Reasoning Budget & Abstention Distribution | Unanswerable clinical questions exhaust the 1,024-token thinking budget at 4.4× the rate of answerable vignettes (46.7% vs 10.6%), enabling high-precision zero-parameter abstention. |
