@@ -160,7 +160,7 @@ for n in (1, 2, 3, 6, 7):
 # ── Helper to build the qa_pipeline command ────────────────────────────────────
 
 def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=False,
-                 profile=False, tiny=False):
+                 profile=False, tiny=False, skip_format_check=False):
     cmd = [sys.executable, "-m", "src.qa_pipeline",
            "--config", "configs/base.yaml",
            "--work", work_dir or WORK]
@@ -170,6 +170,8 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
         cmd.append("--profile")
     if tiny:
         cmd.append("--tiny")
+    if skip_format_check:
+        cmd.append("--skip-format-check")
     if models_list:
         cmd += ["--models", *models_list]
     if modes_list:
@@ -200,6 +202,7 @@ if PILOT:
         modes_list=["baseline", "context"],
         split="val_subset",
         work_dir=pilot_work,
+        skip_format_check=True,   # reasoning model — skip standard parse-rate format check
     )
     print("\n=== PILOT RUN: medpsy-4b, 80-question val subset, GPU 0 ===", flush=True)
     run(pilot_cmd, extra_env={"CUDA_VISIBLE_DEVICES": "0"})

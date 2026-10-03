@@ -504,6 +504,7 @@ class LLM:
                 do_sample=False,
                 eos_token_id=sorted(self.eos),
                 pad_token_id=self.pad_id,
+                return_dict_in_generate=True,   # ask for ModelOutput; some models return Tensor anyway
             )
             if self.device == "cuda":
                 torch.cuda.synchronize()
@@ -512,15 +513,18 @@ class LLM:
             if self.device == "cuda":
                 torch.cuda.synchronize()
 
-            gen_ids = out.sequences[0, enc["input_ids"].shape[1]:].tolist()
-            cut = next((i for i, t in enumerate(gen_ids) if t in self.eos), len(gen_ids))
-            gen_ids = gen_ids[:cut]
+            # Normalise: some models return a plain Tensor even when return_dict_in_generate=True
+            seqs = out.sequences if hasattr(out, "sequences") else out
+            prompt_ids_len = enc["input_ids"].shape[1]
+            all_gen_ids = seqs[0, prompt_ids_len:].tolist()
+            cut = next((i for i, t in enumerate(all_gen_ids) if t in self.eos), len(all_gen_ids))
+            gen_ids = all_gen_ids[:cut]
             gen_text = self.tok.decode(gen_ids, skip_special_tokens=True)
 
             # Detect whether we ended without a final "Answer:" line
+            # truncated = hit the cap (cut == full generated length) and no final answer found
             has_final_answer = bool(re.search(r"(?:^|\n)Answer\s*:\s*[A-Za-z]", gen_text, re.MULTILINE))
-            truncated = (cut == len(out.sequences[0, enc["input_ids"].shape[1]:].tolist())
-                         and not has_final_answer)
+            truncated = (cut == len(all_gen_ids) and not has_final_answer)
 
             # For re-feed: if truncated close any open think block
             refeed_generated = close_open_think_block(gen_text) if truncated else gen_text

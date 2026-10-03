@@ -561,6 +561,9 @@ def main():
     ap.add_argument("--strict", action="store_true", help="Exit with an error if any model did not finish")
     ap.add_argument("--dry-run", action="store_true", help="Print selected models and exit without running")
     ap.add_argument("--check-only", action="store_true", help="Run only Phase 4 format check for selected models and exit")
+    ap.add_argument("--skip-format-check", action="store_true",
+                    help="Skip Phase 4 format check entirely and go straight to QA modes. "
+                         "Useful for reasoning models or when format check has already been validated.")
     ap.add_argument("--split", choices=["test", "val_subset", "all_needed"], default="all_needed",
                     help=("Questions to run: 'test' = test split only; "
                           "'val_subset' = stratified 80-question validation sample (seed 42, PILOT use); "
@@ -577,7 +580,10 @@ def main():
 
     # Determine which QA modes to run
     run_modes = list(args.modes) if args.modes else ["baseline", "rag"]
-    skip_checks = all(m in ("rag", "context", "baseline_idk", "rag_idk") for m in run_modes)
+    # skip_checks: True when mode set implies no baseline and thus no format check needed
+    # skip_format_check: explicit flag — always skip Phase 4 regardless of modes
+    skip_checks = (args.skip_format_check
+                   or all(m in ("rag", "context", "baseline_idk", "rag_idk") for m in run_modes))
 
     # Model selection (before data load so --dry-run doesn't need the work dir)
     all_models = {m["name"]: m for m in cfg["models"] + [cfg["tiny_model"]]}

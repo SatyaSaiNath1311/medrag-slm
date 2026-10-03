@@ -291,6 +291,190 @@ class TestReasoningPrompts(unittest.TestCase):
         self.assertIn("CUDA_VISIBLE_DEVICES", runner_text)
         self.assertIn('"0"', runner_text)
 
+    def test_pilot_passes_skip_format_check(self):
+        """PILOT build_qa_cmd must include --skip-format-check."""
+        import pathlib
+        runner_text = pathlib.Path("kaggle_runner/runner.py").read_text()
+        self.assertIn("--skip-format-check", runner_text)
+        self.assertIn("skip_format_check=True", runner_text)
+
+
+# ── Mock-model tests for generate_reasoning output normalisation ───────────────
+
+class _FakeTokenizer:
+    """Minimal tokenizer stub sufficient for generate_reasoning."""
+
+    def __init__(self, vocab_size=32000):
+        self.vocab_size = vocab_size
+        self.padding_side = "left"
+        self.pad_token = "<pad>"
+        self.pad_token_id = 0
+        self.eos_token = "</s>"
+        self.eos_token_id = 1
+        # fixed encoding map used by letter_ids
+        self._enc = {
+            "A": [65], " A": [265],
+            "B": [66], " B": [266],
+            "C": [67], " C": [267],
+            "D": [68], " D": [268],
+        }
+
+    def __call__(self, texts, return_tensors=None, padding=None, add_special_tokens=None):
+        import torch
+        # Always return a fixed 5-token prompt so we can predict offset
+        ids = torch.zeros(1, 5, dtype=torch.long)
+        mask = torch.ones(1, 5, dtype=torch.long)
+        return {"input_ids": ids, "attention_mask": mask}
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=False, enable_thinking=False):
+        return messages[0]["content"] + "\n"
+
+    def decode(self, ids, skip_special_tokens=True):
+        # ids [66] → "B", ids [67] → "C", etc.
+        mapping = {65: "A", 66: "B", 67: "C", 68: "D"}
+        return "".join(mapping.get(i, "") for i in ids)
+
+    def encode(self, text, add_special_tokens=False):
+        return self._enc.get(text, [999])
+
+
+class _FakeModel:
+    """Minimal model stub.  generate_mode controls the return type."""
+
+    def __init__(self, gen_ids, mode="plain_tensor"):
+        """
+        gen_ids  — token ids to 'generate' (list[int]), appended after the 5-prompt tokens.
+        mode     — "plain_tensor"  : return a plain Tensor (shape [1, prompt+gen])
+                   "model_output"  : return an object with .sequences attribute
+        """
+        import torch
+        self._gen_ids = gen_ids
+        self._mode = mode
+        self._param = torch.zeros(1, requires_grad=False)
+
+    def parameters(self):
+        yield self._param
+
+    def eval(self):
+        return self
+
+    def generate(self, input_ids, attention_mask=None, generation_config=None):
+        import torch
+        prompt_len = input_ids.shape[1]
+        gen_t = torch.tensor(self._gen_ids, dtype=torch.long).unsqueeze(0)
+        full = torch.cat([input_ids, gen_t], dim=1)
+        if self._mode == "plain_tensor":
+            return full
+        else:
+            class _Out:
+                pass
+            o = _Out()
+            o.sequences = full
+            return o
+
+    # forward pass used by _letter_probs_refeed
+    def __call__(self, input_ids=None, attention_mask=None):
+        import torch
+        # Return logits where token 66 ("B") has the highest score at last position
+        vocab = 32000
+        logits = torch.zeros(1, input_ids.shape[1], vocab)
+        logits[0, -1, 66] = 10.0   # "B" wins
+        class _ModelOut:
+            pass
+        o = _ModelOut()
+        o.logits = logits
+        return o
+
+
+def _make_fake_llm(gen_ids, generate_mode="plain_tensor"):
+    """Build an LLM-like object using _FakeModel and _FakeTokenizer, bypassing __init__."""
+    import torch
+    from src import llm as llm_module
+    obj = object.__new__(llm_module.LLM)
+    obj.tok = _FakeTokenizer()
+    obj.model = _FakeModel(gen_ids, mode=generate_mode)
+    obj.cfg = {"name": "test-model", "reasoning": True}
+    obj.device = "cpu"
+    obj.torch = torch
+    obj.is_reasoning = True
+    obj.eos = {1}          # eos_token_id = 1
+    obj.pad_id = 0
+    obj._letter_ids = {}
+    return obj
+
+
+class TestGenerateReasoningOutputShape(unittest.TestCase):
+    """Verify that generate_reasoning handles both plain-Tensor and .sequences outputs."""
+
+    # gen_ids that spell "\nAnswer: B" (token 66 = 'B', 1 = eos)
+    GEN_IDS = [10, 65, 110, 115, 119, 101, 114, 58, 32, 66, 1]  # arbitrary ids ending in 66 then eos
+    # Simpler: just use token 66 (B) and eos (1)
+    GEN_IDS_SIMPLE = [66, 1]
+
+    def _run_and_check(self, llm_obj):
+        """Run generate_reasoning with a single prompt and check the returned structure."""
+        prompt = "What is the answer?"
+        letters = ["A", "B", "C", "D"]
+        results = llm_obj.generate_reasoning([prompt], [letters], max_new_tokens=32)
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        # Schema checks
+        self.assertIn("raw_output", r)
+        self.assertIn("gen_tokens", r)
+        self.assertIn("prompt_tokens", r)
+        self.assertIn("truncated", r)
+        self.assertIn("seconds", r)
+        self.assertIn("_pred", r)
+        self.assertIn("_pred_source", r)
+        self.assertIn("_parsed", r)
+        # gen_tokens should equal len(GEN_IDS_SIMPLE) - 1 (eos trimmed)
+        self.assertEqual(r["gen_tokens"], 1)  # [66] after eos strip
+        return r
+
+    def test_plain_tensor_output(self):
+        """model.generate returns a plain Tensor — must not raise AttributeError."""
+        llm = _make_fake_llm(self.GEN_IDS_SIMPLE, generate_mode="plain_tensor")
+        r = self._run_and_check(llm)
+        # pred should come from logprob_refeed (fake decode of [66] → "B" may not parse)
+        self.assertIn(r["_pred_source"], ("parsed", "logprob_refeed", "none"))
+
+    def test_model_output_with_sequences(self):
+        """model.generate returns an object with .sequences — must work identically."""
+        llm = _make_fake_llm(self.GEN_IDS_SIMPLE, generate_mode="model_output")
+        r = self._run_and_check(llm)
+        self.assertIn(r["_pred_source"], ("parsed", "logprob_refeed", "none"))
+
+    def test_both_paths_produce_same_gen_tokens(self):
+        """The two return-type paths must produce the same gen_tokens count."""
+        r_tensor = _make_fake_llm(self.GEN_IDS_SIMPLE, "plain_tensor").generate_reasoning(
+            ["Q?"], [["A", "B", "C", "D"]], 32)
+        r_obj = _make_fake_llm(self.GEN_IDS_SIMPLE, "model_output").generate_reasoning(
+            ["Q?"], [["A", "B", "C", "D"]], 32)
+        self.assertEqual(r_tensor[0]["gen_tokens"], r_obj[0]["gen_tokens"])
+
+    def test_eos_stripped_correctly(self):
+        """EOS token must not appear in gen_tokens count."""
+        # gen_ids = [66, 1] → after eos strip → [66] → gen_tokens=1
+        llm = _make_fake_llm([66, 1], "plain_tensor")
+        results = llm.generate_reasoning(["Q?"], [["A", "B", "C", "D"]], 32)
+        self.assertEqual(results[0]["gen_tokens"], 1)
+
+    def test_truncated_flag_set_when_no_answer_line(self):
+        """If all gen_ids were consumed without an Answer: line, truncated=True."""
+        # GEN IDS that don't include any recognisable "Answer:" pattern
+        # and eos never appears (so cut == len(all_gen_ids))
+        # Use a single non-eos token: [99]
+        llm = _make_fake_llm([99], "plain_tensor")
+        results = llm.generate_reasoning(["Q?"], [["A", "B", "C", "D"]], 32)
+        self.assertTrue(results[0]["truncated"])
+
+    def test_truncated_false_when_eos_hit(self):
+        """If EOS is hit before cap, truncated must be False even without Answer: line."""
+        # [99, 1] → cut=1, all_gen_ids has 2 items; cut(1) != len(2) → not truncated
+        llm = _make_fake_llm([99, 1], "plain_tensor")
+        results = llm.generate_reasoning(["Q?"], [["A", "B", "C", "D"]], 32)
+        self.assertFalse(results[0]["truncated"])
+
 
 if __name__ == "__main__":
     unittest.main()
