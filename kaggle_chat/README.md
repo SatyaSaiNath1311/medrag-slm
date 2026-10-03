@@ -3,7 +3,7 @@
 This directory contains the Gradio-based interactive clinical decision support application tailored for **Community Health Workers (CHWs)** and primary care providers.
 
 The chatbot runs on a free **Kaggle GPU accelerator (T4)** with:
-- **Authoritative Textbook Knowledge Base**: 124,078 chunks across 18 medical textbooks (Harrison's Internal Medicine, Katzung Pharmacology, Schwartz's Surgery, Nelson Pediatrics, Novak Gynecology, etc.).
+- **Authoritative Textbook Knowledge Base**: 124,077 chunks across 18 medical textbooks (Harrison's Internal Medicine, Katzung Pharmacology, Schwartz's Surgery, Nelson Pediatrics, Novak Gynecology, etc.).
 - **Hybrid Retrieval & Reranking**: BM25 sparse lexical search + MedCPT dense FAISS embeddings (top-20) reranked by MedCPT Cross-Encoder (top-5).
 - **MedPsy-4B Clinical Reasoning**: 1,024-token reasoning budget with concise health-worker bullet points.
 - **Active Red-Flag Emergency Screening**: Detects acute danger signs (chest pain, severe breathlessness, convulsions, pregnancy complications, infant high fever) and immediately outputs a call-108 emergency referral banner.
@@ -33,9 +33,9 @@ Follow these steps to launch the live demo on Kaggle with a public Gradio URL:
 #### Cell 1: Environment Setup & Code Sync
 ```python
 # Cell 1: Setup dependencies and clone repository
-!pip install -q gradio bm25s PyStemmer faiss-gpu-cu12 transformers accelerate
-!git clone https://github.com/SatyaSaiNath1311/medrag-slm.git /kaggle/working/medrag-slm
+!git clone --depth 1 https://github.com/SatyaSaiNath1311/medrag-slm.git /kaggle/working/medrag-slm
 %cd /kaggle/working/medrag-slm
+!pip install -q -r requirements.txt gradio
 ```
 
 #### Cell 2: Launch the Chatbot

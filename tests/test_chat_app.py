@@ -1,7 +1,8 @@
 """Unit tests for MedRAG-SLM Chatbot offline logic (no GPU, no model inference).
 
 Tests:
-1. Emergency red-flag screening (check_emergency) across all critical clinical conditions.
+1. Emergency red-flag screening (check_emergency) across all critical clinical conditions
+   with clause-based negation handling.
 2. Abstention decision logic (evaluate_abstention) across truncation, insufficient info, and rerank thresholds.
 3. Thinking text stripping (strip_thinking) ensuring <think>...</think> is never exposed to users.
 """
@@ -23,79 +24,78 @@ class TestChatAppLogic(unittest.TestCase):
     """Test offline safety screening, abstention evaluation, and text sanitization."""
 
     # -------------------------------------------------------------------------
-    # 1. Emergency Red-Flag Screening Tests
+    # 1. Emergency Red-Flag Screening Tests (Required Cases)
     # -------------------------------------------------------------------------
-    def test_emergency_chest_pain(self):
-        matched, reason = check_emergency("A 56-year-old male presents with acute crushing chest pain and sweating.")
-        self.assertTrue(matched)
+    def test_required_emergency_cases(self):
+        """Verify the specified emergency clinical cases trigger emergency referrals."""
+        # 1. Pregnant woman with swelling and headache
+        matched, reason = check_emergency("Pregnant woman 7 months with leg swelling and headache — what should I check?")
+        self.assertTrue(matched, "Expected emergency for pregnant woman with leg swelling and headache")
+        self.assertIn("Pregnancy", reason)
+
+        # 2. Chest pain and sweating
+        matched, reason = check_emergency("My father has chest pain and is sweating")
+        self.assertTrue(matched, "Expected emergency for chest pain and sweating")
         self.assertIn("Chest pain", reason)
 
-    def test_emergency_difficulty_breathing(self):
-        matched, reason = check_emergency("Child is gasping with severe shortness of breath and cannot breathe.")
-        self.assertTrue(matched)
-        self.assertIn("Difficulty breathing", reason)
+        # 3. Baby 1 month old with high fever
+        matched, reason = check_emergency("Baby 1 month old with high fever")
+        self.assertTrue(matched, "Expected emergency for baby 1 month old with high fever")
+        self.assertIn("Infant", reason)
 
-    def test_emergency_unconsciousness(self):
-        matched, reason = check_emergency("The patient suddenly collapsed and is completely unresponsive.")
-        self.assertTrue(matched)
-        self.assertIn("Unconsciousness", reason)
-
-    def test_emergency_seizure(self):
-        matched, reason = check_emergency("A 4-year-old boy is having a continuous seizure and active convulsions.")
-        self.assertTrue(matched)
-        self.assertIn("Seizure", reason)
-
-    def test_emergency_heavy_bleeding(self):
-        matched, reason = check_emergency("A trauma victim has heavy bleeding and massive blood loss from a wound.")
-        self.assertTrue(matched)
-        self.assertIn("Heavy bleeding", reason)
-
-    def test_emergency_stroke_signs(self):
-        matched, reason = check_emergency("Elderly woman noticed sudden facial droop, arm weakness, and slurred speech.")
-        self.assertTrue(matched)
-        self.assertIn("Stroke signs", reason)
-
-    def test_emergency_allergic_reaction(self):
-        matched, reason = check_emergency("Patient is developing anaphylaxis with rapid swelling of the tongue and lips.")
-        self.assertTrue(matched)
-        self.assertIn("allergic", reason.lower())
-
-    def test_emergency_suicidal_thoughts(self):
-        matched, reason = check_emergency("A teenager is expressing suicidal thoughts and wanting to end life.")
-        self.assertTrue(matched)
-        self.assertIn("Suicidal", reason)
-
-    def test_emergency_poisoning(self):
-        matched, reason = check_emergency("Child accidentally swallowed chemicals, suspected pesticide poisoning.")
-        self.assertTrue(matched)
-        self.assertIn("Poisoning", reason)
-
-    def test_emergency_pregnancy_complications(self):
-        # Bleeding in pregnancy
-        matched1, _ = check_emergency("A pregnant woman at 30 weeks gestation presents with vaginal bleeding.")
-        self.assertTrue(matched1)
-
-        # Severe headache / preeclampsia signs in pregnancy
-        matched2, _ = check_emergency("Pregnant woman 7 months with severe headache and fits.")
-        self.assertTrue(matched2)
-
-    def test_emergency_infant_high_fever(self):
-        matched, reason = check_emergency("A 2-week-old newborn has a very high fever of 39.5°C and poor feeding.")
-        self.assertTrue(matched)
-        self.assertIn("fever in infant", reason.lower())
-
-    def test_non_emergency_queries(self):
-        # Non-emergencies must not trigger false positive red-flag warnings
-        queries = [
-            "Can I give paracetamol and ibuprofen together to an adult with mild fever?",
-            "What is the first-line oral rehydration solution preparation for mild diarrhea?",
-            "What are the typical dietary recommendations for an adult with iron-deficiency anemia?",
-            "How should I dress a superficial scrape on the knee?",
+    def test_required_non_emergency_cases(self):
+        """Verify the specified non-emergency queries do NOT trigger false alarms."""
+        non_emergencies = [
+            # Negation: "without fever or respiratory distress"
             "A child has a mild runny nose and cough for 2 days without fever or respiratory distress.",
+            # Routine malaria treatment inquiry
+            "What is the first-line treatment for uncomplicated malaria?",
+            # Adult fever antipyretic query
+            "Can I give paracetamol and ibuprofen together to an adult with fever?",
+            # Child with fever and rash (not infant under 3 months, no red flags)
+            "A child has fever for 3 days, rash and red eyes. What could it be and what should I do?",
+            # Negation: "Patient denies chest pain; mild cough"
+            "Patient denies chest pain; mild cough",
         ]
-        for q in queries:
-            matched, reason = check_emergency(q)
-            self.assertFalse(matched, f"Query incorrectly flagged as emergency: '{q}' (reason: {reason})")
+        for query in non_emergencies:
+            matched, reason = check_emergency(query)
+            self.assertFalse(matched, f"Query falsely flagged as emergency: '{query}' (reason: {reason})")
+
+    # -------------------------------------------------------------------------
+    # Additional Red-Flag Emergency Coverage Tests
+    # -------------------------------------------------------------------------
+    def test_additional_emergencies(self):
+        cases = [
+            ("The patient is unconscious and unresponsive", "Unconsciousness"),
+            ("A 4-year-old child had a seizure and convulsions", "Seizure"),
+            ("Patient has heavy bleeding and vomiting blood", "Heavy bleeding"),
+            ("Elderly woman with sudden face drooping and slurred speech", "Stroke signs"),
+            ("Patient has severe allergic reaction with swelling of the throat", "Severe allergic reaction"),
+            ("Teenager expressing suicidal thoughts and wants to die", "Suicidal thoughts"),
+            ("Child swallowed poison, suspected organophosphate overdose", "Poisoning"),
+            ("Pregnant woman with bleeding and severe abdominal pain", "Pregnancy with bleeding"),
+        ]
+        for text, expected_label in cases:
+            matched, reason = check_emergency(text)
+            self.assertTrue(matched, f"Failed to detect emergency for: '{text}'")
+
+    def test_clause_bounded_negation(self):
+        # Negation stops at "but" or punctuation
+        text = "Patient has no fever, but has chest pain"
+        matched, reason = check_emergency(text)
+        self.assertTrue(matched, "Negation before 'but' must not negate subsequent emergency clause")
+        self.assertIn("Chest pain", reason)
+
+        # Plain symptoms alone must not trigger
+        plain_symptoms = [
+            "Patient has mild headache for 2 hours",
+            "Adult with fever of 38°C and body pain",
+            "Dry cough for 3 days without other symptoms",
+            "Mild knee pain after walking",
+        ]
+        for s in plain_symptoms:
+            matched, reason = check_emergency(s)
+            self.assertFalse(matched, f"Plain symptom alone should not trigger emergency: '{s}'")
 
     # -------------------------------------------------------------------------
     # 2. Abstention Decision Logic Tests

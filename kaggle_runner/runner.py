@@ -209,13 +209,13 @@ if FINAL_MEDPSY:
     #
     # Baseline mode covers MedQA (500) + unanswerable (150) = 650 total.
     # Split evenly by index parity across 2 shards:
-    #   shard 0: 325 (medqa 250, unanswerable 75)
-    #   shard 1: 325 (medqa 250, unanswerable 75)
+    #   shard 0 baseline: 325 (medqa 250, unanswerable 75)
+    #   shard 1 baseline: 325 (medqa 250, unanswerable 75)
     #
     # Context mode covers PubMedQA (500) total.
     # Split evenly by index parity across 2 shards:
-    #   shard 0: 250 (pubmedqa 250)
-    #   shard 1: 250 (pubmedqa 250)
+    #   shard 0 context: 250 (pubmedqa 250)
+    #   shard 1 context: 250 (pubmedqa 250)
     print("\n=== FINAL_MEDPSY STARTUP ===", flush=True)
     test_jsonl = os.path.join(WORK, "phase1", "test.jsonl")
     if os.path.exists(test_jsonl):

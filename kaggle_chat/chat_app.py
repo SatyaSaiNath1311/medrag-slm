@@ -95,59 +95,125 @@ MANDATORY_FOOTER = "*Decision support only — please consult a doctor for medic
 # -----------------------------------------------------------------------------
 # Emergency & Red-Flag Screening Logic
 # -----------------------------------------------------------------------------
+NEGATION_WORDS = {"no", "not", "without", "denies", "denied", "absence", "free", "never"}
+NEGATION_PHRASES = ["absence of", "free of"]
+CLAUSE_DELIMITER_PATTERN = re.compile(r"[.,;:!?\n]|\bbut\b", re.IGNORECASE)
+
+
+def is_negated(text: str, match_start: int) -> bool:
+    """Check if a red-flag match is negated in the preceding 6 words within the same clause.
+
+    Clauses are delimited by punctuation (.,;:!?) or the coordinating conjunction 'but'.
+    Negation triggers: 'no', 'not', 'without', 'denies', 'denied', 'absence of', 'free of', 'never'.
+    """
+    preceding = text[:match_start]
+    clauses = CLAUSE_DELIMITER_PATTERN.split(preceding)
+    same_clause = clauses[-1] if clauses else ""
+    same_clause_lower = same_clause.lower()
+
+    # Check multi-word negation phrases
+    for phrase in NEGATION_PHRASES:
+        if phrase in same_clause_lower:
+            after_phrase = same_clause_lower.split(phrase)[-1]
+            words_after = re.findall(r"\b\w+\b", after_phrase)
+            if len(words_after) <= 6:
+                return True
+
+    # Check single-word negation tokens
+    words = re.findall(r"\b\w+\b", same_clause_lower)
+    preceding_words = words[-6:]
+    for w in preceding_words:
+        if w in NEGATION_WORDS:
+            return True
+
+    return False
+
+
+def is_infant_under_3_months(text: str) -> bool:
+    """Check whether the text refers to an infant / newborn / baby under 3 months."""
+    lower = text.lower()
+    if re.search(r"\b(newborn|neonate)s?\b", lower):
+        return True
+    if re.search(r"\b(baby|infant|child)\s+under\s+(?:3|three)\s+months?\b", lower):
+        return True
+    # 'baby 1 month old', 'infant 2 months old', 'baby 3 weeks old', 'baby 1 month'
+    if re.search(r"\b(baby|infant)\s+(?:is\s+)?(?:[0-2]\s*months?|[1-9]\s*weeks?|[0-9]+\s*days?|1\s*month|2\s*months?)\b", lower):
+        return True
+    # '1 month old baby', '3-week-old infant'
+    if re.search(r"\b(?:[0-2]\s*months?|[1-9]\s*weeks?|[0-9]+\s*days?|1\s*month|2\s*months?)[\s-]old\s+(?:baby|infant)\b", lower):
+        return True
+    return False
+
+
 def check_emergency(text: str) -> Tuple[bool, Optional[str]]:
     """Screen user query for acute red-flag medical emergencies.
 
-    Monitored emergency red flags:
-    1. Chest pain (angina, crushing chest pressure, suspected heart attack)
-    2. Difficulty breathing (severe dyspnea, shortness of breath, stridor, choking)
-    3. Unconsciousness (unresponsive, loss of consciousness, syncope, collapsed)
-    4. Seizures (active convulsions, fits, status epilepticus)
-    5. Heavy bleeding (severe hemorrhage, vomiting blood, coughing blood)
-    6. Stroke signs (facial droop, sudden unilateral weakness, slurred speech)
-    7. Severe allergic reaction (anaphylaxis, swelling of tongue/throat/lips)
-    8. Suicidal thoughts or acute self-harm intent
-    9. Poisoning (toxic ingestion, chemical ingestion, overdose, snake bite)
-    10. Pregnancy with acute complications (vaginal bleeding, severe headache, fits, severe pain)
-    11. Very high fever in infants / neonates
+    Monitored specific red flags:
+    1. 'chest pain'
+    2. 'difficulty breathing', 'can't breathe', 'cannot breathe', 'severe breathlessness', 'respiratory distress'
+    3. 'unconscious', 'not responding', 'unresponsive'
+    4. 'seizure', 'fits', 'convulsion'
+    5. 'heavy bleeding', 'vomiting blood', 'coughing blood'
+    6. Stroke signs: 'face drooping', 'slurred speech', 'sudden weakness on one side'
+    7. 'severe allergic reaction', 'swelling of the face', 'swelling of the throat', 'anaphylaxis'
+    8. 'suicidal', 'wants to die', 'kill himself', 'kill herself'
+    9. 'poisoning', 'swallowed poison', 'overdose'
+    10. Pregnancy / pregnant + (bleeding OR severe headache OR headache OR fits OR severe abdominal pain OR swelling with headache)
+    11. Infant / newborn / baby under 3 months + fever
+
+    Plain 'fever', 'headache', 'pain', 'cough' alone must NOT trigger.
+    Ignores a red-flag phrase if a negation word appears within the preceding 6 words in the same clause.
     """
     if not text or not text.strip():
         return False, None
 
     lower_text = text.lower()
 
-    patterns = [
-        ("Chest pain", r"\b(chest\s+pain|angina|heart\s+attack|crushing\s+(?:substernal\s+)?chest|pressure\s+in\s+chest|tightness\s+in\s+chest)\b"),
-        ("Difficulty breathing", r"\b(difficulty\s+breathing|shortness\s+of\s+breath|cannot\s+breathe|gasping|stridor|choking|wheezing\s+severely|breathless(?:ness)?|dyspnea|respiratory\s+distress)\b"),
-        ("Unconsciousness", r"\b(unconscious(?:ness)?|loss\s+of\s+consciousness|unresponsive|fainted|fainting|passed\s+out|syncope|comatose|collapsed)\b"),
-        ("Seizure", r"\b(seizure|convulsion|epilepsy|epileptic\s+fit|fits|fitting|status\s+epilepticus)\b"),
-        ("Heavy bleeding", r"\b(heavy\s+bleeding|bleeding\s+heavily|hemorrhage|massive\s+blood|vomiting\s+blood|hematemesis|coughing\s+up\s+blood|hemoptysis|rectal\s+bleeding|severe\s+blood\s+loss)\b"),
-        ("Stroke signs", r"\b(stroke|facial\s+droop|face\s+droop|slurred\s+speech|sudden\s+weakness|arm\s+weakness|hemiplegia|hemiparesis|one[\s-]side\s+paralysis|sudden\s+numbness|fast\s+signs)\b"),
-        ("Severe allergic reaction", r"\b(anaphylax(?:is|ic)|severe\s+allergic|swelling\s+of\s+(?:the\s+)?(?:tongue|throat|lips)|lip\s+swelling|airway\s+swelling|angioedema)\b"),
-        ("Suicidal thoughts", r"\b(suicid(?:e|al)|wanting\s+to\s+die|kill\s+(?:myself|himself|herself)|self[\s-]harm|ending\s+(?:my|his|her)\s+life)\b"),
-        ("Poisoning", r"\b(poison(?:ing|ed)?|overdose|swallowed\s+chemicals|ingested\s+pills|snake\s+bite|organophosphate|toxic\s+ingestion)\b"),
+    # 1. Pregnancy emergency check
+    is_pregnant = bool(re.search(r"\b(pregnan(?:t|cy)|gravida|in\s+labor|trimester)\b", lower_text))
+    if is_pregnant:
+        # Swelling with headache
+        has_swelling = bool(re.search(r"\bswelling\b", lower_text))
+        headache_matches = list(re.finditer(r"\b(?:severe\s+)?headache\b", lower_text))
+        if has_swelling and headache_matches:
+            if any(not is_negated(text, m.start()) for m in headache_matches):
+                return True, "Pregnancy with swelling and headache"
+
+        preg_complications = [
+            ("Pregnancy with bleeding", r"\bbleeding\b"),
+            ("Pregnancy with severe headache", r"\bsevere\s+headache\b"),
+            ("Pregnancy with headache", r"\bheadache\b"),
+            ("Pregnancy with fits", r"\b(fits?|convulsions?)\b"),
+            ("Pregnancy with severe abdominal pain", r"\bsevere\s+abdominal\s+pain\b"),
+        ]
+        for label, pat in preg_complications:
+            for m in re.finditer(pat, lower_text):
+                if not is_negated(text, m.start()):
+                    return True, label
+
+    # 2. Infant / newborn / baby under 3 months + fever
+    if is_infant_under_3_months(text):
+        fever_matches = list(re.finditer(r"\bfever\b", lower_text))
+        if fever_matches and any(not is_negated(text, m.start()) for m in fever_matches):
+            return True, "Infant under 3 months with fever"
+
+    # 3. Specific emergency phrases
+    red_flag_patterns = [
+        ("Chest pain", r"\bchest\s+pain\b"),
+        ("Difficulty breathing", r"\b(difficulty\s+breathing|can'?t\s+breathe|cannot\s+breathe|severe\s+breathlessness|respiratory\s+distress)\b"),
+        ("Unconsciousness", r"\b(unconscious|not\s+responding|unresponsive)\b"),
+        ("Seizure", r"\b(seizures?|fits?|convulsions?)\b"),
+        ("Heavy bleeding", r"\b(heavy\s+bleeding|vomiting\s+blood|coughing\s+(?:up\s+)?blood)\b"),
+        ("Stroke signs", r"\b(face\s+drooping|facial\s+droop|slurred\s+speech|sudden\s+weakness\s+on\s+one\s+side)\b"),
+        ("Severe allergic reaction", r"\b(severe\s+allergic\s+reaction|swelling\s+of\s+(?:the\s+)?face|swelling\s+of\s+(?:the\s+)?throat|anaphylaxis)\b"),
+        ("Suicidal thoughts", r"\b(suicidal|wants?\s+to\s+die|kill\s+himself|kill\s+herself|kill\s+myself)\b"),
+        ("Poisoning", r"\b(poisoning|swallowed\s+poison|overdose)\b"),
     ]
 
-    for label, pat in patterns:
-        if re.search(pat, lower_text):
-            return True, label
-
-    # Pregnancy red flags (pregnancy keyword + severe symptom)
-    is_pregnant = bool(re.search(r"\b(pregnan(?:t|cy)|trimester|gestation|gravida|in\s+labor)\b", lower_text))
-    if is_pregnant:
-        preg_danger = re.search(r"\b(bleeding|severe\s+pain|severe\s+headache|fits|convulsion|preeclampsia|eclampsia|fluid\s+leak|reduced\s+movement)\b", lower_text)
-        if preg_danger:
-            return True, f"Pregnancy complication ({preg_danger.group(1)})"
-
-    # Very high fever in infants / neonates
-    is_infant = bool(re.search(r"\b(infant|neonate|newborn|baby|child\s+under\s+\d+\s+months?|\b[0-9]\s*(?:week|month)s?[\s-]old)\b", lower_text))
-    if is_infant:
-        infant_fever = re.search(r"\b(very\s+high\s+fever|high\s+fever|fever\s+of\s+(?:3[89]|40|41|10[1-5])|temperature\s+(?:3[89]|40|41|10[1-5]))\b", lower_text)
-        if infant_fever:
-            return True, "Very high fever in infant"
-
-    if re.search(r"\b(high\s+fever\s+in\s+infant|febrile\s+seizure|febrile\s+convulsion)\b", lower_text):
-        return True, "Very high fever in infant"
+    for label, pat in red_flag_patterns:
+        for m in re.finditer(pat, lower_text):
+            if not is_negated(text, m.start()):
+                return True, label
 
     return False, None
 
