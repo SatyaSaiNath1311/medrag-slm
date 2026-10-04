@@ -30,7 +30,8 @@ MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
 FINAL_MEDPSY = False        # full test-split run of medpsy-4b, dual-GPU shards (DONE)
-VAL_MEDPSY = True           # full validation-split run of medpsy-4b (250 baseline + 200 context), dual-GPU shards
+VAL_MEDPSY = False          # full validation-split run of medpsy-4b (250 baseline + 200 context), dual-GPU shards (DONE)
+RAG_MEDPSY = True           # medpsy-4b + RAG (top-5 evidence) on the MedQA test split (500), dual-GPU shards
 PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
 PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
 TINY = False                # set to True for tiny check on Kaggle
@@ -46,6 +47,8 @@ if "FINAL_MEDPSY" in os.environ:
     FINAL_MEDPSY = os.environ["FINAL_MEDPSY"].lower() in ("1", "true", "yes")
 if "VAL_MEDPSY" in os.environ:
     VAL_MEDPSY = os.environ["VAL_MEDPSY"].lower() in ("1", "true", "yes")
+if "RAG_MEDPSY" in os.environ:
+    RAG_MEDPSY = os.environ["RAG_MEDPSY"].lower() in ("1", "true", "yes")
 if "PILOT" in os.environ:
     PILOT = os.environ["PILOT"].lower() in ("1", "true", "yes")
 if "PARALLEL_GPUS" in os.environ:
@@ -125,6 +128,8 @@ if PROFILE:
     print("PROFILE mode enabled: running profiling benchmarks")
 if FINAL_MEDPSY:
     print("FINAL_MEDPSY mode enabled: medpsy-4b full test split, 2-shard dual-GPU")
+if RAG_MEDPSY:
+    print("RAG_MEDPSY mode enabled: medpsy-4b + RAG on MedQA test (500), 2-shard dual-GPU")
 if VAL_MEDPSY:
     print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
 if PILOT:
@@ -197,6 +202,87 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
 
 
 # ── FINAL_MEDPSY mode ──────────────────────────────────────────────────────────
+
+
+# ── RAG_MEDPSY mode: MedPsy-4B + RAG on the MedQA test split ───────────────────
+if RAG_MEDPSY:
+    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE:
+        sys.exit("ERROR: RAG_MEDPSY must run alone (set FINAL_MEDPSY, VAL_MEDPSY, PILOT, PARALLEL_GPUS, PROFILE to False).")
+    import math
+    import threading
+
+    NUM_SHARDS = 2
+    EXPECTED_RAG = 500   # MedQA test questions
+    ev_path = os.path.join(WORK, "phase7", "evidence.jsonl")
+    if not os.path.exists(ev_path):
+        sys.exit(f"ERROR: Phase 7 evidence not found at {ev_path}; attach the medrag-build output.")
+    print("\n=== RAG_MEDPSY STARTUP (split=test, datasets=medqa, mode=rag) ===", flush=True)
+    try:
+        with open(os.path.join(WORK, "phase1", "test.jsonl")) as fh:
+            mq = [json.loads(l) for l in fh if l.strip()]
+        mq = [q for q in mq if q.get("dataset") == "medqa"]
+        for sid in range(NUM_SHARDS):
+            print(f"shard {sid} rag: {sum(1 for i, _ in enumerate(mq) if i % NUM_SHARDS == sid)} (medqa)", flush=True)
+    except Exception as exc:
+        print(f"  (could not pre-count shards: {exc})", flush=True)
+
+    rag_errors = {}
+
+    def run_rag_shard(shard_idx):
+        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+        try:
+            cmd = build_qa_cmd(models_list=["medpsy-4b"], modes_list=["rag"], datasets="medqa",
+                               split="test", work_dir=WORK, skip_format_check=True,
+                               shard=shard_idx, num_shards=NUM_SHARDS)
+            print(f"\n[shard {shard_idx}] Starting RAG on GPU {shard_idx}...", flush=True)
+            run(cmd, extra_env=env)
+        except Exception as exc:
+            rag_errors[shard_idx] = str(exc)
+
+    threads = [threading.Thread(target=run_rag_shard, args=(i,), name=f"rag-shard-{i}") for i in range(NUM_SHARDS)]
+    for t in threads:
+        t.start()
+    print(f"\nWaiting for {len(threads)} shard thread(s)...", flush=True)
+    for t in threads:
+        t.join()
+    if rag_errors:
+        print("\nERROR: one or more shards failed:", rag_errors, flush=True)
+        sys.exit(1)
+
+    print("\n=== MERGING SHARDS ===", flush=True)
+    p8_dir = os.path.join(WORK, "phase8")
+    rows = []
+    for sid in range(NUM_SHARDS):
+        sp = os.path.join(p8_dir, f"medpsy-4b_shard{sid}.jsonl")
+        with open(sp) as fh:
+            part = [json.loads(l) for l in fh if l.strip()]
+        print(f"    shard {sid}: {len(part)} rows from {sp}", flush=True)
+        rows.extend(part)
+    ids = [r["id"] for r in rows]
+    if len(ids) != len(set(ids)):
+        print(f"WARNING: [MERGE] {len(ids) - len(set(ids))} duplicate ids", flush=True)
+    if len(rows) != EXPECTED_RAG:
+        print(f"WARNING: [MERGE] rag: expected {EXPECTED_RAG} rows, got {len(rows)}", flush=True)
+    out_path = os.path.join(p8_dir, "medpsy-4b.jsonl")
+    with open(out_path, "w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    print(f"  merged rag: {len(rows)} rows -> {out_path}", flush=True)
+
+    n = len(rows)
+    n_c = sum(1 for r in rows if r.get("correct"))
+    p = n_c / n if n else 0.0
+    m = 1.96 * math.sqrt(p * (1 - p) / n) if n else 0.0
+    trunc = sum(1 for r in rows if r.get("truncated"))
+    secs = [r["seconds"] for r in rows if r.get("seconds") is not None]
+    print("\n=== RAG MEDPSY SUMMARY (MedQA test) ===", flush=True)
+    print(f"  RAG MedQA accuracy : {p:.4f}  95%CI=({max(0, p - m):.4f}, {min(1, p + m):.4f})  {n_c}/{n} correct", flush=True)
+    print(f"  Truncated          : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
+    if secs:
+        print(f"  s/question         : {sum(secs) / len(secs):.2f}", flush=True)
+    print("  (Baseline for comparison: 0.8760 [0.846, 0.904] from the FINAL_MEDPSY run)", flush=True)
+    print("=== END RAG MEDPSY SUMMARY ===\n", flush=True)
+    sys.exit(0)
 
 if FINAL_MEDPSY or VAL_MEDPSY:
     if FINAL_MEDPSY and VAL_MEDPSY:

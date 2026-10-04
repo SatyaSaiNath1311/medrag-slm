@@ -370,9 +370,15 @@ class TestRunnerFinalMedpsy(unittest.TestCase):
         text = self._read_runner()
         self.assertIn("FINAL_MEDPSY = False", text)
 
-    def test_val_medpsy_is_true(self):
+    def test_rag_medpsy_is_true(self):
         text = self._read_runner()
-        self.assertIn("VAL_MEDPSY = True", text)
+        self.assertIn("RAG_MEDPSY = True", text)
+        self.assertIn("VAL_MEDPSY = False", text)
+        self.assertIn('modes_list=["rag"], datasets="medqa"', text)
+        self.assertIn("EXPECTED_RAG = 500", text)
+
+    def test_val_medpsy_code_kept(self):
+        text = self._read_runner()
         self.assertIn("EXPECTED_BASELINE, EXPECTED_CONTEXT = 250, 200", text)
         self.assertIn("split=MEDPSY_SPLIT", text)
 
