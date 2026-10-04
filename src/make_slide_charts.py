@@ -8,6 +8,7 @@ Inputs (all produced by earlier phases):
   outputs/kaggle_qa/medpsy_rag/work/phase8/medpsy-4b.jsonl   MedPsy-4B + RAG (optional; shown as
                                                      "not run" until the RAG_MEDPSY run is downloaded)
   outputs/analysis/medpsy_reliability.json           reliability score results
+  outputs/analysis/phase9_abstention.json            RAG + abstain for the 5 standard models
 
 Outputs: outputs/figures/slides/chart*.png (300 dpi) and .svg
 
@@ -47,6 +48,15 @@ def load_main(path):
     missing = [m for m in MODELS if m not in rows]
     assert not missing, f"[CHECK FAILED] models missing from {path}: {missing}"
     return rows
+
+
+def load_medpsy_rag_rows(path):
+    p = Path(path)
+    if not p.exists():
+        return None
+    rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    rows = [r for r in rows if r.get("split") == "test" and r.get("dataset") == "medqa"]
+    return rows if len(rows) == 500 else None
 
 
 def load_medpsy_rag(path):
@@ -199,11 +209,57 @@ def chart_calibration(rel, out_dir):
         save(fig, out_dir, fname)
 
 
+def chart_three_strategies(rows, medpsy_rag_rows, phase9_path, out_dir):
+    """Baseline vs RAG vs RAG + Abstain for all six models, coverage printed inside the abstain bar."""
+    p9 = json.loads(Path(phase9_path).read_text())["models"]
+    base = [fnum(rows[m]["baseline_acc_medqa"]) for m in MODELS]
+    rag = [fnum(rows[m]["rag_acc_medqa"]) for m in MODELS]
+    abst, cov = [], []
+    for m in MODELS:
+        if m == "medpsy-4b":
+            if medpsy_rag_rows is None:
+                abst.append(None); cov.append(None); continue
+            ans = [r for r in medpsy_rag_rows if not r.get("truncated")]
+            abst.append(sum(bool(r["correct"]) for r in ans) / len(ans))
+            cov.append(len(ans) / len(medpsy_rag_rows))
+            rag[MODELS.index(m)] = sum(bool(r["correct"]) for r in medpsy_rag_rows) / len(medpsy_rag_rows)
+        else:
+            e = next(x for x in p9 if x["model"] == m and x["mode"] == "rag")["fixed_coverage_scaled"]["cov80"]
+            abst.append(e["selective_accuracy"]); cov.append(e["coverage_achieved_pct"] / 100)
+    pct = lambda vals: [v * 100 if v is not None else None for v in vals]
+    base, rag, abst = pct(base), pct(rag), pct(abst)
+
+    x, w = np.arange(len(MODELS)), 0.27
+    fig, ax = plt.subplots(figsize=(14, 7))
+    b1 = ax.bar(x - w - 0.02, [v or 0 for v in base], w, label="Baseline", color=BLUE)
+    b2 = ax.bar(x, [v or 0 for v in rag], w, label="RAG", color=ORANGE)
+    b3 = ax.bar(x + w + 0.02, [v or 0 for v in abst], w, label="RAG + Abstain (accuracy when answering)", color=GREEN)
+    for bars, vals in ((b1, base), (b2, rag), (b3, abst)):
+        label_bars(ax, bars, vals, lambda v: f"{v:.1f}", size=11)
+    for bar, c in zip(b3, cov):
+        if c is not None:
+            ax.annotate(f"cov\n{100 * c:.0f}%", (bar.get_x() + bar.get_width() / 2, 3), ha="center",
+                        va="bottom", fontsize=9.5, color="white", fontweight="bold")
+    ax.set_xticks(x, [LABEL[m] for m in MODELS])
+    ax.set_ylim(0, 105)
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title("Six models under three strategies", pad=40)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    fig.text(0.01, -0.04,
+             "Baseline and RAG: MedQA test (n = 500). RAG + Abstain, standard models: validation-set confidence "
+             "threshold for ~80% coverage, full test set (n = 1,150).\n"
+             "RAG + Abstain, MedPsy-4B: abstain when the reasoning budget is exhausted, MedQA test (n = 500). "
+             "cov = share of questions answered.", fontsize=10, color="#444444", ha="left", va="top")
+    save(fig, out_dir, "chart7_three_strategies")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--main", default="outputs/analysis/final_results.csv")
     ap.add_argument("--medpsy-rag", default="outputs/kaggle_qa/medpsy_rag/work/phase8/medpsy-4b.jsonl")
     ap.add_argument("--reliability", default="outputs/analysis/medpsy_reliability.json")
+    ap.add_argument("--phase9", default="outputs/analysis/phase9_abstention.json")
     ap.add_argument("--out-dir", default="outputs/figures/slides")
     args = ap.parse_args()
 
@@ -220,6 +276,7 @@ def main():
     chart_safety(rel, out)
     chart_coverage(rel, out)
     chart_calibration(rel, out)
+    chart_three_strategies(rows, load_medpsy_rag_rows(args.medpsy_rag), args.phase9, out)
     print(f"Done. Charts in {out}/")
 
 
