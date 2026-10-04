@@ -584,8 +584,8 @@ def main():
     ap.add_argument("--skip-format-check", action="store_true",
                     help="Skip Phase 4 format check entirely and go straight to QA modes. "
                          "Useful for reasoning models or when format check has already been validated.")
-    ap.add_argument("--split", choices=["test", "val_subset", "all_needed"], default="all_needed",
-                    help=("Questions to run: 'test' = test split only; "
+    ap.add_argument("--split", choices=["test", "val", "val_subset", "all_needed"], default="all_needed",
+                    help=("Questions to run: 'test' = test split only; 'val' = full validation split; "
                           "'val_subset' = stratified 80-question validation sample (seed 42, PILOT use); "
                           "'all_needed' = test + validation (default)."))
     ap.add_argument("--datasets", default=None,
@@ -650,6 +650,9 @@ def main():
     # Build question set based on --split
     if args.split == "test":
         questions = test
+    elif args.split == "val":
+        questions = val
+        print(f"  val: {len(questions)} validation questions (full split)", flush=True)
     elif args.split == "val_subset":
         questions = sample_val_subset(val, seed=cfg["seed"])
         print(f"  val_subset: {len(questions)} questions (60 MedQA + 20 PubMedQA, seed {cfg['seed']})", flush=True)

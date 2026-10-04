@@ -29,7 +29,8 @@ WORK = "/kaggle/working/work"
 MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
-FINAL_MEDPSY = True         # full test-split run of medpsy-4b, dual-GPU shards
+FINAL_MEDPSY = False        # full test-split run of medpsy-4b, dual-GPU shards (DONE)
+VAL_MEDPSY = True           # full validation-split run of medpsy-4b (250 baseline + 200 context), dual-GPU shards
 PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
 PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
 TINY = False                # set to True for tiny check on Kaggle
@@ -43,6 +44,8 @@ if "PROFILE" in os.environ:
     PROFILE = os.environ["PROFILE"].lower() in ("1", "true", "yes")
 if "FINAL_MEDPSY" in os.environ:
     FINAL_MEDPSY = os.environ["FINAL_MEDPSY"].lower() in ("1", "true", "yes")
+if "VAL_MEDPSY" in os.environ:
+    VAL_MEDPSY = os.environ["VAL_MEDPSY"].lower() in ("1", "true", "yes")
 if "PILOT" in os.environ:
     PILOT = os.environ["PILOT"].lower() in ("1", "true", "yes")
 if "PARALLEL_GPUS" in os.environ:
@@ -122,6 +125,8 @@ if PROFILE:
     print("PROFILE mode enabled: running profiling benchmarks")
 if FINAL_MEDPSY:
     print("FINAL_MEDPSY mode enabled: medpsy-4b full test split, 2-shard dual-GPU")
+if VAL_MEDPSY:
+    print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
 if PILOT:
     print("PILOT mode enabled: medpsy-4b pilot on 80-question val subset, single GPU")
 if PARALLEL_GPUS:
@@ -193,9 +198,13 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
 
 # ── FINAL_MEDPSY mode ──────────────────────────────────────────────────────────
 
-if FINAL_MEDPSY:
+if FINAL_MEDPSY or VAL_MEDPSY:
+    if FINAL_MEDPSY and VAL_MEDPSY:
+        sys.exit("ERROR: set only one of FINAL_MEDPSY / VAL_MEDPSY to True.")
     if PILOT or PARALLEL_GPUS or PROFILE:
-        sys.exit("ERROR: FINAL_MEDPSY is not compatible with PILOT, PARALLEL_GPUS, or PROFILE modes.")
+        sys.exit("ERROR: FINAL_MEDPSY/VAL_MEDPSY are not compatible with PILOT, PARALLEL_GPUS, or PROFILE modes.")
+    MEDPSY_SPLIT = "val" if VAL_MEDPSY else "test"
+    MEDPSY_SPLIT_FILE = "validation.jsonl" if VAL_MEDPSY else "test.jsonl"
 
     import math
     import threading
@@ -216,8 +225,8 @@ if FINAL_MEDPSY:
     # Split evenly by index parity across 2 shards:
     #   shard 0 context: 250 (pubmedqa 250)
     #   shard 1 context: 250 (pubmedqa 250)
-    print("\n=== FINAL_MEDPSY STARTUP ===", flush=True)
-    test_jsonl = os.path.join(WORK, "phase1", "test.jsonl")
+    print(f"\n=== {'VAL' if VAL_MEDPSY else 'FINAL'}_MEDPSY STARTUP (split={MEDPSY_SPLIT}) ===", flush=True)
+    test_jsonl = os.path.join(WORK, "phase1", MEDPSY_SPLIT_FILE)
     if os.path.exists(test_jsonl):
         try:
             with open(test_jsonl) as fh:
@@ -255,7 +264,7 @@ if FINAL_MEDPSY:
                 models_list=["medpsy-4b"],
                 modes_list=["baseline"],
                 datasets="medqa,unanswerable",
-                split="test",
+                split=MEDPSY_SPLIT,
                 work_dir=WORK,
                 skip_format_check=True,
                 shard=shard_idx,
@@ -269,7 +278,7 @@ if FINAL_MEDPSY:
                 models_list=["medpsy-4b"],
                 modes_list=["context"],
                 datasets="pubmedqa",
-                split="test",
+                split=MEDPSY_SPLIT,
                 work_dir=WORK,
                 skip_format_check=True,
                 shard=shard_idx,
@@ -339,6 +348,9 @@ if FINAL_MEDPSY:
     EXPECTED_BASELINE = 650
     # PubMedQA test = 500 context rows
     EXPECTED_CONTEXT  = 500
+    if VAL_MEDPSY:
+        # Validation split: MedQA 200 + unanswerable 50 baseline; PubMedQA 200 context
+        EXPECTED_BASELINE, EXPECTED_CONTEXT = 250, 200
 
     p5_dir  = os.path.join(WORK, "phase5")
     p10_dir = os.path.join(WORK, "phase10")
@@ -359,7 +371,7 @@ if FINAL_MEDPSY:
         margin = z * math.sqrt(p * (1 - p) / n_total)
         return (round(max(0.0, p - margin), 4), round(min(1.0, p + margin), 4))
 
-    print("\n=== FINAL MEDPSY SUMMARY ===", flush=True)
+    print(f"\n=== {'VAL' if VAL_MEDPSY else 'FINAL'} MEDPSY SUMMARY (split={MEDPSY_SPLIT}) ===", flush=True)
 
     # ── Baseline: MedQA accuracy ────────────────────────────────────────────────
     medqa_b  = [r for r in baseline_rows if r.get("dataset") == "medqa" and not r.get("should_abstain")]

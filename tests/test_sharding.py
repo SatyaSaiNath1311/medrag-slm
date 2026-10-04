@@ -366,9 +366,15 @@ class TestRunnerFinalMedpsy(unittest.TestCase):
         import pathlib
         return pathlib.Path("kaggle_runner/runner.py").read_text()
 
-    def test_final_medpsy_is_true(self):
+    def test_final_medpsy_is_false(self):
         text = self._read_runner()
-        self.assertIn("FINAL_MEDPSY = True", text)
+        self.assertIn("FINAL_MEDPSY = False", text)
+
+    def test_val_medpsy_is_true(self):
+        text = self._read_runner()
+        self.assertIn("VAL_MEDPSY = True", text)
+        self.assertIn("EXPECTED_BASELINE, EXPECTED_CONTEXT = 250, 200", text)
+        self.assertIn("split=MEDPSY_SPLIT", text)
 
     def test_pilot_is_false(self):
         text = self._read_runner()
