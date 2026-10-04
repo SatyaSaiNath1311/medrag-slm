@@ -9,6 +9,7 @@ Inputs (all produced by earlier phases):
                                                      "not run" until the RAG_MEDPSY run is downloaded)
   outputs/analysis/medpsy_reliability.json           reliability score results
   outputs/analysis/phase9_abstention.json            RAG + abstain for the 5 standard models
+  outputs/analysis/profiling.json                    peak GPU memory for the 5 profiled models
 
 Outputs: outputs/figures/slides/chart*.png (300 dpi) and .svg
 
@@ -28,6 +29,7 @@ import numpy as np  # noqa: E402
 MODELS = ["qwen3-1.7b", "smollm3-3b", "phi4-mini", "qwen3-4b", "gemma3-4b", "medpsy-4b"]
 LABEL = {"qwen3-1.7b": "Qwen3-1.7B", "smollm3-3b": "SmolLM3-3B", "phi4-mini": "Phi-4-mini",
          "qwen3-4b": "Qwen3-4B", "gemma3-4b": "Gemma3-4B", "medpsy-4b": "MedPsy-4B"}
+RETRIEVAL_OVERHEAD_S = 0.127   # BM25 + dense + rerank per question, measured in the Phase 6/7 build logs
 BLUE, ORANGE, GREEN, GREY = "#2E6FB7", "#E8892B", "#2E9E5B", "#8C8C8C"
 
 plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 13, "axes.titlesize": 16,
@@ -254,11 +256,71 @@ def chart_three_strategies(rows, medpsy_rag_rows, phase9_path, out_dir):
     save(fig, out_dir, "chart7_three_strategies")
 
 
+def chart_latency_modes(rows, medpsy_rag_rows, out_dir):
+    """Latency per question, baseline vs RAG, for all six models (log scale, every bar labelled)."""
+    base = [fnum(rows[m]["baseline_sec_per_q"]) for m in MODELS]
+    rag = [fnum(rows[m]["rag_sec_per_q"]) for m in MODELS]
+    if medpsy_rag_rows is not None:
+        secs = [r["seconds"] for r in medpsy_rag_rows if r.get("seconds") is not None]
+        rag[MODELS.index("medpsy-4b")] = sum(secs) / len(secs) if secs else None
+    rag = [v + RETRIEVAL_OVERHEAD_S if v is not None else None for v in rag]
+    fmt = lambda v: f"{v:.2f} s" if v < 10 else f"{v:.1f} s"
+    x, w = np.arange(len(MODELS)), 0.38
+    fig, ax = plt.subplots(figsize=(13, 6.5))
+    b1 = ax.bar(x - w / 2 - 0.02, [v or 0 for v in base], w, label="Baseline", color=BLUE)
+    b2 = ax.bar(x + w / 2 + 0.02, [v or 1e-9 for v in rag], w, label="With RAG", color=ORANGE)
+    label_bars(ax, b1, base, fmt, size=11)
+    label_bars(ax, b2, rag, fmt, size=11)
+    ax.set_yscale("log")
+    ax.set_ylim(0.05, max(v for v in base + rag if v) * 5)
+    ax.set_xticks(x, [LABEL[m] for m in MODELS])
+    ax.set_ylabel("Seconds per question (log scale)")
+    ax.set_title("Latency per question: baseline vs RAG", pad=40)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    fig.text(0.01, -0.03, "RAG latency includes 0.127 s retrieval per question. MedPsy-4B reasons step by step before "
+             "answering; the other five models answer directly.",
+             fontsize=10, color="#444444", ha="left", va="top")
+    save(fig, out_dir, "chart8_latency_baseline_vs_rag")
+
+
+def chart_vram(profiling_path, out_dir):
+    """Peak GPU memory (allocated, summed over GPUs), baseline vs RAG, five profiled models."""
+    prof = json.loads(Path(profiling_path).read_text())
+    models = [m for m in MODELS if m in prof]
+
+    def peak_gb(m, mode):
+        cm = prof[m]["modes"].get(mode, {}).get("cuda_memory", {})
+        return sum(v.get("max_memory_allocated_mb", 0) for v in cm.values()) / 1024 if cm else None
+
+    base = [peak_gb(m, "baseline") for m in models]
+    rag = [peak_gb(m, "rag") for m in models]
+    x, w = np.arange(len(models)), 0.38
+    fig, ax = plt.subplots(figsize=(12, 6.5))
+    b1 = ax.bar(x - w / 2 - 0.02, [v or 0 for v in base], w, label="Baseline", color=BLUE)
+    b2 = ax.bar(x + w / 2 + 0.02, [v or 0 for v in rag], w, label="With RAG", color=ORANGE)
+    label_bars(ax, b1, base, lambda v: f"{v:.1f} GB", size=11)
+    label_bars(ax, b2, rag, lambda v: f"{v:.1f} GB", size=11)
+    ax.axhline(16, color="#C0392B", ls="--", lw=1.2, zorder=0)
+    ax.annotate("Single 16 GB T4 limit", (x[0] - 0.45, 16.4), fontsize=11, color="#C0392B")
+    ax.set_xticks(x, [LABEL[m] + ("*" if m == "gemma3-4b" else "") for m in models])
+    ax.set_ylim(0, 23)
+    ax.set_ylabel("Peak GPU memory (GB)")
+    ax.set_title("Peak GPU memory: baseline vs RAG", pad=40)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    fig.text(0.01, -0.03, "* Gemma3-4B loaded in float32 across two T4 GPUs to avoid numerical overflow. "
+             "MedPsy-4B was not memory-profiled; it runs on a single 16 GB T4 in the chatbot.",
+             fontsize=10, color="#444444", ha="left", va="top")
+    save(fig, out_dir, "chart9_gpu_memory")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--main", default="outputs/analysis/final_results.csv")
     ap.add_argument("--medpsy-rag", default="outputs/kaggle_qa/medpsy_rag/work/phase8/medpsy-4b.jsonl")
     ap.add_argument("--reliability", default="outputs/analysis/medpsy_reliability.json")
+    ap.add_argument("--profiling", default="outputs/analysis/profiling.json")
     ap.add_argument("--phase9", default="outputs/analysis/phase9_abstention.json")
     ap.add_argument("--out-dir", default="outputs/figures/slides")
     args = ap.parse_args()
@@ -276,7 +338,10 @@ def main():
     chart_safety(rel, out)
     chart_coverage(rel, out)
     chart_calibration(rel, out)
-    chart_three_strategies(rows, load_medpsy_rag_rows(args.medpsy_rag), args.phase9, out)
+    medpsy_rag_rows = load_medpsy_rag_rows(args.medpsy_rag)
+    chart_three_strategies(rows, medpsy_rag_rows, args.phase9, out)
+    chart_latency_modes(rows, medpsy_rag_rows, out)
+    chart_vram(args.profiling, out)
     print(f"Done. Charts in {out}/")
 
 
