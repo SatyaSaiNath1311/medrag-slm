@@ -64,6 +64,13 @@ import numpy as np
 import Stemmer
 import torch
 
+from kaggle_chat.question_types import (
+    GREETING_REPLY,
+    TYPE_LABELS,
+    UNCLEAR_REPLY,
+    build_hw_prompt,
+    classify_question,
+)
 from src import encoders
 from src.common import build_query, get_device, load_config, read_jsonl
 from src.llm import (
@@ -607,6 +614,19 @@ def chat_pipeline(
 
     is_mcq = len(options) >= 2
 
+    # 0. Emergency red-flag screening first, then question-type routing
+    is_emergency, emergency_reason = check_emergency(user_q)
+    qtype = "mcq" if is_mcq else classify_question(user_q, is_emergency=is_emergency)
+
+    if qtype in ("greeting", "unclear"):
+        # Instant reply, no retrieval and no model call
+        canned = GREETING_REPLY if qtype == "greeting" else UNCLEAR_REPLY
+        messages.append({"role": "user", "content": user_q})
+        messages.append({"role": "assistant",
+                         "content": f"{canned}\n\n---\n\n🗂️ *Question type: {TYPE_LABELS[qtype]}*"})
+        yield [dict(m) for m in messages], "", "", "", "", ""
+        return
+
     if is_mcq:
         opt_summary = " &nbsp;|&nbsp; ".join(f"**{k}:** {v}" for k, v in sorted(options.items()))
         user_display = f"**{user_q}**\n\n<small>{opt_summary}</small>"
@@ -621,8 +641,7 @@ def chat_pipeline(
 
     t_total_start = time.perf_counter()
 
-    # 1. Emergency Red-Flag Screening
-    is_emergency, emergency_reason = check_emergency(user_q)
+    # 1. Emergency banner (screened above)
     emergency_banner = EMERGENCY_PREFIX if is_emergency else ""
 
     # 2. Hybrid Retrieval & Reranking
@@ -667,22 +686,7 @@ def chat_pipeline(
             ev_lines.append(f"[{i}] ({src_name})\n{snippet}")
         ev_text = "\n\n".join(ev_lines)
 
-        hw_prompt = (
-            "You are a clinical decision support assistant for community health workers. "
-            "Answer the following question in simple, clear language using only the provided medical textbook evidence.\n\n"
-            "Instructions:\n"
-            "1. List the 2–3 most likely causes, ordered with the most likely first.\n"
-            "2. Give simple first steps for patient care.\n"
-            "3. ALWAYS list danger signs that need urgent referral.\n"
-            "4. Cite a passage [n] ONLY if that passage directly supports that exact sentence — otherwise give no citation for that line.\n"
-            "5. Never state numbers or timelines that are not in the passages.\n"
-            "6. Keep your answer to at most 7 short bullet points.\n"
-            "7. If the passages and your knowledge are not enough to answer confidently and safely, "
-            "say exactly 'INSUFFICIENT INFORMATION'.\n\n"
-            f"Evidence:\n{ev_text}\n\n"
-            f"Health Worker Question: {user_q}\n\n"
-            "Answer:"
-        )
+        hw_prompt = build_hw_prompt(qtype, ev_text, user_q)
 
         if is_reasoning_model:
             # MedPsy-4B reasoning generation
@@ -722,7 +726,7 @@ def chat_pipeline(
             with torch.inference_mode():
                 out_tokens = llm.model.generate(
                     **enc,
-                    max_new_tokens=250,
+                    max_new_tokens=350,
                     do_sample=False,
                     pad_token_id=llm.pad_id,
                     eos_token_id=sorted(llm.eos),
@@ -777,10 +781,15 @@ def chat_pipeline(
     # 7. Final Response Assembly
     timing_line = f"⏱️ *Response time: {total_sec:.1f}s (Retrieval: {retrieval_sec:.2f}s | Generation: {gen_sec:.2f}s | Model: {clean_model_key})*"
 
-    reply_sections = [f"{emergency_banner}{content_body}"]
+    child_preg_note = ""
+    if qtype == "pregnancy_child" and not should_abstain:
+        child_preg_note = ("\n\n**Pregnant women, newborns and young children can get worse quickly. "
+                           "If in doubt, refer to a doctor today.**")
+    reply_sections = [f"{emergency_banner}{content_body}{child_preg_note}"]
     if references_block:
         reply_sections.append(references_block)
-    reply_sections.append(timing_line)
+    type_label = "Exam question (multiple choice)" if qtype == "mcq" else TYPE_LABELS[qtype]
+    reply_sections.append(f"🗂️ *Question type: {type_label}*\n\n{timing_line}")
     reply_sections.append(MANDATORY_FOOTER)
 
     final_bot_reply = "\n\n---\n\n".join(reply_sections)
