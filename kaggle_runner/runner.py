@@ -31,7 +31,7 @@ CHECK_ONLY = False
 PROFILE = False
 FINAL_MEDPSY = False        # full test-split run of medpsy-4b, dual-GPU shards (DONE)
 VAL_MEDPSY = False          # full validation-split run of medpsy-4b (250 baseline + 200 context), dual-GPU shards (DONE)
-RAG_MEDPSY = True           # medpsy-4b + RAG (top-5 evidence) on the MedQA test split (500), dual-GPU shards
+RAG_MEDPSY = False          # medpsy-4b + RAG (top-5 evidence) on the MedQA test split (500), dual-GPU shards
 PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
 PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
 TINY = False                # set to True for tiny check on Kaggle
@@ -43,7 +43,7 @@ SC_K = 5
 SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
 SC_PILOT_N = 50        # when > 0, use only the first N questions per dataset; for unanswerable_v2, sample stratified
-SC_BATCH_SIZE = 2      # batch size for sampling to avoid T4 OOM
+SC_BATCH_SIZE = 5      # batch size for sampling to avoid T4 OOM
 
 # Override from env var if provided
 if "SC_MODE" in os.environ:
@@ -407,6 +407,19 @@ if SC_MODE:
     llm = LLM(mcfg, device=device)
 
     # ── 7. Generation helpers: Greedy pass + Batched Sampling ──────────────────
+    def final_answer_section(gen_text: str) -> str:
+        """Return text after the last '</think>' if present;
+        otherwise text from the last line matching r"(?im)^\s*Answer\s*:" to the end;
+        otherwise the last 300 characters.
+        """
+        think_matches = list(re.finditer(r"</think>", gen_text, re.IGNORECASE))
+        if think_matches:
+            return gen_text[think_matches[-1].end():]
+        ans_matches = list(re.finditer(r"(?im)^\s*Answer\s*:", gen_text))
+        if ans_matches:
+            return gen_text[ans_matches[-1].start():]
+        return gen_text[-300:] if len(gen_text) > 300 else gen_text
+
     def generate_single_greedy(q, prompt_text):
         """1 extra greedy generation (do_sample=False, temp=0) per question for paired SC vs greedy evaluation."""
         wrapped = llm.wrap_reasoning(prompt_text)
@@ -440,7 +453,11 @@ if SC_MODE:
 
         has_final_answer = bool(re.search(r"(?:^|\n)Answer\s*:\s*[A-Za-z]", gen_text, re.MULTILINE))
         truncated = bool(hit_max and not has_final_answer)
-        has_insuf = bool(re.search(r"\bINSUFFICIENT\s+INFORMATION\b", gen_text, re.IGNORECASE))
+
+        ans_sec = final_answer_section(gen_text)
+        has_insuf = bool(re.search(r"\bINSUFFICIENT\s+INFORMATION\b", ans_sec, re.IGNORECASE))
+        has_insuf_full = bool(re.search(r"\bINSUFFICIENT\s+INFORMATION\b", gen_text, re.IGNORECASE))
+        insuf_in_reasoning_only = bool(has_insuf_full and not has_insuf)
 
         if has_insuf:
             ans = "ABSTAIN"
@@ -451,7 +468,7 @@ if SC_MODE:
             if ans == "ABSTAIN":
                 has_insuf = True
 
-        return ans, truncated, has_insuf, g_time
+        return ans, truncated, has_insuf, insuf_in_reasoning_only, g_time
 
     def generate_sc_k_samples(q, prompt_text, k_samples, temperature, top_p, batch_size):
         wrapped = llm.wrap_reasoning(prompt_text)
@@ -514,13 +531,18 @@ if SC_MODE:
         parsed_answers = []
         truncations = []
         insufficient_info = []
+        insuf_in_reasoning_only = []
 
         for gen_text, hit_max in raw_outputs:
             has_final_answer = bool(re.search(r"(?:^|\n)Answer\s*:\s*[A-Za-z]", gen_text, re.MULTILINE))
             truncated = bool(hit_max and not has_final_answer)
-            has_insuf = bool(re.search(r"\bINSUFFICIENT\s+INFORMATION\b", gen_text, re.IGNORECASE))
 
-            # Treat INSUFFICIENT INFORMATION as "ABSTAIN"
+            ans_sec = final_answer_section(gen_text)
+            has_insuf = bool(re.search(r"\bINSUFFICIENT\s+INFORMATION\b", ans_sec, re.IGNORECASE))
+            has_insuf_full = bool(re.search(r"\bINSUFFICIENT\s+INFORMATION\b", gen_text, re.IGNORECASE))
+            insuf_reasoning = bool(has_insuf_full and not has_insuf)
+
+            # Treat INSUFFICIENT INFORMATION in final answer section as "ABSTAIN"
             if has_insuf:
                 ans = "ABSTAIN"
             else:
@@ -533,8 +555,9 @@ if SC_MODE:
             parsed_answers.append(ans)
             truncations.append(truncated)
             insufficient_info.append(has_insuf)
+            insuf_in_reasoning_only.append(insuf_reasoning)
 
-        return parsed_answers, truncations, insufficient_info
+        return parsed_answers, truncations, insufficient_info, insuf_in_reasoning_only
 
     # ── 8. Run each dataset in sequence (Resumable JSONL per dataset) ───────────
     dataset_tasks = [
@@ -543,7 +566,11 @@ if SC_MODE:
         ("unanswerable_v2", unans_run, "baseline"),
     ]
 
-    for ds_name, questions, prompt_mode in dataset_tasks:
+    total_q_all = sum(len(qs) for _, qs, _ in dataset_tasks)
+    timing_history = []
+    eta_printed = False
+
+    for ds_idx, (ds_name, questions, prompt_mode) in enumerate(dataset_tasks):
         out_file = os.path.join(sc_out_dir, f"{ds_name}.jsonl")
         done_ids = set()
         if os.path.exists(out_file):
@@ -567,11 +594,11 @@ if SC_MODE:
                     prompt_text = reasoning_baseline_prompt(q)
 
                 # 1. Greedy pass (1 extra greedy generation per question)
-                g_ans, g_trunc, g_insuf, g_time = generate_single_greedy(q, prompt_text)
+                g_ans, g_trunc, g_insuf, g_insuf_reasoning, g_time = generate_single_greedy(q, prompt_text)
 
                 # 2. Self-consistency sampled passes (SC_K samples)
                 t0_sc = time.perf_counter()
-                parsed_answers, truncations, insufficient_info = generate_sc_k_samples(
+                parsed_answers, truncations, insufficient_info, insuf_reasoning_only = generate_sc_k_samples(
                     q, prompt_text, SC_K, SC_TEMPERATURE, SC_TOP_P, SC_BATCH_SIZE
                 )
                 sc_gen_time = round(time.perf_counter() - t0_sc, 4)
@@ -598,10 +625,12 @@ if SC_MODE:
                     "greedy_answer": g_ans,
                     "greedy_truncated": g_trunc,
                     "greedy_insufficient_info": g_insuf,
+                    "greedy_insuf_in_reasoning_only": g_insuf_reasoning,
                     "greedy_time": g_time,
                     "parsed_answers": parsed_answers,
                     "truncations": truncations,
                     "insufficient_info": insufficient_info,
+                    "insuf_in_reasoning_only": insuf_reasoning_only,
                     "majority_answer": majority_answer,
                     "agreement": agreement,
                     "distinct_answers": distinct_answers,
@@ -622,6 +651,33 @@ if SC_MODE:
                             loc_fh.flush()
                     except Exception:
                         pass
+
+                q_total_sec = g_time + sc_gen_time
+                timing_history.append(q_total_sec)
+
+                # Print ETA after first 5 questions of the first dataset
+                if not eta_printed and ds_idx == 0 and len(timing_history) == 5:
+                    eta_printed = True
+                    mean_sec = sum(timing_history) / len(timing_history)
+                    done_count_all = 0
+                    for d_n, _, _ in dataset_tasks:
+                        d_path = os.path.join(sc_out_dir, f"{d_n}.jsonl")
+                        if os.path.exists(d_path):
+                            try:
+                                with open(d_path, "r", encoding="utf-8") as f_cnt:
+                                    done_count_all += sum(1 for line in f_cnt if line.strip())
+                            except Exception:
+                                pass
+                    rem_q = max(0, total_q_all - done_count_all)
+                    proj_hours = (mean_sec * rem_q) / 3600.0
+                    print(
+                        f"\n{'='*75}\n"
+                        f"[ETA] Mean: {mean_sec:.2f} s/question (greedy + SC) | "
+                        f"Projected time for remaining {rem_q} questions across all 3 datasets: {proj_hours:.2f} hours "
+                        f"({proj_hours * 60:.1f} mins)\n"
+                        f"{'='*75}\n",
+                        flush=True,
+                    )
 
                 if q_idx % 10 == 0 or q_idx == len(questions):
                     print(
