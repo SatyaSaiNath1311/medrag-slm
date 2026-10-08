@@ -66,3 +66,21 @@ The script `src/analysis_adaptive_rag.py` evaluates three adaptive routing strat
 **Validation-Only Tuning Rule**:
 All thresholds ($\tau$ over 101 validation rerank score quantiles, and $\delta \in \{0, 0.05, 0.1, 0.2\}$) are tuned strictly on the `validation` split to maximize validation accuracy. The selected parameters are then frozen and applied to the `test` split unchanged, preventing data leakage and ensuring test results remain unbiased.
 
+## Unanswerable Question Set v2 (`data/unanswerable_v2/`)
+A larger, challenging evaluation benchmark created by `src/build_unanswerable_v2.py` for evaluating medical SLM abstention reliability and distinguishing safe abstention from false abstention:
+- **300 Unanswerable Questions** across 6 balanced categories (50 each):
+  1. `fabricated_drug`: Plausible fake pharmaceuticals built from pharma-style syllables (`-vastin`, `-zolam`, `-ciclib`, etc.) in realistic dosing, adverse-effect, and interaction scenarios (verified 0 matches in textbook corpus).
+  2. `fabricated_disease`: Plausible fake syndromes and fictitious pathologies in diagnostic/management dilemmas (verified 0 matches in textbook corpus).
+  3. `false_premise`: Questions presupposing medical falsehoods (e.g., *"Why does paracetamol cure Plasmodium falciparum malaria?"*).
+  4. `missing_info`: Clinical scenarios that cannot be answered without essential omitted parameters (weight, age, creatinine clearance, vitals, or clinical history).
+  5. `out_of_scope`: Non-clinical requests (medical malpractice tort liability, health insurance billing/reimbursement, deterministic individual lifespan predictions, private clinician contact PII).
+  6. `ambiguous`: Questions lacking clinical consensus or a single defensible option.
+- **100 Matched Answerable Controls**: Near-miss paired questions sharing the exact template structures of the fabricated drug and disease categories, but utilizing real common entities (metformin, amoxicillin, malaria, anemia, etc.) with correct gold options to quantify false abstention rates.
+- **Data Splits**:
+  - `data/unanswerable_v2/val.jsonl`: 200 unanswerable + 60 controls (for validation threshold selection and abstention tuning).
+  - `data/unanswerable_v2/test.jsonl`: 100 unanswerable + 40 controls (frozen test set).
+  - `data/unanswerable_v2/test.sha256`: Cryptographic SHA-256 digest of `test.jsonl`.
+- **Frozen-Test Rule**:
+  The test partition (`data/unanswerable_v2/test.jsonl`) is cryptographically frozen (`test.sha256`) and must **NEVER** be examined, modified, or used for model prompt tuning, threshold calibration, or temperature fitting. All abstention parameters and operating thresholds must be tuned exclusively on `val.jsonl`.
+
+

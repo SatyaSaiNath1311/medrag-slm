@@ -10,6 +10,7 @@ Inputs (all produced by earlier phases):
   outputs/analysis/medpsy_reliability.json           reliability score results
   outputs/analysis/phase9_abstention.json            RAG + abstain for the 5 standard models
   outputs/analysis/profiling.json                    peak GPU memory for the 5 profiled models
+  outputs/kaggle_qa/full/<model>/**/phase5/<model>.jsonl   baseline predictions (confident wrong answers)
 
 Outputs: outputs/figures/slides/chart*.png (300 dpi) and .svg
 
@@ -315,6 +316,49 @@ def chart_vram(profiling_path, out_dir):
     save(fig, out_dir, "chart9_gpu_memory")
 
 
+def load_baseline_medqa_rows(model, root="outputs/kaggle_qa/full"):
+    """Baseline MedQA test predictions for one model (Phase 5 output downloaded from Kaggle)."""
+    cands = sorted(Path(root).glob(f"{model}/**/phase5/{model}.jsonl"))
+    for c in cands:
+        rows = [json.loads(l) for l in c.read_text().splitlines() if l.strip()]
+        rows = [r for r in rows if r.get("split") == "test" and r.get("dataset") == "medqa"]
+        if len(rows) == 500:
+            return rows
+    return None
+
+
+def chart_accuracy_vs_hallucination(out_dir, threshold=0.90):
+    """Accuracy and confident wrong answers (confidence >= threshold) as % of all 500 MedQA questions."""
+    acc, hall, counts = [], [], []
+    for m in MODELS:
+        rows = load_baseline_medqa_rows(m)
+        if rows is None:
+            print(f"WARNING: baseline MedQA predictions for {m} not found under outputs/kaggle_qa/full; "
+                  "chart10 skipped")
+            return
+        n = len(rows)
+        wrong = [r for r in rows if not r.get("correct")]
+        conf_wrong = [r for r in wrong if (r.get("confidence") or 0) >= threshold]
+        acc.append(100 * (n - len(wrong)) / n)
+        hall.append(100 * len(conf_wrong) / n)
+        counts.append((m, len(wrong), len(conf_wrong)))
+    print("  confident wrong answers (model, wrong, confident wrong):", counts)
+    x, w = np.arange(len(MODELS)), 0.38
+    fig, ax = plt.subplots(figsize=(13, 6.5))
+    b1 = ax.bar(x - w / 2 - 0.02, acc, w, label="Accuracy", color=GREEN)
+    b2 = ax.bar(x + w / 2 + 0.02, hall, w, label=f"Confident wrong answers (confidence >= {threshold:.2f})",
+                color="#C0392B")
+    label_bars(ax, b1, acc, lambda v: f"{v:.1f}%")
+    label_bars(ax, b2, hall, lambda v: f"{v:.1f}%")
+    ax.set_xticks(x, [LABEL[m] for m in MODELS])
+    ax.set_ylim(0, 105)
+    ax.set_ylabel("% of all MedQA test questions (n = 500)")
+    ax.set_title("Accuracy vs confident wrong answers (baseline, no retrieval)", pad=40)
+    ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
+    ax.grid(axis="y", alpha=0.25)
+    save(fig, out_dir, "chart10_accuracy_vs_hallucination")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--main", default="outputs/analysis/final_results.csv")
@@ -342,6 +386,7 @@ def main():
     chart_three_strategies(rows, medpsy_rag_rows, args.phase9, out)
     chart_latency_modes(rows, medpsy_rag_rows, out)
     chart_vram(args.profiling, out)
+    chart_accuracy_vs_hallucination(out)
     print(f"Done. Charts in {out}/")
 
 
