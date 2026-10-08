@@ -38,7 +38,7 @@ TINY = False                # set to True for tiny check on Kaggle
 MODELS = ["medpsy-4b"]
 MODES = ["baseline", "rag"]
 
-SC_MODE = False        # self-consistency mode for MedPsy-4B on validation
+SC_MODE = True       # self-consistency mode for MedPsy-4B on validation
 SC_K = 5
 SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
