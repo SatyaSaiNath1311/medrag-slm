@@ -131,6 +131,7 @@ except Exception as e:  # noqa: BLE001
 run(["rm", "-rf", CODE_DIR])
 run(["git", "clone", "--depth", "1", REPO_URL, CODE_DIR])
 os.chdir(CODE_DIR)
+sys.path.insert(0, CODE_DIR)
 run(["git", "log", "-1", "--oneline"])
 run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
 
@@ -408,7 +409,7 @@ if SC_MODE:
 
     # ── 7. Generation helpers: Greedy pass + Batched Sampling ──────────────────
     def final_answer_section(gen_text: str) -> str:
-        """Return text after the last '</think>' if present;
+        r"""Return text after the last '</think>' if present;
         otherwise text from the last line matching r"(?im)^\s*Answer\s*:" to the end;
         otherwise the last 300 characters.
         """
