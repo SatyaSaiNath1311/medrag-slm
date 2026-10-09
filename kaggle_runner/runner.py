@@ -44,6 +44,7 @@ SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
 SC_PILOT_N = 50        # when > 0, use only the first N questions per dataset; for unanswerable_v2, sample stratified
 SC_BATCH_SIZE = 5      # batch size for sampling to avoid T4 OOM
+SC_DATASETS = "pubmedqa"
 
 # Override from env var if provided
 if "SC_MODE" in os.environ:
@@ -58,6 +59,8 @@ if "SC_PILOT_N" in os.environ:
     SC_PILOT_N = int(os.environ["SC_PILOT_N"])
 if "SC_BATCH_SIZE" in os.environ:
     SC_BATCH_SIZE = int(os.environ["SC_BATCH_SIZE"])
+if "SC_DATASETS" in os.environ:
+    SC_DATASETS = os.environ["SC_DATASETS"]
 if "CHECK_ONLY" in os.environ:
     CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
 if "PROFILE" in os.environ:
@@ -159,7 +162,7 @@ if PARALLEL_GPUS:
 if TINY:
     print("TINY mode enabled: running on tiny scale")
 if SC_MODE:
-    print(f"SC_MODE enabled: medpsy-4b self-consistency (K={SC_K}, temp={SC_TEMPERATURE}, top_p={SC_TOP_P}, pilot_n={SC_PILOT_N}, batch_size={SC_BATCH_SIZE})")
+    print(f"SC_MODE enabled: medpsy-4b self-consistency (datasets={SC_DATASETS}, K={SC_K}, temp={SC_TEMPERATURE}, top_p={SC_TOP_P}, pilot_n={SC_PILOT_N}, batch_size={SC_BATCH_SIZE})")
 
 # Save environment freeze and nvidia-smi
 ENV_DIR = os.path.join(WORK, "env")
@@ -245,14 +248,33 @@ if SC_MODE:
         reasoning_baseline_prompt,
         reasoning_context_prompt,
     )
+    from src.qa_pipeline import ensure_pubmedqa_contexts
+
+    active_sc_datasets = [d.strip().lower() for d in SC_DATASETS.split(",") if d.strip()]
+
+    # ── Load config and extract exact context-mode settings from cfg ───────────
+    cfg = load_config("configs/base.yaml")
+    qcfg = cfg.get("qa", {})
+    mcfg = next(m for m in cfg["models"] if m["name"] == "medpsy-4b")
+    is_reasoning = mcfg.get("reasoning", False)
+
+    context_max_chars = qcfg["passage_max_chars"] * 3
+    context_max_new_tokens = (
+        mcfg.get("max_new_tokens_reasoning")
+        if is_reasoning
+        else (qcfg.get("max_new_tokens_context") or qcfg["max_new_tokens_rag"])
+    )
 
     print("\n" + "=" * 80, flush=True)
     print("=== SC_MODE STARTUP: MedPsy-4B Self-Consistency Validation ===", flush=True)
+    print(f"  SC_DATASETS    : {SC_DATASETS} ({active_sc_datasets})", flush=True)
     print(f"  SC_K           : {SC_K}", flush=True)
     print(f"  SC_TEMPERATURE : {SC_TEMPERATURE}", flush=True)
     print(f"  SC_TOP_P       : {SC_TOP_P}", flush=True)
     print(f"  SC_PILOT_N     : {SC_PILOT_N} (0 = full validation set)", flush=True)
     print(f"  SC_BATCH_SIZE  : {SC_BATCH_SIZE}", flush=True)
+    print(f"  Context max_chars     : {context_max_chars}", flush=True)
+    print(f"  Context max_new_tokens: {context_max_new_tokens}", flush=True)
     print("=" * 80 + "\n", flush=True)
 
     # ── 1. Stratified sampling helper for unanswerable_v2 ──────────────────────
@@ -298,98 +320,121 @@ if SC_MODE:
         return selected
 
     # ── 2. Load unanswerable_v2 validation data (with strict test.jsonl safety assert) ──
-    unans_candidates = [
-        os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl"),
-        "data/unanswerable_v2/val.jsonl",
-        os.path.abspath("data/unanswerable_v2/val.jsonl"),
-        "/kaggle/working/medrag-slm/data/unanswerable_v2/val.jsonl",
-        "/kaggle/working/data/unanswerable_v2/val.jsonl",
-    ]
-    unans_val_path = next((p for p in unans_candidates if os.path.exists(p)), None)
-    if not unans_val_path:
-        input_hits = (
-            glob.glob("/kaggle/input/**/unanswerable_v2/val.jsonl", recursive=True)
-            or glob.glob("/kaggle/input/**/data/unanswerable_v2/val.jsonl", recursive=True)
+    unans_val_all = []
+    if "unanswerable_v2" in active_sc_datasets:
+        unans_candidates = [
+            os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl"),
+            "data/unanswerable_v2/val.jsonl",
+            os.path.abspath("data/unanswerable_v2/val.jsonl"),
+            "/kaggle/working/medrag-slm/data/unanswerable_v2/val.jsonl",
+            "/kaggle/working/data/unanswerable_v2/val.jsonl",
+        ]
+        unans_val_path = next((p for p in unans_candidates if os.path.exists(p)), None)
+        if not unans_val_path:
+            input_hits = (
+                glob.glob("/kaggle/input/**/unanswerable_v2/val.jsonl", recursive=True)
+                or glob.glob("/kaggle/input/**/data/unanswerable_v2/val.jsonl", recursive=True)
+            )
+            if input_hits:
+                unans_val_path = input_hits[0]
+
+        if not unans_val_path or not os.path.exists(unans_val_path):
+            searched_fmt = "\n  - ".join(unans_candidates + ["/kaggle/input/**/unanswerable_v2/val.jsonl"])
+            sys.exit(
+                f"\n" + "=" * 80 + "\n"
+                f"FATAL ERROR: data/unanswerable_v2/val.jsonl NOT FOUND!\n"
+                f"Searched candidate locations:\n  - {searched_fmt}\n\n"
+                f"Troubleshooting / Resolution:\n"
+                f"  1. Git clone path: verify 'data/unanswerable_v2/val.jsonl' is committed and pushed to git repository:\n"
+                f"     {REPO_URL}\n"
+                f"  2. Kaggle dataset input: if using an attached dataset, ensure it contains 'data/unanswerable_v2/val.jsonl'.\n"
+                f"  3. Working directory: currently '{os.getcwd()}'; CODE_DIR is '{CODE_DIR}'.\n"
+                f"=" * 80 + "\n"
+            )
+
+        # STRICT ASSERT: Never load test.jsonl in SC_MODE
+        assert not unans_val_path.endswith("test.jsonl"), (
+            f"SAFETY ASSERTION VIOLATION: Attempted to load test set {unans_val_path} in SC_MODE!"
         )
-        if input_hits:
-            unans_val_path = input_hits[0]
-
-    if not unans_val_path or not os.path.exists(unans_val_path):
-        searched_fmt = "\n  - ".join(unans_candidates + ["/kaggle/input/**/unanswerable_v2/val.jsonl"])
-        sys.exit(
-            f"\n" + "=" * 80 + "\n"
-            f"FATAL ERROR: data/unanswerable_v2/val.jsonl NOT FOUND!\n"
-            f"Searched candidate locations:\n  - {searched_fmt}\n\n"
-            f"Troubleshooting / Resolution:\n"
-            f"  1. Git clone path: verify 'data/unanswerable_v2/val.jsonl' is committed and pushed to git repository:\n"
-            f"     {REPO_URL}\n"
-            f"  2. Kaggle dataset input: if using an attached dataset, ensure it contains 'data/unanswerable_v2/val.jsonl'.\n"
-            f"  3. Working directory: currently '{os.getcwd()}'; CODE_DIR is '{CODE_DIR}'.\n"
-            f"=" * 80 + "\n"
+        assert "test.jsonl" not in unans_val_path.lower(), (
+            f"SAFETY ASSERTION VIOLATION: Path '{unans_val_path}' contains test.jsonl!"
         )
 
-    # STRICT ASSERT: Never load test.jsonl in SC_MODE
-    assert not unans_val_path.endswith("test.jsonl"), (
-        f"SAFETY ASSERTION VIOLATION: Attempted to load test set {unans_val_path} in SC_MODE!"
-    )
-    assert "test.jsonl" not in unans_val_path.lower(), (
-        f"SAFETY ASSERTION VIOLATION: Path '{unans_val_path}' contains test.jsonl!"
-    )
+        with open(unans_val_path, "r", encoding="utf-8") as f:
+            unans_val_all = [json.loads(line) for line in f if line.strip()]
 
-    with open(unans_val_path, "r", encoding="utf-8") as f:
-        unans_val_all = [json.loads(line) for line in f if line.strip()]
-
-    assert len(unans_val_all) == 260, f"Expected 260 unanswerable_v2 val rows, got {len(unans_val_all)}"
-    assert all(r.get("split") == "validation" for r in unans_val_all), (
-        "SAFETY ASSERTION VIOLATION: Found non-validation split rows in unanswerable val set!"
-    )
-    assert not any(r.get("id", "").startswith("unans-v2-test-") for r in unans_val_all), (
-        "SAFETY ASSERTION VIOLATION: Found test-split IDs in unanswerable val set!"
-    )
-    print(f"Loaded {len(unans_val_all)} unanswerable_v2 validation questions from {unans_val_path}", flush=True)
+        assert len(unans_val_all) == 260, f"Expected 260 unanswerable_v2 val rows, got {len(unans_val_all)}"
+        assert all(r.get("split") == "validation" for r in unans_val_all), (
+            "SAFETY ASSERTION VIOLATION: Found non-validation split rows in unanswerable val set!"
+        )
+        assert not any(r.get("id", "").startswith("unans-v2-test-") for r in unans_val_all), (
+            "SAFETY ASSERTION VIOLATION: Found test-split IDs in unanswerable val set!"
+        )
+        print(f"Loaded {len(unans_val_all)} unanswerable_v2 validation questions from {unans_val_path}", flush=True)
 
     # ── 3. Load MedQA (200) and PubMedQA (200) validation questions ────────────
-    val_candidates = [
-        os.path.join(WORK, "phase1", "validation.jsonl"),
-        "/kaggle/working/work/phase1/validation.jsonl",
-        os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase1", "validation.jsonl"),
-        "outputs/kaggle_build/work/phase1/validation.jsonl",
-    ]
-    val_file = next((p for p in val_candidates if os.path.exists(p)), None)
-    if not val_file:
-        hits_v = glob.glob("/kaggle/input/**/phase1/validation.jsonl", recursive=True) or glob.glob("/kaggle/input/**/validation.jsonl", recursive=True)
-        if hits_v:
-            val_file = hits_v[0]
-    if not val_file:
-        sys.exit("ERROR: validation.jsonl not found for MedQA / PubMedQA!")
+    medqa_val_all = []
+    pubmedqa_val_all = []
+    if any(ds in active_sc_datasets for ds in ("medqa", "pubmedqa")):
+        val_candidates = [
+            os.path.join(WORK, "phase1", "validation.jsonl"),
+            "/kaggle/working/work/phase1/validation.jsonl",
+            os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase1", "validation.jsonl"),
+            "outputs/kaggle_build/work/phase1/validation.jsonl",
+        ]
+        val_file = next((p for p in val_candidates if os.path.exists(p)), None)
+        if not val_file:
+            hits_v = glob.glob("/kaggle/input/**/phase1/validation.jsonl", recursive=True) or glob.glob("/kaggle/input/**/validation.jsonl", recursive=True)
+            if hits_v:
+                val_file = hits_v[0]
+        if not val_file:
+            sys.exit("ERROR: validation.jsonl not found for MedQA / PubMedQA!")
 
-    with open(val_file, "r", encoding="utf-8") as f:
-        val_p1_rows = [json.loads(line) for line in f if line.strip()]
+        with open(val_file, "r", encoding="utf-8") as f:
+            val_p1_rows = [json.loads(line) for line in f if line.strip()]
 
-    medqa_val_all = [q for q in val_p1_rows if q.get("dataset") == "medqa" and not q.get("should_abstain")]
-    pubmedqa_val_all = [q for q in val_p1_rows if q.get("dataset") == "pubmedqa" and not q.get("should_abstain")]
+        medqa_val_all = [q for q in val_p1_rows if q.get("dataset") == "medqa" and not q.get("should_abstain")]
+        pubmedqa_val_all = [q for q in val_p1_rows if q.get("dataset") == "pubmedqa" and not q.get("should_abstain")]
 
-    assert len(medqa_val_all) == 200, f"Expected 200 MedQA val rows, got {len(medqa_val_all)}"
-    assert len(pubmedqa_val_all) == 200, f"Expected 200 PubMedQA val rows, got {len(pubmedqa_val_all)}"
-    print(f"Loaded {len(medqa_val_all)} MedQA val and {len(pubmedqa_val_all)} PubMedQA val from {val_file}", flush=True)
+        if "medqa" in active_sc_datasets:
+            assert len(medqa_val_all) == 200, f"Expected 200 MedQA val rows, got {len(medqa_val_all)}"
+        if "pubmedqa" in active_sc_datasets:
+            assert len(pubmedqa_val_all) == 200, f"Expected 200 PubMedQA val rows, got {len(pubmedqa_val_all)}"
+        print(f"Loaded {len(medqa_val_all)} MedQA val and {len(pubmedqa_val_all)} PubMedQA val from {val_file}", flush=True)
 
     # ── 4. Apply SC_PILOT_N filter if active ───────────────────────────────────
+    medqa_run = []
+    pubmedqa_run = []
+    unans_run = []
     if SC_PILOT_N > 0:
-        medqa_run = medqa_val_all[:SC_PILOT_N]
-        pubmedqa_run = pubmedqa_val_all[:SC_PILOT_N]
-        unans_run = sample_stratified_unans_v2(unans_val_all, SC_PILOT_N, seed=42)
+        if "medqa" in active_sc_datasets:
+            medqa_run = medqa_val_all[:SC_PILOT_N]
+        if "pubmedqa" in active_sc_datasets:
+            pubmedqa_run = pubmedqa_val_all[:SC_PILOT_N]
+        if "unanswerable_v2" in active_sc_datasets:
+            unans_run = sample_stratified_unans_v2(unans_val_all, SC_PILOT_N, seed=42)
         print(f"\nPILOT MODE ACTIVE (SC_PILOT_N={SC_PILOT_N}):")
-        print(f"  MedQA       : first {len(medqa_run)} questions")
-        print(f"  PubMedQA    : first {len(pubmedqa_run)} questions")
-        print(f"  Unans v2    : {len(unans_run)} questions (stratified sample incl. controls)")
+        for ds in active_sc_datasets:
+            cnt = len(medqa_run) if ds == "medqa" else (len(pubmedqa_run) if ds == "pubmedqa" else len(unans_run))
+            print(f"  {ds:<15}: first {cnt} questions")
     else:
-        medqa_run = medqa_val_all
-        pubmedqa_run = pubmedqa_val_all
-        unans_run = unans_val_all
+        if "medqa" in active_sc_datasets:
+            medqa_run = medqa_val_all
+        if "pubmedqa" in active_sc_datasets:
+            pubmedqa_run = pubmedqa_val_all
+        if "unanswerable_v2" in active_sc_datasets:
+            unans_run = unans_val_all
         print(f"\nFULL VALIDATION MODE ACTIVE:")
-        print(f"  MedQA       : all {len(medqa_run)} questions")
-        print(f"  PubMedQA    : all {len(pubmedqa_run)} questions")
-        print(f"  Unans v2    : all {len(unans_run)} questions")
+        for ds in active_sc_datasets:
+            cnt = len(medqa_run) if ds == "medqa" else (len(pubmedqa_run) if ds == "pubmedqa" else len(unans_run))
+            print(f"  {ds:<15}: all {cnt} questions")
+
+    # ── Ensure PubMedQA contexts (exactly like qa_pipeline context mode) ───────
+    if "pubmedqa" in active_sc_datasets:
+        ensure_pubmedqa_contexts(pubmedqa_run, cfg)
+        for q in pubmedqa_run:
+            assert bool(q.get("context")), f"SAFETY ASSERTION VIOLATION: PubMedQA row {q.get('id')} has empty context!"
+        print(f"Verified non-empty contexts attached for all {len(pubmedqa_run)} PubMedQA questions.", flush=True)
 
     # ── 5. Setup output directories ───────────────────────────────────────────
     sc_out_dir = "/kaggle/working/outputs/sc_val/medpsy-4b" if os.path.exists("/kaggle/working") else "outputs/sc_val/medpsy-4b"
@@ -401,8 +446,6 @@ if SC_MODE:
             pass
 
     # ── 6. Load MedPsy-4B model ────────────────────────────────────────────────
-    cfg = load_config("configs/base.yaml")
-    mcfg = next(m for m in cfg["models"] if m["name"] == "medpsy-4b")
     device = get_device()
     print(f"\nLoading MedPsy-4B (reasoning model) on device={device}...", flush=True)
     llm = LLM(mcfg, device=device)
@@ -421,16 +464,16 @@ if SC_MODE:
             return gen_text[ans_matches[-1].start():]
         return gen_text[-300:] if len(gen_text) > 300 else gen_text
 
-    def generate_single_greedy(q, prompt_text):
+    def generate_single_greedy(q, prompt_text, max_new_tokens=1024):
         """1 extra greedy generation (do_sample=False, temp=0) per question for paired SC vs greedy evaluation."""
         wrapped = llm.wrap_reasoning(prompt_text)
         first_dev = next(llm.model.parameters()).device
         enc = llm.tok([wrapped], return_tensors="pt", padding=True, add_special_tokens=False)
         enc = {k: v.to(first_dev) for k, v in enc.items()}
-        prompt_len = enc["input_ids"].shape[1]
+        prompt_len = int(enc["attention_mask"][0].sum())
 
         gcfg_greedy = GenerationConfig(
-            max_new_tokens=1024,
+            max_new_tokens=max_new_tokens,
             do_sample=False,
             eos_token_id=sorted(llm.eos),
             pad_token_id=llm.pad_id,
@@ -447,7 +490,8 @@ if SC_MODE:
         g_time = round(time.perf_counter() - t0, 4)
 
         seqs = out.sequences if hasattr(out, "sequences") else out
-        gen_ids = seqs[0, prompt_len:].tolist()
+        prompt_ids_len = enc["input_ids"].shape[1]
+        gen_ids = seqs[0, prompt_ids_len:].tolist()
         cut = next((idx for idx, t in enumerate(gen_ids) if t in llm.eos), len(gen_ids))
         gen_text = llm.tok.decode(gen_ids[:cut], skip_special_tokens=True)
         hit_max = (cut == len(gen_ids))
@@ -469,17 +513,17 @@ if SC_MODE:
             if ans == "ABSTAIN":
                 has_insuf = True
 
-        return ans, truncated, has_insuf, insuf_in_reasoning_only, g_time
+        return ans, truncated, has_insuf, insuf_in_reasoning_only, g_time, prompt_len
 
-    def generate_sc_k_samples(q, prompt_text, k_samples, temperature, top_p, batch_size):
+    def generate_sc_k_samples(q, prompt_text, k_samples, temperature, top_p, batch_size, max_new_tokens=1024):
         wrapped = llm.wrap_reasoning(prompt_text)
         first_dev = next(llm.model.parameters()).device
         enc_single = llm.tok([wrapped], return_tensors="pt", padding=True, add_special_tokens=False)
         enc_single = {k: v.to(first_dev) for k, v in enc_single.items()}
-        prompt_len = enc_single["input_ids"].shape[1]
+        prompt_ids_len = enc_single["input_ids"].shape[1]
 
         gcfg = GenerationConfig(
-            max_new_tokens=1024,
+            max_new_tokens=max_new_tokens,
             do_sample=True,
             temperature=temperature,
             top_p=top_p,
@@ -510,7 +554,7 @@ if SC_MODE:
                     torch.cuda.synchronize()
                 seqs = out.sequences if hasattr(out, "sequences") else out
                 for i in range(c):
-                    gen_ids = seqs[i, prompt_len:].tolist()
+                    gen_ids = seqs[i, prompt_ids_len:].tolist()
                     cut = next((idx for idx, t in enumerate(gen_ids) if t in llm.eos), len(gen_ids))
                     gen_text = llm.tok.decode(gen_ids[:cut], skip_special_tokens=True)
                     raw_outputs.append((gen_text, cut == len(gen_ids)))
@@ -522,7 +566,7 @@ if SC_MODE:
                         with torch.inference_mode():
                             out_single = llm.model.generate(**enc_single, generation_config=gcfg)
                         seqs_single = out_single.sequences if hasattr(out_single, "sequences") else out_single
-                        gen_ids = seqs_single[0, prompt_len:].tolist()
+                        gen_ids = seqs_single[0, prompt_ids_len:].tolist()
                         cut = next((idx for idx, t in enumerate(gen_ids) if t in llm.eos), len(gen_ids))
                         gen_text = llm.tok.decode(gen_ids[:cut], skip_special_tokens=True)
                         raw_outputs.append((gen_text, cut == len(gen_ids)))
@@ -561,11 +605,12 @@ if SC_MODE:
         return parsed_answers, truncations, insufficient_info, insuf_in_reasoning_only
 
     # ── 8. Run each dataset in sequence (Resumable JSONL per dataset) ───────────
-    dataset_tasks = [
+    all_dataset_tasks = [
         ("medqa", medqa_run, "baseline"),
         ("pubmedqa", pubmedqa_run, "context"),
         ("unanswerable_v2", unans_run, "baseline"),
     ]
+    dataset_tasks = [t for t in all_dataset_tasks if t[0] in active_sc_datasets]
 
     total_q_all = sum(len(qs) for _, qs, _ in dataset_tasks)
     timing_history = []
@@ -590,17 +635,21 @@ if SC_MODE:
                     continue
 
                 if prompt_mode == "context":
-                    prompt_text = reasoning_context_prompt(q)
+                    prompt_text = reasoning_context_prompt(q, max_chars=context_max_chars)
+                    cur_max_new = context_max_new_tokens
                 else:
                     prompt_text = reasoning_baseline_prompt(q)
+                    cur_max_new = 1024
 
                 # 1. Greedy pass (1 extra greedy generation per question)
-                g_ans, g_trunc, g_insuf, g_insuf_reasoning, g_time = generate_single_greedy(q, prompt_text)
+                g_ans, g_trunc, g_insuf, g_insuf_reasoning, g_time, prompt_tokens = generate_single_greedy(
+                    q, prompt_text, max_new_tokens=cur_max_new
+                )
 
                 # 2. Self-consistency sampled passes (SC_K samples)
                 t0_sc = time.perf_counter()
                 parsed_answers, truncations, insufficient_info, insuf_reasoning_only = generate_sc_k_samples(
-                    q, prompt_text, SC_K, SC_TEMPERATURE, SC_TOP_P, SC_BATCH_SIZE
+                    q, prompt_text, SC_K, SC_TEMPERATURE, SC_TOP_P, SC_BATCH_SIZE, max_new_tokens=cur_max_new
                 )
                 sc_gen_time = round(time.perf_counter() - t0_sc, 4)
 
@@ -615,6 +664,7 @@ if SC_MODE:
 
                 agreement = round(majority_count / SC_K, 4)
                 distinct_answers = len(set(valid_answers))
+                context_chars = len(q.get("context") or "")
 
                 row = {
                     "id": q["id"],
@@ -623,6 +673,8 @@ if SC_MODE:
                     "control": bool(q.get("control", False)),
                     "gold": q.get("answer"),
                     "source_id": q.get("source_id"),
+                    "prompt_tokens": prompt_tokens,
+                    "context_chars": context_chars,
                     "greedy_answer": g_ans,
                     "greedy_truncated": g_trunc,
                     "greedy_insufficient_info": g_insuf,
@@ -674,7 +726,7 @@ if SC_MODE:
                     print(
                         f"\n{'='*75}\n"
                         f"[ETA] Mean: {mean_sec:.2f} s/question (greedy + SC) | "
-                        f"Projected time for remaining {rem_q} questions across all 3 datasets: {proj_hours:.2f} hours "
+                        f"Projected time for remaining {rem_q} questions across all {len(dataset_tasks)} datasets: {proj_hours:.2f} hours "
                         f"({proj_hours * 60:.1f} mins)\n"
                         f"{'='*75}\n",
                         flush=True,
