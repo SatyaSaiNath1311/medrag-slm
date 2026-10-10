@@ -233,6 +233,9 @@ def analyze_accuracy_comparison(
     otherwise falls back to greedy_map from prior runs.
     """
     matched = []
+    n_own = 0
+    n_fallback = 0
+    n_missing = 0
     for r in sc_rows:
         qid = r["id"]
         gold = r.get("gold")
@@ -242,9 +245,17 @@ def analyze_accuracy_comparison(
         # Prefer paired greedy_answer inside row if present; else fallback to greedy_map
         if "greedy_answer" in r and r["greedy_answer"] is not None:
             g_pred = r["greedy_answer"]
-        else:
+            n_own += 1
+        elif greedy_map and qid in greedy_map:
             g_row = greedy_map.get(qid)
             g_pred = g_row.get("pred") if g_row else None
+            if g_pred is not None:
+                n_fallback += 1
+            else:
+                n_missing += 1
+        else:
+            g_pred = None
+            n_missing += 1
 
         sc_pred = r.get("majority_answer")
 
@@ -298,11 +309,25 @@ def analyze_accuracy_comparison(
     # ECE of agreement
     ece, cal_bins = compute_ece([int(c) for c in sc_corrs], agreements)
 
+    if n_own == n and n > 0:
+        greedy_source = "row['greedy_answer'] (paired SC pass)"
+    elif n_fallback == n and n > 0:
+        greedy_source = "fallback reference file"
+    elif n_own > 0 and n_fallback > 0:
+        greedy_source = f"hybrid: row['greedy_answer'] ({n_own}/{n}) + fallback reference ({n_fallback}/{n})"
+    elif n_own > 0:
+        greedy_source = f"row['greedy_answer'] ({n_own}/{n}, {n_missing} missing)"
+    else:
+        greedy_source = "none (all missing)"
+
     return {
         "dataset": dataset_name,
         "n": n,
         "greedy_acc": round(g_acc, 4),
         "greedy_ci": g_ci,
+        "greedy_source": greedy_source,
+        "n_own": n_own,
+        "n_fallback": n_fallback,
         "sc_acc": round(sc_acc, 4),
         "sc_ci": sc_ci,
         "diff_acc": round(diff_acc, 4),
@@ -708,6 +733,10 @@ def generate_markdown_report(
 
     # ── Table 1: Accuracy comparison ──
     lines.append("## 1. Accuracy: Greedy vs. Self-Consistency Majority Vote\n")
+    for ds_res in [eval_medqa, eval_pubmedqa]:
+        if ds_res and ds_res.get("n", 0) > 0:
+            lines.append(f"- **{ds_res['dataset']} Greedy Baseline Source**: {ds_res.get('greedy_source')}")
+    lines.append("")
     lines.append("| Dataset | N | Greedy Acc [95% CI] | SC Maj-Vote Acc [95% CI] | Δ Acc (pts) [95% CI] | SC Wins / Greedy Wins | McNemar $p$-value | AUROC [95% CI] | ECE |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
 
@@ -870,12 +899,23 @@ def main():
 
     print(f"Loaded SC rows: MedQA={len(medqa_sc)}, PubMedQA={len(pubmedqa_sc)}, Unanswerable={len(unans_sc)}")
 
-    # 2. Load Greedy files (fallback if rows don't have greedy_answer)
-    g_medqa_map = load_greedy_map(Path(args.greedy_medqa), "medqa")
-    g_pubmedqa_map = load_greedy_map(Path(args.greedy_pubmedqa), "pubmedqa")
+    # 2. Load Greedy files (fallback only for rows without greedy_answer)
+    medqa_missing_greedy = sum(1 for r in medqa_sc if r.get("greedy_answer") is None) if medqa_sc else 0
+    pubmedqa_missing_greedy = sum(1 for r in pubmedqa_sc if r.get("greedy_answer") is None) if pubmedqa_sc else 0
 
-    if g_medqa_map or g_pubmedqa_map:
-        print(f"Loaded fallback greedy references: MedQA={len(g_medqa_map)}, PubMedQA={len(g_pubmedqa_map)}")
+    g_medqa_map = {}
+    if medqa_missing_greedy > 0:
+        g_medqa_map = load_greedy_map(Path(args.greedy_medqa), "medqa")
+        print(f"Loaded fallback greedy reference for MedQA: {len(g_medqa_map)} rows from {args.greedy_medqa} ({medqa_missing_greedy} rows missing greedy_answer)")
+    elif medqa_sc:
+        print("MedQA: all rows contain 'greedy_answer'; fallback reference file not needed.")
+
+    g_pubmedqa_map = {}
+    if pubmedqa_missing_greedy > 0:
+        g_pubmedqa_map = load_greedy_map(Path(args.greedy_pubmedqa), "pubmedqa")
+        print(f"Loaded fallback greedy reference for PubMedQA: {len(g_pubmedqa_map)} rows from {args.greedy_pubmedqa} ({pubmedqa_missing_greedy} rows missing greedy_answer)")
+    elif pubmedqa_sc:
+        print("PubMedQA: all rows contain 'greedy_answer'; fallback reference file not needed.")
 
     # 3. Accuracy evaluations
     eval_medqa = None
@@ -883,6 +923,7 @@ def main():
         eval_medqa = analyze_accuracy_comparison(
             medqa_sc, g_medqa_map, "MedQA", n_boot=args.bootstrap_n, seed=args.seed
         )
+        print(f"MedQA greedy baseline source: {eval_medqa['greedy_source']}")
         print(f"MedQA: Greedy Acc = {eval_medqa['greedy_acc']:.1%}, SC Maj-Vote Acc = {eval_medqa['sc_acc']:.1%} (Δ = {eval_medqa['diff_acc']:+.1%}, AUROC = {eval_medqa['auroc']:.4f}, ECE = {eval_medqa['ece']:.4f})")
 
     eval_pubmedqa = None
@@ -890,6 +931,7 @@ def main():
         eval_pubmedqa = analyze_accuracy_comparison(
             pubmedqa_sc, g_pubmedqa_map, "PubMedQA", n_boot=args.bootstrap_n, seed=args.seed
         )
+        print(f"PubMedQA greedy baseline source: {eval_pubmedqa['greedy_source']}")
         print(f"PubMedQA: Greedy Acc = {eval_pubmedqa['greedy_acc']:.1%}, SC Maj-Vote Acc = {eval_pubmedqa['sc_acc']:.1%} (Δ = {eval_pubmedqa['diff_acc']:+.1%}, AUROC = {eval_pubmedqa['auroc']:.4f}, ECE = {eval_pubmedqa['ece']:.4f})")
 
     # 4. Unanswerable evaluations across rules (a), (b), (c)

@@ -22,6 +22,12 @@ import json
 import os
 import subprocess
 import sys
+import time
+
+KERNEL_START_TIME = float(os.environ.get("KERNEL_START_TIME", time.time()))
+if "KERNEL_START_TIME" not in os.environ:
+    os.environ["KERNEL_START_TIME"] = str(KERNEL_START_TIME)
+SCRIPT_PATH = os.path.abspath(__file__)
 
 REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm.git"
 CODE_DIR = "/tmp/medrag-slm"
@@ -42,9 +48,11 @@ SC_MODE = True       # self-consistency mode for MedPsy-4B on validation
 SC_K = 5
 SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
-SC_PILOT_N = 50        # when > 0, use only the first N questions per dataset; for unanswerable_v2, sample stratified
+SC_PILOT_N = 4
 SC_BATCH_SIZE = 5      # batch size for sampling to avoid T4 OOM
-SC_DATASETS = "pubmedqa"
+SC_DATASETS = "medqa,pubmedqa,unanswerable_v2"
+SC_SHARD = None
+SC_NUM_SHARDS = 2
 
 # Override from env var if provided
 if "SC_MODE" in os.environ:
@@ -61,6 +69,10 @@ if "SC_BATCH_SIZE" in os.environ:
     SC_BATCH_SIZE = int(os.environ["SC_BATCH_SIZE"])
 if "SC_DATASETS" in os.environ:
     SC_DATASETS = os.environ["SC_DATASETS"]
+if "SC_SHARD" in os.environ:
+    SC_SHARD = int(os.environ["SC_SHARD"])
+if "SC_NUM_SHARDS" in os.environ:
+    SC_NUM_SHARDS = int(os.environ["SC_NUM_SHARDS"])
 if "CHECK_ONLY" in os.environ:
     CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
 if "PROFILE" in os.environ:
@@ -102,9 +114,6 @@ def print_kaggle_input_configs(max_depth=7):
         print("  no config.json found under /kaggle/input", flush=True)
 
 
-print_kaggle_input_configs()
-
-
 def run(cmd, extra_env=None):
     print(">>", " ".join(cmd), flush=True)
     env = os.environ.copy()
@@ -122,83 +131,91 @@ def run_bg(cmd, extra_env=None):
     return subprocess.Popen(cmd, env=env)
 
 
-# 1. Hugging Face token from Kaggle Secrets
-try:
-    from kaggle_secrets import UserSecretsClient
-    os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
-    print("HF_TOKEN loaded from Kaggle Secrets")
-except Exception as e:  # noqa: BLE001
-    print("WARNING: HF_TOKEN secret not available:", e)
+if SC_SHARD is None:
+    print_kaggle_input_configs()
 
-# 2. Fresh copy of the code
-run(["rm", "-rf", CODE_DIR])
-run(["git", "clone", "--depth", "1", REPO_URL, CODE_DIR])
-os.chdir(CODE_DIR)
-sys.path.insert(0, CODE_DIR)
-run(["git", "log", "-1", "--oneline"])
-run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
+    # 1. Hugging Face token from Kaggle Secrets
+    try:
+        from kaggle_secrets import UserSecretsClient
+        os.environ["HF_TOKEN"] = UserSecretsClient().get_secret("HF_TOKEN")
+        print("HF_TOKEN loaded from Kaggle Secrets")
+    except Exception as e:  # noqa: BLE001
+        print("WARNING: HF_TOKEN secret not available:", e)
 
-# Check for kaggle_runner/models.txt if MODELS is still empty
-models_file = "kaggle_runner/models.txt"
-if not MODELS and os.path.exists(models_file):
-    with open(models_file) as f:
-        MODELS = [line.strip() for line in f if line.strip() and not line.startswith("#")]
-if MODELS:
-    print(f"Selected models to run: {MODELS}")
-if MODES:
-    print(f"Selected modes to run: {MODES}")
-if PROFILE:
-    print("PROFILE mode enabled: running profiling benchmarks")
-if FINAL_MEDPSY:
-    print("FINAL_MEDPSY mode enabled: medpsy-4b full test split, 2-shard dual-GPU")
-if RAG_MEDPSY:
-    print("RAG_MEDPSY mode enabled: medpsy-4b + RAG on MedQA test (500), 2-shard dual-GPU")
-if VAL_MEDPSY:
-    print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
-if PILOT:
-    print("PILOT mode enabled: medpsy-4b pilot on 80-question val subset, single GPU")
-if PARALLEL_GPUS:
-    print("PARALLEL_GPUS mode enabled: splitting model list across 2 GPUs")
-if TINY:
-    print("TINY mode enabled: running on tiny scale")
-if SC_MODE:
-    print(f"SC_MODE enabled: medpsy-4b self-consistency (datasets={SC_DATASETS}, K={SC_K}, temp={SC_TEMPERATURE}, top_p={SC_TOP_P}, pilot_n={SC_PILOT_N}, batch_size={SC_BATCH_SIZE})")
+    # 2. Fresh copy of the code
+    run(["rm", "-rf", CODE_DIR])
+    run(["git", "clone", "--depth", "1", REPO_URL, CODE_DIR])
+    os.chdir(CODE_DIR)
+    sys.path.insert(0, CODE_DIR)
+    run(["git", "log", "-1", "--oneline"])
+    run([sys.executable, "-m", "pip", "install", "-q", "-r", "requirements.txt"])
 
-# Save environment freeze and nvidia-smi
-ENV_DIR = os.path.join(WORK, "env")
-os.makedirs(ENV_DIR, exist_ok=True)
-try:
-    with open(os.path.join(ENV_DIR, "environment.txt"), "w") as f:
-        subprocess.run([sys.executable, "-m", "pip", "freeze"], stdout=f, check=True)
-except Exception as e:
-    print(f"Warning writing pip freeze: {e}")
-
-try:
-    with open(os.path.join(ENV_DIR, "nvidia_smi.txt"), "w") as f:
-        subprocess.run(["nvidia-smi"], stdout=f, check=True)
-except Exception as e:
-    print(f"Warning writing nvidia-smi: {e}")
-
-if MODE == "smoke":
-    run([sys.executable, "-m", "src.smoke_test", "--config", "configs/base.yaml",
-         "--out", "/kaggle/working/outputs/smoke"])
-    sys.exit(0)
-
-# 3. Link runner A's output (phase1 ... phase7) into the work folder
-hits = glob.glob("/kaggle/input/**/phase7/evidence.jsonl", recursive=True)
-if not hits:
+    # Check for kaggle_runner/models.txt if MODELS is still empty
+    models_file = "kaggle_runner/models.txt"
+    if not MODELS and os.path.exists(models_file):
+        with open(models_file) as f:
+            MODELS = [line.strip() for line in f if line.strip() and not line.startswith("#")]
+    if MODELS:
+        print(f"Selected models to run: {MODELS}")
+    if MODES:
+        print(f"Selected modes to run: {MODES}")
+    if PROFILE:
+        print("PROFILE mode enabled: running profiling benchmarks")
+    if FINAL_MEDPSY:
+        print("FINAL_MEDPSY mode enabled: medpsy-4b full test split, 2-shard dual-GPU")
+    if RAG_MEDPSY:
+        print("RAG_MEDPSY mode enabled: medpsy-4b + RAG on MedQA test (500), 2-shard dual-GPU")
+    if VAL_MEDPSY:
+        print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
+    if PILOT:
+        print("PILOT mode enabled: medpsy-4b pilot on 80-question val subset, single GPU")
+    if PARALLEL_GPUS:
+        print("PARALLEL_GPUS mode enabled: splitting model list across 2 GPUs")
+    if TINY:
+        print("TINY mode enabled: running on tiny scale")
     if SC_MODE:
-        print("Note: evidence.jsonl not found; SC_MODE requires only validation data.", flush=True)
+        print(f"SC_MODE enabled: medpsy-4b self-consistency (parent coordinator, dual-GPU, datasets={SC_DATASETS}, K={SC_K}, temp={SC_TEMPERATURE}, top_p={SC_TOP_P}, pilot_n={SC_PILOT_N}, batch_size={SC_BATCH_SIZE})")
+
+    # Save environment freeze and nvidia-smi
+    ENV_DIR = os.path.join(WORK, "env")
+    os.makedirs(ENV_DIR, exist_ok=True)
+    try:
+        with open(os.path.join(ENV_DIR, "environment.txt"), "w") as f:
+            subprocess.run([sys.executable, "-m", "pip", "freeze"], stdout=f, check=True)
+    except Exception as e:
+        print(f"Warning writing pip freeze: {e}")
+
+    try:
+        with open(os.path.join(ENV_DIR, "nvidia_smi.txt"), "w") as f:
+            subprocess.run(["nvidia-smi"], stdout=f, check=True)
+    except Exception as e:
+        print(f"Warning writing nvidia-smi: {e}")
+
+    if MODE == "smoke":
+        run([sys.executable, "-m", "src.smoke_test", "--config", "configs/base.yaml",
+             "--out", "/kaggle/working/outputs/smoke"])
+        sys.exit(0)
+
+    # 3. Link runner A's output (phase1 ... phase7) into the work folder
+    hits = glob.glob("/kaggle/input/**/phase7/evidence.jsonl", recursive=True)
+    if not hits:
+        if SC_MODE:
+            print("Note: evidence.jsonl not found; SC_MODE requires only validation data.", flush=True)
+        else:
+            sys.exit("ERROR: medrag-build output not found. Attach it: Add Input -> Your Work -> medrag-build")
     else:
-        sys.exit("ERROR: medrag-build output not found. Attach it: Add Input -> Your Work -> medrag-build")
+        build_dir = os.path.dirname(os.path.dirname(hits[0]))
+        print("Using build output from:", build_dir)
+        os.makedirs(WORK, exist_ok=True)
+        for n in (1, 2, 3, 6, 7):
+            src_dir, dst = os.path.join(build_dir, f"phase{n}"), os.path.join(WORK, f"phase{n}")
+            if os.path.isdir(src_dir) and not os.path.exists(dst):
+                os.symlink(src_dir, dst)
 else:
-    build_dir = os.path.dirname(os.path.dirname(hits[0]))
-    print("Using build output from:", build_dir)
-    os.makedirs(WORK, exist_ok=True)
-    for n in (1, 2, 3, 6, 7):
-        src_dir, dst = os.path.join(build_dir, f"phase{n}"), os.path.join(WORK, f"phase{n}")
-        if os.path.isdir(src_dir) and not os.path.exists(dst):
-            os.symlink(src_dir, dst)
+    # Worker subprocess (SC_SHARD is set): skip all one-time setup
+    if os.path.exists(CODE_DIR):
+        os.chdir(CODE_DIR)
+    sys.path.insert(0, CODE_DIR)
 
 
 # ── Helper to build the qa_pipeline command ────────────────────────────────────
@@ -237,6 +254,125 @@ if SC_MODE:
     import random
     import re
     import time
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PARENT COORDINATOR (SC_SHARD is None): Launch dual-GPU shards & merge
+    # ══════════════════════════════════════════════════════════════════════════
+    if SC_SHARD is None:
+        print("\n" + "=" * 80, flush=True)
+        print("=== SC_MODE PARENT: Launching dual-GPU shards ===", flush=True)
+        print(f"  SC_DATASETS    : {SC_DATASETS}", flush=True)
+        print(f"  SC_K           : {SC_K}", flush=True)
+        print(f"  SC_TEMPERATURE : {SC_TEMPERATURE}", flush=True)
+        print(f"  SC_TOP_P       : {SC_TOP_P}", flush=True)
+        print(f"  SC_PILOT_N     : {SC_PILOT_N} (0 = full validation set)", flush=True)
+        print(f"  SC_BATCH_SIZE  : {SC_BATCH_SIZE}", flush=True)
+        print(f"  SC_NUM_SHARDS  : {SC_NUM_SHARDS}", flush=True)
+        print("=" * 80 + "\n", flush=True)
+
+        sc_out_dir = "/kaggle/working/outputs/sc_val/medpsy-4b" if os.path.exists("/kaggle/working") else "outputs/sc_val/medpsy-4b"
+        os.makedirs(sc_out_dir, exist_ok=True)
+        if os.path.exists("/kaggle/working") and os.getcwd() != "/kaggle/working":
+            try:
+                os.makedirs("outputs/sc_val/medpsy-4b", exist_ok=True)
+            except Exception:
+                pass
+
+        os.environ["KERNEL_START_TIME"] = str(KERNEL_START_TIME)
+        procs = []
+        for sid in range(SC_NUM_SHARDS):
+            env_shard = os.environ.copy()
+            if "HF_TOKEN" in os.environ:
+                env_shard["HF_TOKEN"] = os.environ["HF_TOKEN"]
+            env_shard["CUDA_VISIBLE_DEVICES"] = str(sid)
+            env_shard["SC_SHARD"] = str(sid)
+            env_shard["SC_NUM_SHARDS"] = str(SC_NUM_SHARDS)
+            env_shard["KERNEL_START_TIME"] = str(KERNEL_START_TIME)
+
+            script_file = os.path.join(CODE_DIR, "kaggle_runner", "runner.py")
+            if not os.path.exists(script_file):
+                script_file = SCRIPT_PATH
+            cmd = [sys.executable, script_file]
+            print(f">> [Parent] Launching shard {sid} with CUDA_VISIBLE_DEVICES={sid}, SC_SHARD={sid}, SC_NUM_SHARDS={SC_NUM_SHARDS}", flush=True)
+            p = subprocess.Popen(cmd, env=env_shard)
+            procs.append((sid, p))
+
+        print(f"\n[Parent] Waiting for {len(procs)} shard subprocesses...", flush=True)
+        exit_codes = {}
+        for sid, p in procs:
+            rc = p.wait()
+            exit_codes[sid] = rc
+            print(f"[Parent] Shard {sid} finished with exit code {rc}", flush=True)
+
+        if any(rc != 0 for rc in exit_codes.values()):
+            print(f"\n[Parent] WARNING: One or more shards exited with non-zero code: {exit_codes}", flush=True)
+
+        # ── 3. Merge shards into <dataset>.jsonl ───────────────────────────
+        print("\n" + "=" * 80, flush=True)
+        print("=== SC_MODE PARENT: MERGING SHARDS ===", flush=True)
+        active_sc_datasets = [d.strip().lower() for d in SC_DATASETS.split(",") if d.strip()]
+
+        expected_map = {
+            "medqa": 200 if SC_PILOT_N == 0 else SC_PILOT_N,
+            "pubmedqa": 200 if SC_PILOT_N == 0 else SC_PILOT_N,
+            "unanswerable_v2": 260 if SC_PILOT_N == 0 else SC_PILOT_N,
+        }
+
+        for ds_name in active_sc_datasets:
+            shard_rows = []
+            for sid in range(SC_NUM_SHARDS):
+                sp = os.path.join(sc_out_dir, f"{ds_name}_shard{sid}.jsonl")
+                if not os.path.exists(sp):
+                    local_sp = os.path.join("outputs/sc_val/medpsy-4b", f"{ds_name}_shard{sid}.jsonl")
+                    if os.path.exists(local_sp):
+                        sp = local_sp
+                if os.path.exists(sp):
+                    with open(sp, "r", encoding="utf-8") as fh:
+                        part = [json.loads(line) for line in fh if line.strip()]
+                    print(f"  [Merge] {ds_name} shard {sid}: {len(part)} rows from {sp}", flush=True)
+                    shard_rows.extend(part)
+                else:
+                    print(f"  [Merge] WARNING: Shard file {sp} not found for {ds_name} shard {sid}!", flush=True)
+
+            # Check duplicate IDs
+            ids = [r["id"] for r in shard_rows]
+            if len(ids) != len(set(ids)):
+                dups = len(ids) - len(set(ids))
+                print(f"  [Merge] WARNING: {ds_name} has {dups} duplicate ID(s) across shards!", flush=True)
+
+            # Check expected count
+            expected = expected_map.get(ds_name)
+            if expected is not None and len(shard_rows) != expected:
+                print(f"  [Merge] WARNING: {ds_name} expected {expected} rows (SC_PILOT_N={SC_PILOT_N}), got {len(shard_rows)} rows!", flush=True)
+
+            # Write merged file
+            merged_file = os.path.join(sc_out_dir, f"{ds_name}.jsonl")
+            with open(merged_file, "w", encoding="utf-8") as fh:
+                for r in shard_rows:
+                    fh.write(json.dumps(r) + "\n")
+            print(f"  [Merge] Successfully wrote {len(shard_rows)} rows to {merged_file}", flush=True)
+
+            # Duplicate to repo-local dir if different
+            local_dir = "outputs/sc_val/medpsy-4b"
+            if os.path.exists(local_dir) and sc_out_dir != local_dir:
+                try:
+                    local_merged = os.path.join(local_dir, f"{ds_name}.jsonl")
+                    with open(local_merged, "w", encoding="utf-8") as fh:
+                        for r in shard_rows:
+                            fh.write(json.dumps(r) + "\n")
+                except Exception:
+                    pass
+
+        print("=" * 80 + "\n", flush=True)
+        print("=== SC_MODE EXECUTION FINISHED SUCCESSFULLY ===", flush=True)
+        print(f"All merged outputs stored in: {sc_out_dir}", flush=True)
+        print("=" * 80 + "\n", flush=True)
+        sys.exit(0)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SUBPROCESS WORKER (SC_SHARD is set): Process only shard items
+    # ══════════════════════════════════════════════════════════════════════════
+    assert SC_SHARD is not None, "Parent coordinator must never enter worker logic or load models"
     import torch
     from transformers import GenerationConfig
 
@@ -266,7 +402,8 @@ if SC_MODE:
     )
 
     print("\n" + "=" * 80, flush=True)
-    print("=== SC_MODE STARTUP: MedPsy-4B Self-Consistency Validation ===", flush=True)
+    print(f"=== SC_MODE SHARD {SC_SHARD}/{SC_NUM_SHARDS} STARTUP: MedPsy-4B Self-Consistency Validation ===", flush=True)
+    print(f"  SC_SHARD       : {SC_SHARD} of {SC_NUM_SHARDS}", flush=True)
     print(f"  SC_DATASETS    : {SC_DATASETS} ({active_sc_datasets})", flush=True)
     print(f"  SC_K           : {SC_K}", flush=True)
     print(f"  SC_TEMPERATURE : {SC_TEMPERATURE}", flush=True)
@@ -604,7 +741,7 @@ if SC_MODE:
 
         return parsed_answers, truncations, insufficient_info, insuf_in_reasoning_only
 
-    # ── 8. Run each dataset in sequence (Resumable JSONL per dataset) ───────────
+    # ── 8. Run each dataset in sequence (Writing to <dataset>_shard<SC_SHARD>.jsonl) ───
     all_dataset_tasks = [
         ("medqa", medqa_run, "baseline"),
         ("pubmedqa", pubmedqa_run, "context"),
@@ -612,12 +749,24 @@ if SC_MODE:
     ]
     dataset_tasks = [t for t in all_dataset_tasks if t[0] in active_sc_datasets]
 
-    total_q_all = sum(len(qs) for _, qs, _ in dataset_tasks)
+    # Filter questions for this shard: index % SC_NUM_SHARDS == SC_SHARD
+    shard_tasks = []
+    for ds_name, questions, prompt_mode in dataset_tasks:
+        shard_qs = [q for i, q in enumerate(questions) if i % SC_NUM_SHARDS == SC_SHARD]
+        shard_tasks.append((ds_name, shard_qs, prompt_mode))
+
+    total_q_all = sum(len(qs) for _, qs, _ in shard_tasks)
     timing_history = []
     eta_printed = False
+    TIME_BUDGET_SEC = 11.0 * 3600.0  # 11 hours maximum
+    time_budget_reached = False
 
-    for ds_idx, (ds_name, questions, prompt_mode) in enumerate(dataset_tasks):
-        out_file = os.path.join(sc_out_dir, f"{ds_name}.jsonl")
+    for ds_idx, (ds_name, questions, prompt_mode) in enumerate(shard_tasks):
+        if time_budget_reached:
+            print(f"[Shard {SC_SHARD}] Skipping {ds_name} due to time budget limit.", flush=True)
+            break
+
+        out_file = os.path.join(sc_out_dir, f"{ds_name}_shard{SC_SHARD}.jsonl")
         done_ids = set()
         if os.path.exists(out_file):
             with open(out_file, "r", encoding="utf-8") as fh:
@@ -627,12 +776,27 @@ if SC_MODE:
                             done_ids.add(json.loads(line)["id"])
                         except Exception:
                             pass
-        print(f"\n--- Running SC for {ds_name} ({len(questions)} total, {len(done_ids)} already done) ---", flush=True)
+        print(f"\n--- [Shard {SC_SHARD}] Running SC for {ds_name} ({len(questions)} on shard, {len(done_ids)} already done) ---", flush=True)
 
         with open(out_file, "a", encoding="utf-8") as out_fh:
             for q_idx, q in enumerate(questions, 1):
                 if q["id"] in done_ids:
                     continue
+
+                # Time budget check before starting each question
+                elapsed_sec = time.time() - KERNEL_START_TIME
+                if elapsed_sec >= TIME_BUDGET_SEC:
+                    rem_in_ds = sum(1 for q_rem in questions if q_rem["id"] not in done_ids)
+                    print(
+                        f"\n{'='*75}\n"
+                        f"[Shard {SC_SHARD}] TIME BUDGET LIMIT REACHED: {elapsed_sec / 3600.0:.2f} hours elapsed since start (limit 11.0h).\n"
+                        f"[Shard {SC_SHARD}] Stopping before starting question {q_idx}/{len(questions)}. {rem_in_ds} question(s) remain unstarted in {ds_name}.\n"
+                        f"[Shard {SC_SHARD}] Exiting cleanly so outputs are saved.\n"
+                        f"{'='*75}\n",
+                        flush=True,
+                    )
+                    time_budget_reached = True
+                    break
 
                 if prompt_mode == "context":
                     prompt_text = reasoning_context_prompt(q, max_chars=context_max_chars)
@@ -698,7 +862,7 @@ if SC_MODE:
                 local_dir = "outputs/sc_val/medpsy-4b"
                 if os.path.exists(local_dir) and sc_out_dir != local_dir:
                     try:
-                        local_file = os.path.join(local_dir, f"{ds_name}.jsonl")
+                        local_file = os.path.join(local_dir, f"{ds_name}_shard{SC_SHARD}.jsonl")
                         with open(local_file, "a", encoding="utf-8") as loc_fh:
                             loc_fh.write(json.dumps(row) + "\n")
                             loc_fh.flush()
@@ -712,21 +876,21 @@ if SC_MODE:
                 if not eta_printed and ds_idx == 0 and len(timing_history) == 5:
                     eta_printed = True
                     mean_sec = sum(timing_history) / len(timing_history)
-                    done_count_all = 0
-                    for d_n, _, _ in dataset_tasks:
-                        d_path = os.path.join(sc_out_dir, f"{d_n}.jsonl")
+                    done_count_shard = 0
+                    for d_n, _, _ in shard_tasks:
+                        d_path = os.path.join(sc_out_dir, f"{d_n}_shard{SC_SHARD}.jsonl")
                         if os.path.exists(d_path):
                             try:
                                 with open(d_path, "r", encoding="utf-8") as f_cnt:
-                                    done_count_all += sum(1 for line in f_cnt if line.strip())
+                                    done_count_shard += sum(1 for line in f_cnt if line.strip())
                             except Exception:
                                 pass
-                    rem_q = max(0, total_q_all - done_count_all)
-                    proj_hours = (mean_sec * rem_q) / 3600.0
+                    rem_q_shard = max(0, total_q_all - done_count_shard)
+                    proj_hours = (mean_sec * rem_q_shard) / 3600.0
                     print(
                         f"\n{'='*75}\n"
-                        f"[ETA] Mean: {mean_sec:.2f} s/question (greedy + SC) | "
-                        f"Projected time for remaining {rem_q} questions across all {len(dataset_tasks)} datasets: {proj_hours:.2f} hours "
+                        f"[ETA - Shard {SC_SHARD}] Mean: {mean_sec:.2f} s/question (greedy + SC) | "
+                        f"Projected time for remaining {rem_q_shard} questions on Shard {SC_SHARD} across all {len(shard_tasks)} datasets: {proj_hours:.2f} hours "
                         f"({proj_hours * 60:.1f} mins)\n"
                         f"{'='*75}\n",
                         flush=True,
@@ -734,17 +898,17 @@ if SC_MODE:
 
                 if q_idx % 10 == 0 or q_idx == len(questions):
                     print(
-                        f"  [{ds_name}] {q_idx}/{len(questions)} (id: {q['id']}) done: "
+                        f"  [Shard {SC_SHARD}][{ds_name}] {q_idx}/{len(questions)} (id: {q['id']}) done: "
                         f"greedy={g_ans}, maj={majority_answer}, agree={agreement:.2f}, "
                         f"sc_time={sc_gen_time:.1f}s, greedy_time={g_time:.1f}s",
                         flush=True,
                     )
 
-        print(f"[{ds_name}] Complete! Output saved to {out_file}", flush=True)
+        print(f"[Shard {SC_SHARD}][{ds_name}] Complete! Shard output saved to {out_file}", flush=True)
 
     print("\n" + "=" * 80, flush=True)
-    print("=== SC_MODE EXECUTION FINISHED SUCCESSFULLY ===", flush=True)
-    print(f"All outputs stored in: {sc_out_dir}", flush=True)
+    print(f"=== SC_MODE SHARD {SC_SHARD} EXECUTION FINISHED SUCCESSFULLY ===", flush=True)
+    print(f"Outputs stored in: {sc_out_dir}", flush=True)
     print("=" * 80 + "\n", flush=True)
     sys.exit(0)
 
