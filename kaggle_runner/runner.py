@@ -44,19 +44,22 @@ TINY = False                # set to True for tiny check on Kaggle
 MODELS = ["medpsy-4b"]
 MODES = ["baseline", "rag"]
 
-SC_MODE = True       # self-consistency mode for MedPsy-4B on validation
+SC_MODE = True       # self-consistency mode for MedPsy-4B
+SC_SPLIT = "validation"  # "validation" or "test"
 SC_K = 5
 SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
 SC_PILOT_N = 0
 SC_BATCH_SIZE = 5      # batch size for sampling to avoid T4 OOM
-SC_DATASETS = "medqa,pubmedqa,unanswerable_v2"
+SC_DATASETS = "medqa"
 SC_SHARD = None
 SC_NUM_SHARDS = 2
 
 # Override from env var if provided
 if "SC_MODE" in os.environ:
     SC_MODE = os.environ["SC_MODE"].lower() in ("1", "true", "yes")
+if "SC_SPLIT" in os.environ:
+    SC_SPLIT = os.environ["SC_SPLIT"].strip().lower()
 if "SC_K" in os.environ:
     SC_K = int(os.environ["SC_K"])
 if "SC_TEMPERATURE" in os.environ:
@@ -93,6 +96,23 @@ if "MODELS" in os.environ:
     MODELS = [m.strip() for m in os.environ["MODELS"].split(",") if m.strip()]
 if "MODES" in os.environ:
     MODES = [m.strip() for m in os.environ["MODES"].split(",") if m.strip()]
+
+# ── SC_MODE Startup safety assertions ──────────────────────────────────────────
+if SC_MODE:
+    assert SC_SPLIT in ("validation", "test"), f"Invalid SC_SPLIT='{SC_SPLIT}'. Must be 'validation' or 'test'."
+    if SC_SPLIT == "test":
+        if os.environ.get("SC_CONFIRM_TEST") != "yes":
+            sys.exit(
+                "\n" + "=" * 80 + "\n"
+                "ERROR: SC_SPLIT is set to 'test', but environment variable SC_CONFIRM_TEST is not 'yes'.\n"
+                "The test set is frozen and this run is final. Retuning after seeing test numbers is forbidden.\n"
+                "To proceed with the final frozen test evaluation, explicitly export SC_CONFIRM_TEST=yes.\n"
+                + "=" * 80 + "\n"
+            )
+        assert SC_PILOT_N == 0, (
+            f"ERROR: SC_PILOT_N={SC_PILOT_N} is not allowed when SC_SPLIT='test'. "
+            "No piloting on the test set; full run only (require SC_PILOT_N == 0)."
+        )
 
 
 def print_kaggle_input_configs(max_depth=7):
@@ -174,7 +194,11 @@ if SC_SHARD is None:
     if TINY:
         print("TINY mode enabled: running on tiny scale")
     if SC_MODE:
-        print(f"SC_MODE enabled: medpsy-4b self-consistency (parent coordinator, dual-GPU, datasets={SC_DATASETS}, K={SC_K}, temp={SC_TEMPERATURE}, top_p={SC_TOP_P}, pilot_n={SC_PILOT_N}, batch_size={SC_BATCH_SIZE})")
+        if SC_SPLIT == "test":
+            print("\n" + "#" * 80, flush=True)
+            print("=== FINAL TEST EVALUATION — frozen numbers, reliability score already fit on validation, DO NOT retune after seeing these ===", flush=True)
+            print("#" * 80 + "\n", flush=True)
+        print(f"SC_MODE enabled: medpsy-4b self-consistency (split={SC_SPLIT}, parent coordinator, dual-GPU, datasets={SC_DATASETS}, K={SC_K}, temp={SC_TEMPERATURE}, top_p={SC_TOP_P}, pilot_n={SC_PILOT_N}, batch_size={SC_BATCH_SIZE})")
 
     # Save environment freeze and nvidia-smi
     ENV_DIR = os.path.join(WORK, "env")
@@ -200,7 +224,7 @@ if SC_SHARD is None:
     hits = glob.glob("/kaggle/input/**/phase7/evidence.jsonl", recursive=True)
     if not hits:
         if SC_MODE:
-            print("Note: evidence.jsonl not found; SC_MODE requires only validation data.", flush=True)
+            print(f"Note: evidence.jsonl not found; SC_MODE requires only {SC_SPLIT} data.", flush=True)
         else:
             sys.exit("ERROR: medrag-build output not found. Attach it: Add Input -> Your Work -> medrag-build")
     else:
@@ -247,7 +271,7 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
     return cmd
 
 
-# ── SC_MODE: Self-Consistency Mode for MedPsy-4B on Validation Only ────────────
+# ── SC_MODE: Self-Consistency Mode for MedPsy-4B (Validation or Test) ──────────
 if SC_MODE:
     import collections
     import math
@@ -260,21 +284,25 @@ if SC_MODE:
     # ══════════════════════════════════════════════════════════════════════════
     if SC_SHARD is None:
         print("\n" + "=" * 80, flush=True)
-        print("=== SC_MODE PARENT: Launching dual-GPU shards ===", flush=True)
+        if SC_SPLIT == "test":
+            print("=== FINAL TEST EVALUATION — frozen numbers, reliability score already fit on validation, DO NOT retune after seeing these ===", flush=True)
+        print(f"=== SC_MODE PARENT: Launching dual-GPU shards (split={SC_SPLIT}) ===", flush=True)
+        print(f"  SC_SPLIT       : {SC_SPLIT}", flush=True)
         print(f"  SC_DATASETS    : {SC_DATASETS}", flush=True)
         print(f"  SC_K           : {SC_K}", flush=True)
         print(f"  SC_TEMPERATURE : {SC_TEMPERATURE}", flush=True)
         print(f"  SC_TOP_P       : {SC_TOP_P}", flush=True)
-        print(f"  SC_PILOT_N     : {SC_PILOT_N} (0 = full validation set)", flush=True)
+        print(f"  SC_PILOT_N     : {SC_PILOT_N} ({'full run required for test' if SC_SPLIT == 'test' else '0 = full validation set'})", flush=True)
         print(f"  SC_BATCH_SIZE  : {SC_BATCH_SIZE}", flush=True)
         print(f"  SC_NUM_SHARDS  : {SC_NUM_SHARDS}", flush=True)
         print("=" * 80 + "\n", flush=True)
 
-        sc_out_dir = "/kaggle/working/outputs/sc_val/medpsy-4b" if os.path.exists("/kaggle/working") else "outputs/sc_val/medpsy-4b"
+        split_subdir = "sc_test" if SC_SPLIT == "test" else "sc_val"
+        sc_out_dir = f"/kaggle/working/outputs/{split_subdir}/medpsy-4b" if os.path.exists("/kaggle/working") else f"outputs/{split_subdir}/medpsy-4b"
         os.makedirs(sc_out_dir, exist_ok=True)
         if os.path.exists("/kaggle/working") and os.getcwd() != "/kaggle/working":
             try:
-                os.makedirs("outputs/sc_val/medpsy-4b", exist_ok=True)
+                os.makedirs(f"outputs/{split_subdir}/medpsy-4b", exist_ok=True)
             except Exception:
                 pass
 
@@ -284,6 +312,9 @@ if SC_MODE:
             env_shard = os.environ.copy()
             if "HF_TOKEN" in os.environ:
                 env_shard["HF_TOKEN"] = os.environ["HF_TOKEN"]
+            if "SC_CONFIRM_TEST" in os.environ:
+                env_shard["SC_CONFIRM_TEST"] = os.environ["SC_CONFIRM_TEST"]
+            env_shard["SC_SPLIT"] = SC_SPLIT
             env_shard["CUDA_VISIBLE_DEVICES"] = str(sid)
             env_shard["SC_SHARD"] = str(sid)
             env_shard["SC_NUM_SHARDS"] = str(SC_NUM_SHARDS)
@@ -309,21 +340,29 @@ if SC_MODE:
 
         # ── 3. Merge shards into <dataset>.jsonl ───────────────────────────
         print("\n" + "=" * 80, flush=True)
-        print("=== SC_MODE PARENT: MERGING SHARDS ===", flush=True)
+        print(f"=== SC_MODE PARENT: MERGING SHARDS (split={SC_SPLIT}) ===", flush=True)
         active_sc_datasets = [d.strip().lower() for d in SC_DATASETS.split(",") if d.strip()]
 
-        expected_map = {
-            "medqa": 200 if SC_PILOT_N == 0 else SC_PILOT_N,
-            "pubmedqa": 200 if SC_PILOT_N == 0 else SC_PILOT_N,
-            "unanswerable_v2": 260 if SC_PILOT_N == 0 else SC_PILOT_N,
-        }
+        if SC_SPLIT == "test":
+            expected_map = {
+                "medqa": 500,
+                "pubmedqa": 500,
+                "unanswerable_v2": 140,
+            }
+        else:
+            expected_map = {
+                "medqa": 200 if SC_PILOT_N == 0 else SC_PILOT_N,
+                "pubmedqa": 200 if SC_PILOT_N == 0 else SC_PILOT_N,
+                "unanswerable_v2": 260 if SC_PILOT_N == 0 else SC_PILOT_N,
+            }
 
+        local_dir = f"outputs/{split_subdir}/medpsy-4b"
         for ds_name in active_sc_datasets:
             shard_rows = []
             for sid in range(SC_NUM_SHARDS):
                 sp = os.path.join(sc_out_dir, f"{ds_name}_shard{sid}.jsonl")
                 if not os.path.exists(sp):
-                    local_sp = os.path.join("outputs/sc_val/medpsy-4b", f"{ds_name}_shard{sid}.jsonl")
+                    local_sp = os.path.join(local_dir, f"{ds_name}_shard{sid}.jsonl")
                     if os.path.exists(local_sp):
                         sp = local_sp
                 if os.path.exists(sp):
@@ -343,7 +382,7 @@ if SC_MODE:
             # Check expected count
             expected = expected_map.get(ds_name)
             if expected is not None and len(shard_rows) != expected:
-                print(f"  [Merge] WARNING: {ds_name} expected {expected} rows (SC_PILOT_N={SC_PILOT_N}), got {len(shard_rows)} rows!", flush=True)
+                print(f"  [Merge] WARNING: {ds_name} expected {expected} rows (SC_SPLIT={SC_SPLIT}, SC_PILOT_N={SC_PILOT_N}), got {len(shard_rows)} rows!", flush=True)
 
             # Write merged file
             merged_file = os.path.join(sc_out_dir, f"{ds_name}.jsonl")
@@ -353,7 +392,6 @@ if SC_MODE:
             print(f"  [Merge] Successfully wrote {len(shard_rows)} rows to {merged_file}", flush=True)
 
             # Duplicate to repo-local dir if different
-            local_dir = "outputs/sc_val/medpsy-4b"
             if os.path.exists(local_dir) and sc_out_dir != local_dir:
                 try:
                     local_merged = os.path.join(local_dir, f"{ds_name}.jsonl")
@@ -402,13 +440,16 @@ if SC_MODE:
     )
 
     print("\n" + "=" * 80, flush=True)
-    print(f"=== SC_MODE SHARD {SC_SHARD}/{SC_NUM_SHARDS} STARTUP: MedPsy-4B Self-Consistency Validation ===", flush=True)
+    if SC_SPLIT == "test":
+        print("=== FINAL TEST EVALUATION — frozen numbers, reliability score already fit on validation, DO NOT retune after seeing these ===", flush=True)
+    print(f"=== SC_MODE SHARD {SC_SHARD}/{SC_NUM_SHARDS} STARTUP: MedPsy-4B Self-Consistency ({SC_SPLIT}) ===", flush=True)
+    print(f"  SC_SPLIT       : {SC_SPLIT}", flush=True)
     print(f"  SC_SHARD       : {SC_SHARD} of {SC_NUM_SHARDS}", flush=True)
     print(f"  SC_DATASETS    : {SC_DATASETS} ({active_sc_datasets})", flush=True)
     print(f"  SC_K           : {SC_K}", flush=True)
     print(f"  SC_TEMPERATURE : {SC_TEMPERATURE}", flush=True)
     print(f"  SC_TOP_P       : {SC_TOP_P}", flush=True)
-    print(f"  SC_PILOT_N     : {SC_PILOT_N} (0 = full validation set)", flush=True)
+    print(f"  SC_PILOT_N     : {SC_PILOT_N} ({'full run required for test' if SC_SPLIT == 'test' else '0 = full validation set'})", flush=True)
     print(f"  SC_BATCH_SIZE  : {SC_BATCH_SIZE}", flush=True)
     print(f"  Context max_chars     : {context_max_chars}", flush=True)
     print(f"  Context max_new_tokens: {context_max_new_tokens}", flush=True)
@@ -456,112 +497,140 @@ if SC_MODE:
         selected.sort(key=lambda x: x["id"])
         return selected
 
-    # ── 2. Load unanswerable_v2 validation data (with strict test.jsonl safety assert) ──
-    unans_val_all = []
+    # ── 2. Load unanswerable_v2 data (with strict split safety asserts) ────────
+    unans_all = []
     if "unanswerable_v2" in active_sc_datasets:
+        filename = "test.jsonl" if SC_SPLIT == "test" else "val.jsonl"
         unans_candidates = [
-            os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl"),
-            "data/unanswerable_v2/val.jsonl",
-            os.path.abspath("data/unanswerable_v2/val.jsonl"),
-            "/kaggle/working/medrag-slm/data/unanswerable_v2/val.jsonl",
-            "/kaggle/working/data/unanswerable_v2/val.jsonl",
+            os.path.join(CODE_DIR, "data", "unanswerable_v2", filename),
+            f"data/unanswerable_v2/{filename}",
+            os.path.abspath(f"data/unanswerable_v2/{filename}"),
+            f"/kaggle/working/medrag-slm/data/unanswerable_v2/{filename}",
+            f"/kaggle/working/data/unanswerable_v2/{filename}",
         ]
-        unans_val_path = next((p for p in unans_candidates if os.path.exists(p)), None)
-        if not unans_val_path:
+        unans_path = next((p for p in unans_candidates if os.path.exists(p)), None)
+        if not unans_path:
             input_hits = (
-                glob.glob("/kaggle/input/**/unanswerable_v2/val.jsonl", recursive=True)
-                or glob.glob("/kaggle/input/**/data/unanswerable_v2/val.jsonl", recursive=True)
+                glob.glob(f"/kaggle/input/**/unanswerable_v2/{filename}", recursive=True)
+                or glob.glob(f"/kaggle/input/**/data/unanswerable_v2/{filename}", recursive=True)
             )
             if input_hits:
-                unans_val_path = input_hits[0]
+                unans_path = input_hits[0]
 
-        if not unans_val_path or not os.path.exists(unans_val_path):
-            searched_fmt = "\n  - ".join(unans_candidates + ["/kaggle/input/**/unanswerable_v2/val.jsonl"])
+        if not unans_path or not os.path.exists(unans_path):
+            searched_fmt = "\n  - ".join(unans_candidates + [f"/kaggle/input/**/unanswerable_v2/{filename}"])
             sys.exit(
                 f"\n" + "=" * 80 + "\n"
-                f"FATAL ERROR: data/unanswerable_v2/val.jsonl NOT FOUND!\n"
+                f"FATAL ERROR: data/unanswerable_v2/{filename} NOT FOUND!\n"
                 f"Searched candidate locations:\n  - {searched_fmt}\n\n"
                 f"Troubleshooting / Resolution:\n"
-                f"  1. Git clone path: verify 'data/unanswerable_v2/val.jsonl' is committed and pushed to git repository:\n"
+                f"  1. Git clone path: verify 'data/unanswerable_v2/{filename}' is committed and pushed to git repository:\n"
                 f"     {REPO_URL}\n"
-                f"  2. Kaggle dataset input: if using an attached dataset, ensure it contains 'data/unanswerable_v2/val.jsonl'.\n"
+                f"  2. Kaggle dataset input: if using an attached dataset, ensure it contains 'data/unanswerable_v2/{filename}'.\n"
                 f"  3. Working directory: currently '{os.getcwd()}'; CODE_DIR is '{CODE_DIR}'.\n"
                 f"=" * 80 + "\n"
             )
 
-        # STRICT ASSERT: Never load test.jsonl in SC_MODE
-        assert not unans_val_path.endswith("test.jsonl"), (
-            f"SAFETY ASSERTION VIOLATION: Attempted to load test set {unans_val_path} in SC_MODE!"
-        )
-        assert "test.jsonl" not in unans_val_path.lower(), (
-            f"SAFETY ASSERTION VIOLATION: Path '{unans_val_path}' contains test.jsonl!"
-        )
+        with open(unans_path, "r", encoding="utf-8") as f:
+            unans_all = [json.loads(line) for line in f if line.strip()]
 
-        with open(unans_val_path, "r", encoding="utf-8") as f:
-            unans_val_all = [json.loads(line) for line in f if line.strip()]
+        if SC_SPLIT == "test":
+            assert unans_path.endswith("test.jsonl"), (
+                f"SAFETY ASSERTION VIOLATION: Expected test.jsonl in SC_SPLIT='test' mode, got {unans_path}!"
+            )
+            assert "val.jsonl" not in unans_path.lower(), (
+                f"SAFETY ASSERTION VIOLATION: Path '{unans_path}' contains val.jsonl in SC_SPLIT='test' mode!"
+            )
+            assert len(unans_all) == 140, f"Expected 140 unanswerable_v2 test rows, got {len(unans_all)}"
+            assert all(r.get("split") == "test" for r in unans_all), (
+                "SAFETY ASSERTION VIOLATION: Found non-test split rows in unanswerable test set!"
+            )
+            assert all(r.get("id", "").startswith("unans-v2-test-") for r in unans_all), (
+                "SAFETY ASSERTION VIOLATION: Found IDs not starting with 'unans-v2-test-' in unanswerable test set!"
+            )
+            print(f"Loaded {len(unans_all)} unanswerable_v2 test questions from {unans_path}", flush=True)
+        else:
+            assert not unans_path.endswith("test.jsonl"), (
+                f"SAFETY ASSERTION VIOLATION: Attempted to load test set {unans_path} in validation SC_MODE!"
+            )
+            assert "test.jsonl" not in unans_path.lower(), (
+                f"SAFETY ASSERTION VIOLATION: Path '{unans_path}' contains test.jsonl in validation SC_MODE!"
+            )
+            assert len(unans_all) == 260, f"Expected 260 unanswerable_v2 val rows, got {len(unans_all)}"
+            assert all(r.get("split") == "validation" for r in unans_all), (
+                "SAFETY ASSERTION VIOLATION: Found non-validation split rows in unanswerable val set!"
+            )
+            assert not any(r.get("id", "").startswith("unans-v2-test-") for r in unans_all), (
+                "SAFETY ASSERTION VIOLATION: Found test-split IDs in unanswerable val set!"
+            )
+            print(f"Loaded {len(unans_all)} unanswerable_v2 validation questions from {unans_path}", flush=True)
 
-        assert len(unans_val_all) == 260, f"Expected 260 unanswerable_v2 val rows, got {len(unans_val_all)}"
-        assert all(r.get("split") == "validation" for r in unans_val_all), (
-            "SAFETY ASSERTION VIOLATION: Found non-validation split rows in unanswerable val set!"
-        )
-        assert not any(r.get("id", "").startswith("unans-v2-test-") for r in unans_val_all), (
-            "SAFETY ASSERTION VIOLATION: Found test-split IDs in unanswerable val set!"
-        )
-        print(f"Loaded {len(unans_val_all)} unanswerable_v2 validation questions from {unans_val_path}", flush=True)
-
-    # ── 3. Load MedQA (200) and PubMedQA (200) validation questions ────────────
-    medqa_val_all = []
-    pubmedqa_val_all = []
+    # ── 3. Load MedQA and PubMedQA questions ──────────────────────────────────
+    medqa_all = []
+    pubmedqa_all = []
     if any(ds in active_sc_datasets for ds in ("medqa", "pubmedqa")):
-        val_candidates = [
-            os.path.join(WORK, "phase1", "validation.jsonl"),
-            "/kaggle/working/work/phase1/validation.jsonl",
-            os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase1", "validation.jsonl"),
-            "outputs/kaggle_build/work/phase1/validation.jsonl",
+        split_p1_file = "test.jsonl" if SC_SPLIT == "test" else "validation.jsonl"
+        candidates = [
+            os.path.join(WORK, "phase1", split_p1_file),
+            f"/kaggle/working/work/phase1/{split_p1_file}",
+            os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase1", split_p1_file),
+            f"outputs/kaggle_build/work/phase1/{split_p1_file}",
         ]
-        val_file = next((p for p in val_candidates if os.path.exists(p)), None)
-        if not val_file:
-            hits_v = glob.glob("/kaggle/input/**/phase1/validation.jsonl", recursive=True) or glob.glob("/kaggle/input/**/validation.jsonl", recursive=True)
-            if hits_v:
-                val_file = hits_v[0]
-        if not val_file:
-            sys.exit("ERROR: validation.jsonl not found for MedQA / PubMedQA!")
+        p1_file = next((p for p in candidates if os.path.exists(p)), None)
+        if not p1_file:
+            hits_p1 = (
+                glob.glob(f"/kaggle/input/**/phase1/{split_p1_file}", recursive=True)
+                or glob.glob(f"/kaggle/input/**/{split_p1_file}", recursive=True)
+            )
+            if hits_p1:
+                p1_file = hits_p1[0]
+        if not p1_file:
+            sys.exit(f"ERROR: phase1/{split_p1_file} not found for MedQA / PubMedQA!")
 
-        with open(val_file, "r", encoding="utf-8") as f:
-            val_p1_rows = [json.loads(line) for line in f if line.strip()]
+        with open(p1_file, "r", encoding="utf-8") as f:
+            p1_rows = [json.loads(line) for line in f if line.strip()]
 
-        medqa_val_all = [q for q in val_p1_rows if q.get("dataset") == "medqa" and not q.get("should_abstain")]
-        pubmedqa_val_all = [q for q in val_p1_rows if q.get("dataset") == "pubmedqa" and not q.get("should_abstain")]
+        medqa_all = [q for q in p1_rows if q.get("dataset") == "medqa" and not q.get("should_abstain")]
+        pubmedqa_all = [q for q in p1_rows if q.get("dataset") == "pubmedqa" and not q.get("should_abstain")]
 
-        if "medqa" in active_sc_datasets:
-            assert len(medqa_val_all) == 200, f"Expected 200 MedQA val rows, got {len(medqa_val_all)}"
-        if "pubmedqa" in active_sc_datasets:
-            assert len(pubmedqa_val_all) == 200, f"Expected 200 PubMedQA val rows, got {len(pubmedqa_val_all)}"
-        print(f"Loaded {len(medqa_val_all)} MedQA val and {len(pubmedqa_val_all)} PubMedQA val from {val_file}", flush=True)
+        if SC_SPLIT == "test":
+            if "medqa" in active_sc_datasets:
+                assert len(medqa_all) == 500, f"Expected 500 MedQA test rows, got {len(medqa_all)}"
+            if "pubmedqa" in active_sc_datasets:
+                assert len(pubmedqa_all) == 500, f"Expected 500 PubMedQA test rows, got {len(pubmedqa_all)}"
+            print(f"Loaded {len(medqa_all)} MedQA test and {len(pubmedqa_all)} PubMedQA test from {p1_file}", flush=True)
+        else:
+            if "medqa" in active_sc_datasets:
+                assert len(medqa_all) == 200, f"Expected 200 MedQA val rows, got {len(medqa_all)}"
+            if "pubmedqa" in active_sc_datasets:
+                assert len(pubmedqa_all) == 200, f"Expected 200 PubMedQA val rows, got {len(pubmedqa_all)}"
+            print(f"Loaded {len(medqa_all)} MedQA val and {len(pubmedqa_all)} PubMedQA val from {p1_file}", flush=True)
 
     # ── 4. Apply SC_PILOT_N filter if active ───────────────────────────────────
     medqa_run = []
     pubmedqa_run = []
     unans_run = []
     if SC_PILOT_N > 0:
+        assert SC_SPLIT == "validation", "Piloting is strictly forbidden on test set (require SC_PILOT_N == 0)"
         if "medqa" in active_sc_datasets:
-            medqa_run = medqa_val_all[:SC_PILOT_N]
+            medqa_run = medqa_all[:SC_PILOT_N]
         if "pubmedqa" in active_sc_datasets:
-            pubmedqa_run = pubmedqa_val_all[:SC_PILOT_N]
+            pubmedqa_run = pubmedqa_all[:SC_PILOT_N]
         if "unanswerable_v2" in active_sc_datasets:
-            unans_run = sample_stratified_unans_v2(unans_val_all, SC_PILOT_N, seed=42)
+            unans_run = sample_stratified_unans_v2(unans_all, SC_PILOT_N, seed=42)
         print(f"\nPILOT MODE ACTIVE (SC_PILOT_N={SC_PILOT_N}):")
         for ds in active_sc_datasets:
             cnt = len(medqa_run) if ds == "medqa" else (len(pubmedqa_run) if ds == "pubmedqa" else len(unans_run))
             print(f"  {ds:<15}: first {cnt} questions")
     else:
         if "medqa" in active_sc_datasets:
-            medqa_run = medqa_val_all
+            medqa_run = medqa_all
         if "pubmedqa" in active_sc_datasets:
-            pubmedqa_run = pubmedqa_val_all
+            pubmedqa_run = pubmedqa_all
         if "unanswerable_v2" in active_sc_datasets:
-            unans_run = unans_val_all
-        print(f"\nFULL VALIDATION MODE ACTIVE:")
+            unans_run = unans_all
+        mode_label = "FULL TEST EVALUATION ACTIVE" if SC_SPLIT == "test" else "FULL VALIDATION MODE ACTIVE"
+        print(f"\n{mode_label}:")
         for ds in active_sc_datasets:
             cnt = len(medqa_run) if ds == "medqa" else (len(pubmedqa_run) if ds == "pubmedqa" else len(unans_run))
             print(f"  {ds:<15}: all {cnt} questions")
@@ -574,11 +643,12 @@ if SC_MODE:
         print(f"Verified non-empty contexts attached for all {len(pubmedqa_run)} PubMedQA questions.", flush=True)
 
     # ── 5. Setup output directories ───────────────────────────────────────────
-    sc_out_dir = "/kaggle/working/outputs/sc_val/medpsy-4b" if os.path.exists("/kaggle/working") else "outputs/sc_val/medpsy-4b"
+    split_subdir = "sc_test" if SC_SPLIT == "test" else "sc_val"
+    sc_out_dir = f"/kaggle/working/outputs/{split_subdir}/medpsy-4b" if os.path.exists("/kaggle/working") else f"outputs/{split_subdir}/medpsy-4b"
     os.makedirs(sc_out_dir, exist_ok=True)
     if os.path.exists("/kaggle/working") and os.getcwd() != "/kaggle/working":
         try:
-            os.makedirs("outputs/sc_val/medpsy-4b", exist_ok=True)
+            os.makedirs(f"outputs/{split_subdir}/medpsy-4b", exist_ok=True)
         except Exception:
             pass
 
@@ -859,7 +929,7 @@ if SC_MODE:
                 done_ids.add(q["id"])
 
                 # Also duplicate to repo-local dir if different from sc_out_dir
-                local_dir = "outputs/sc_val/medpsy-4b"
+                local_dir = f"outputs/{split_subdir}/medpsy-4b"
                 if os.path.exists(local_dir) and sc_out_dir != local_dir:
                     try:
                         local_file = os.path.join(local_dir, f"{ds_name}_shard{SC_SHARD}.jsonl")
