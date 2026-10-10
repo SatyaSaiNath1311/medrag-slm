@@ -45,7 +45,8 @@ MODELS = ["medpsy-4b"]
 MODES = ["baseline", "rag"]
 
 SC_MODE = True       # self-consistency mode for MedPsy-4B
-SC_SPLIT = "validation"  # "validation" or "test"
+SC_SPLIT = "test"
+SC_CONFIRM_TEST = True
 SC_K = 5
 SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
@@ -101,12 +102,12 @@ if "MODES" in os.environ:
 if SC_MODE:
     assert SC_SPLIT in ("validation", "test"), f"Invalid SC_SPLIT='{SC_SPLIT}'. Must be 'validation' or 'test'."
     if SC_SPLIT == "test":
-        if os.environ.get("SC_CONFIRM_TEST") != "yes":
+        if not SC_CONFIRM_TEST:
             sys.exit(
                 "\n" + "=" * 80 + "\n"
-                "ERROR: SC_SPLIT is set to 'test', but environment variable SC_CONFIRM_TEST is not 'yes'.\n"
+                "ERROR: SC_SPLIT is set to 'test', but SC_CONFIRM_TEST is not True.\n"
                 "The test set is frozen and this run is final. Retuning after seeing test numbers is forbidden.\n"
-                "To proceed with the final frozen test evaluation, explicitly export SC_CONFIRM_TEST=yes.\n"
+                "To proceed with the final frozen test evaluation, set SC_CONFIRM_TEST = True in runner.py.\n"
                 + "=" * 80 + "\n"
             )
         assert SC_PILOT_N == 0, (
@@ -312,8 +313,6 @@ if SC_MODE:
             env_shard = os.environ.copy()
             if "HF_TOKEN" in os.environ:
                 env_shard["HF_TOKEN"] = os.environ["HF_TOKEN"]
-            if "SC_CONFIRM_TEST" in os.environ:
-                env_shard["SC_CONFIRM_TEST"] = os.environ["SC_CONFIRM_TEST"]
             env_shard["SC_SPLIT"] = SC_SPLIT
             env_shard["CUDA_VISIBLE_DEVICES"] = str(sid)
             env_shard["SC_SHARD"] = str(sid)
