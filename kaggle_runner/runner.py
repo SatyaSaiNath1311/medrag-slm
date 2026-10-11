@@ -52,7 +52,7 @@ SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
 SC_PILOT_N = 0
 SC_BATCH_SIZE = 5      # batch size for sampling to avoid T4 OOM
-SC_DATASETS = "medqa"
+SC_DATASETS = "pubmedqa"
 SC_SHARD = None
 SC_NUM_SHARDS = 2
 
