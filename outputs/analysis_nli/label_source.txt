@@ -1,0 +1,1 @@
+Labels for rows 1-50 produced by an LLM judge (Claude), rule: 1 = passage states or clearly implies the chosen answer for what the question asks, else 0; blind to NLI scores.
