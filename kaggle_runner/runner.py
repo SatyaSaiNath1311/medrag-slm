@@ -62,9 +62,9 @@ SC_NUM_SHARDS = 2
 
 # ── Specialized Task Modes (Tasks 4 & 5) ──────────────────────────────────────
 # Set EXACTLY ONE of the following modes to True before running/pushing with `kaggle kernels push`:
-BUILD_UNANS_V2_EVIDENCE = True  # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
-UNANS_V2_SLM = False             # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
-UNANS_MODEL = "qwen3-4b"         # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
+BUILD_UNANS_V2_EVIDENCE = False # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
+UNANS_V2_SLM = True             # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
+UNANS_MODEL = "qwen3-1.7b"       # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
 MEDPSY_UNANS_V2_BASELINE = False # Task 4 MedPsy: run medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
 MEDPSY_PUBMEDQA_BASELINE = False # Task 5A: run medpsy-4b closed-book baseline on PubMedQA test (500), 2-GPU shards
 MEDPSY_PUBMEDQA_RAG = False      # Task 5B: run medpsy-4b RAG on PubMedQA test (500), 2-GPU shards
@@ -1114,23 +1114,80 @@ if UNANS_V2_SLM:
         if os.path.isdir(src_dir) and not os.path.exists(dst):
             os.symlink(src_dir, dst)
 
-    # 2. Check if retrieval (phase6) and rerank (phase7) evidence exists for v2
+    # 2. Obtain pre-computed Phase 6/7 evidence from the attached Kaggle dataset.
+    #    Phases 6 and 7 are NEVER recomputed here — if the file is absent, exit immediately
+    #    so no GPU quota is wasted.
+    #    Discovery order:
+    #      1. Canonical path  : /kaggle/input/medrag-unans-v2-evidence/evidence.jsonl
+    #      2. Glob (slug)     : /kaggle/input/**/medrag-unans-v2-evidence/evidence.jsonl
+    #      3. Glob (filtered) : /kaggle/input/**/evidence.jsonl  (paths containing "unans-v2")
     v2_ev = os.path.join(v2_work, "phase7", "evidence.jsonl")
     if not os.path.exists(v2_ev):
-        # Check attached inputs for pre-computed evidence
-        attached_ev = glob.glob("/kaggle/input/**/unans_v2/evidence.jsonl", recursive=True)
-        if attached_ev and os.path.exists(attached_ev[0]):
-            os.makedirs(os.path.join(v2_work, "phase7"), exist_ok=True)
-            shutil.copyfile(attached_ev[0], v2_ev)
-            print(f"Copied attached pre-pass evidence from {attached_ev[0]} -> {v2_ev}", flush=True)
-        else:
-            print("\n--- Producing hybrid retrieval (Phase 6) and reranking (Phase 7) for unanswerable_v2 questions ---", flush=True)
-            run([sys.executable, "-m", "src.phase06_retrieve", "--config", "configs/base.yaml", "--work", v2_work])
-            run([sys.executable, "-m", "src.phase07_rerank", "--config", "configs/base.yaml", "--work", v2_work])
-            if not os.path.exists(v2_ev):
-                sys.exit(f"ERROR: Failed to produce v2 evidence at {v2_ev}")
+        _src_ev = None
+        _src_label = None
+
+        # Tier 1: canonical mount path
+        _t1 = "/kaggle/input/medrag-unans-v2-evidence/evidence.jsonl"
+        if os.path.exists(_t1):
+            _src_ev, _src_label = _t1, "canonical"
+
+        # Tier 2: glob on the dataset slug directory name
+        if _src_ev is None:
+            _t2_hits = glob.glob("/kaggle/input/**/medrag-unans-v2-evidence/evidence.jsonl", recursive=True)
+            if _t2_hits:
+                _src_ev, _src_label = _t2_hits[0], "glob-slug"
+
+        # Tier 3: any evidence.jsonl whose path contains "unans-v2"
+        if _src_ev is None:
+            _t3_hits = [
+                p for p in glob.glob("/kaggle/input/**/evidence.jsonl", recursive=True)
+                if "unans-v2" in p
+            ]
+            if _t3_hits:
+                _src_ev, _src_label = _t3_hits[0], f"glob-filtered ({_t3_hits[0]})"
+
+        if _src_ev is None:
+            sys.exit(
+                "\n" + "=" * 80 + "\n"
+                "ERROR [UNANS_V2_SLM]: Pre-computed evidence file not found.\n"
+                "Searched (in order):\n"
+                "  1. /kaggle/input/medrag-unans-v2-evidence/evidence.jsonl\n"
+                "  2. /kaggle/input/**/medrag-unans-v2-evidence/evidence.jsonl\n"
+                "  3. /kaggle/input/**/evidence.jsonl  (filtered to paths containing 'unans-v2')\n"
+                "Resolution: attach the 'satyasainath1311/medrag-unans-v2-evidence' dataset\n"
+                "  (Kaggle notebook -> Add Data -> Your Datasets -> medrag-unans-v2-evidence).\n"
+                "Phases 6 and 7 are intentionally NOT recomputed here to avoid wasting GPU quota.\n"
+                + "=" * 80 + "\n"
+            )
+
+        os.makedirs(os.path.join(v2_work, "phase7"), exist_ok=True)
+        shutil.copyfile(_src_ev, v2_ev)
+        print(f"Copied pre-computed evidence [{_src_label}]: {_src_ev} -> {v2_ev}", flush=True)
     else:
         print(f"Using existing v2 retrieval evidence at {v2_ev}", flush=True)
+
+    # Integrity assertion: evidence must contain 400 rows (260 val + 140 test), 5 passages each.
+    with open(v2_ev, "r", encoding="utf-8") as _ev_fh:
+        _ev_rows = [json.loads(_l) for _l in _ev_fh if _l.strip()]
+    _ev_ids = [r.get("id") for r in _ev_rows]
+    _ev_val  = sum(1 for i in _ev_ids if i and "val"  in str(i))
+    _ev_test = sum(1 for i in _ev_ids if i and "test" in str(i))
+    assert len(_ev_rows) == 400, (
+        f"ERROR: evidence.jsonl has {len(_ev_rows)} rows; expected 400 (260 val + 140 test)."
+    )
+    assert _ev_val == 260 and _ev_test == 140, (
+        f"ERROR: evidence.jsonl id split mismatch: val={_ev_val}, test={_ev_test} (expected 260, 140)."
+    )
+    _bad_passages = [r.get("id") for r in _ev_rows if len(r.get("passages", [])) != 5]
+    assert not _bad_passages, (
+        f"ERROR: {len(_bad_passages)} rows in evidence.jsonl do not have exactly 5 passages: {_bad_passages[:5]}"
+    )
+    _ev_id_set = set(_ev_ids)
+    print(
+        f"Evidence integrity OK: {len(_ev_rows)} rows, "
+        f"val={_ev_val}, test={_ev_test}, 5 passages each.",
+        flush=True,
+    )
 
     # 3. Run QA pipeline (baseline + RAG, split all_needed)
     qa_cmd = build_qa_cmd(
