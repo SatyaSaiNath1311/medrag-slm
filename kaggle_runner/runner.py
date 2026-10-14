@@ -32,71 +32,113 @@ SCRIPT_PATH = os.path.abspath(__file__)
 REPO_URL = "https://github.com/SatyaSaiNath1311/medrag-slm.git"
 CODE_DIR = "/tmp/medrag-slm"
 WORK = "/kaggle/working/work"
-MODE = os.environ.get("MODE", "qa")        # "qa" or "smoke"
+# ══════════════════════════════════════════════════════════════════════════════
+# RUNNER CONFIGURATION CONSTANTS (Set desired mode before pushing to Kaggle)
+# ══════════════════════════════════════════════════════════════════════════════
+MODE = "qa"                     # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
-FINAL_MEDPSY = False        # full test-split run of medpsy-4b, dual-GPU shards (DONE)
-VAL_MEDPSY = False          # full validation-split run of medpsy-4b (250 baseline + 200 context), dual-GPU shards (DONE)
-RAG_MEDPSY = False          # medpsy-4b + RAG (top-5 evidence) on the MedQA test split (500), dual-GPU shards
-PILOT = False               # run medpsy-4b pilot (80 val-subset questions, single GPU)
-PARALLEL_GPUS = False       # split model list across 2 GPUs in parallel subprocesses
-TINY = False                # set to True for tiny check on Kaggle
+PILOT = False                   # run medpsy-4b pilot (80 val-subset questions, single GPU)
+PARALLEL_GPUS = False           # split model list across 2 GPUs in parallel subprocesses
+TINY = False                    # set to True for tiny check on Kaggle
 MODELS = ["medpsy-4b"]
 MODES = ["baseline", "rag"]
 
-SC_MODE = True       # self-consistency mode for MedPsy-4B
+# ── Prior / Completed Modes ───────────────────────────────────────────────────
+FINAL_MEDPSY = False            # medpsy-4b full test split, dual-GPU shards (DONE)
+VAL_MEDPSY = False              # medpsy-4b full validation split (DONE)
+RAG_MEDPSY = False              # medpsy-4b + RAG on MedQA test split (500), dual-GPU shards (DONE)
+SC_MODE = False                 # medpsy-4b self-consistency mode
 SC_SPLIT = "test"
 SC_CONFIRM_TEST = True
 SC_K = 5
 SC_TEMPERATURE = 0.7
 SC_TOP_P = 0.95
 SC_PILOT_N = 0
-SC_BATCH_SIZE = 5      # batch size for sampling to avoid T4 OOM
+SC_BATCH_SIZE = 5               # batch size for sampling to avoid T4 OOM
 SC_DATASETS = "unanswerable_v2"
 SC_SHARD = None
 SC_NUM_SHARDS = 2
 
-# Override from env var if provided
-if "SC_MODE" in os.environ:
-    SC_MODE = os.environ["SC_MODE"].lower() in ("1", "true", "yes")
-if "SC_SPLIT" in os.environ:
-    SC_SPLIT = os.environ["SC_SPLIT"].strip().lower()
-if "SC_K" in os.environ:
-    SC_K = int(os.environ["SC_K"])
-if "SC_TEMPERATURE" in os.environ:
-    SC_TEMPERATURE = float(os.environ["SC_TEMPERATURE"])
-if "SC_TOP_P" in os.environ:
-    SC_TOP_P = float(os.environ["SC_TOP_P"])
-if "SC_PILOT_N" in os.environ:
-    SC_PILOT_N = int(os.environ["SC_PILOT_N"])
-if "SC_BATCH_SIZE" in os.environ:
-    SC_BATCH_SIZE = int(os.environ["SC_BATCH_SIZE"])
-if "SC_DATASETS" in os.environ:
-    SC_DATASETS = os.environ["SC_DATASETS"]
-if "SC_SHARD" in os.environ:
-    SC_SHARD = int(os.environ["SC_SHARD"])
-if "SC_NUM_SHARDS" in os.environ:
-    SC_NUM_SHARDS = int(os.environ["SC_NUM_SHARDS"])
-if "CHECK_ONLY" in os.environ:
-    CHECK_ONLY = os.environ["CHECK_ONLY"].lower() in ("1", "true", "yes")
-if "PROFILE" in os.environ:
-    PROFILE = os.environ["PROFILE"].lower() in ("1", "true", "yes")
-if "FINAL_MEDPSY" in os.environ:
-    FINAL_MEDPSY = os.environ["FINAL_MEDPSY"].lower() in ("1", "true", "yes")
-if "VAL_MEDPSY" in os.environ:
-    VAL_MEDPSY = os.environ["VAL_MEDPSY"].lower() in ("1", "true", "yes")
-if "RAG_MEDPSY" in os.environ:
-    RAG_MEDPSY = os.environ["RAG_MEDPSY"].lower() in ("1", "true", "yes")
-if "PILOT" in os.environ:
-    PILOT = os.environ["PILOT"].lower() in ("1", "true", "yes")
-if "PARALLEL_GPUS" in os.environ:
-    PARALLEL_GPUS = os.environ["PARALLEL_GPUS"].lower() in ("1", "true", "yes")
-if "TINY" in os.environ:
-    TINY = os.environ["TINY"].lower() in ("1", "true", "yes")
+# ── Specialized Task Modes (Tasks 4 & 5) ──────────────────────────────────────
+# Set EXACTLY ONE of the following modes to True before running/pushing with `kaggle kernels push`:
+BUILD_UNANS_V2_EVIDENCE = False  # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
+UNANS_V2_SLM = False             # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
+UNANS_MODEL = "qwen3-4b"         # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
+MEDPSY_UNANS_V2_BASELINE = False # Task 4 MedPsy: run medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
+MEDPSY_PUBMEDQA_BASELINE = False # Task 5A: run medpsy-4b closed-book baseline on PubMedQA test (500), 2-GPU shards
+MEDPSY_PUBMEDQA_RAG = False      # Task 5B: run medpsy-4b RAG on PubMedQA test (500), 2-GPU shards
+
+# Optional legacy env overrides for base runner settings
+for flag, val in [
+    ("FINAL_MEDPSY", "FINAL_MEDPSY"),
+    ("VAL_MEDPSY", "VAL_MEDPSY"),
+    ("RAG_MEDPSY", "RAG_MEDPSY"),
+    ("SC_MODE", "SC_MODE"),
+    ("CHECK_ONLY", "CHECK_ONLY"),
+    ("PROFILE", "PROFILE"),
+    ("PILOT", "PILOT"),
+    ("PARALLEL_GPUS", "PARALLEL_GPUS"),
+    ("TINY", "TINY"),
+]:
+    if flag in os.environ:
+        locals()[val] = os.environ[flag].lower() in ("1", "true", "yes")
+
+# Mutual exclusivity guard for specialized modes vs base/legacy runner flags
+_active_special_modes = [
+    m for m, v in [
+        ("BUILD_UNANS_V2_EVIDENCE", BUILD_UNANS_V2_EVIDENCE),
+        ("UNANS_V2_SLM", UNANS_V2_SLM),
+        ("MEDPSY_UNANS_V2_BASELINE", MEDPSY_UNANS_V2_BASELINE),
+        ("MEDPSY_PUBMEDQA_BASELINE", MEDPSY_PUBMEDQA_BASELINE),
+        ("MEDPSY_PUBMEDQA_RAG", MEDPSY_PUBMEDQA_RAG),
+    ] if v
+]
+if len(_active_special_modes) > 1:
+    sys.exit(f"ERROR: Mutually exclusive runner modes enabled: {_active_special_modes}. Enable only one before pushing.")
+
+if _active_special_modes:
+    _conflicting_flags = [
+        m for m, v in [
+            ("TINY", TINY),
+            ("CHECK_ONLY", CHECK_ONLY),
+            ("PILOT", PILOT),
+            ("FINAL_MEDPSY", FINAL_MEDPSY),
+            ("VAL_MEDPSY", VAL_MEDPSY),
+            ("RAG_MEDPSY", RAG_MEDPSY),
+            ("SC_MODE", SC_MODE),
+            ("PROFILE", PROFILE),
+            ("PARALLEL_GPUS", PARALLEL_GPUS),
+        ] if v
+    ]
+    if _conflicting_flags:
+        sys.exit(
+            f"ERROR: Special mode {_active_special_modes[0]} cannot be run together with flags {_conflicting_flags}. "
+            "Set these flags to False when running a special mode."
+        )
+
+_active_legacy_modes = [
+    m for m, v in [
+        ("FINAL_MEDPSY", FINAL_MEDPSY),
+        ("VAL_MEDPSY", VAL_MEDPSY),
+        ("RAG_MEDPSY", RAG_MEDPSY),
+        ("SC_MODE", SC_MODE),
+        ("PILOT", PILOT),
+    ] if v
+]
+if len(_active_legacy_modes) > 1:
+    sys.exit(f"ERROR: Mutually exclusive legacy modes enabled: {_active_legacy_modes}. Enable only one before pushing.")
+
 if "MODELS" in os.environ:
     MODELS = [m.strip() for m in os.environ["MODELS"].split(",") if m.strip()]
 if "MODES" in os.environ:
     MODES = [m.strip() for m in os.environ["MODES"].split(",") if m.strip()]
+if "SC_SPLIT" in os.environ:
+    SC_SPLIT = os.environ["SC_SPLIT"].strip().lower()
+if "SC_SHARD" in os.environ:
+    SC_SHARD = int(os.environ["SC_SHARD"])
+if "SC_NUM_SHARDS" in os.environ:
+    SC_NUM_SHARDS = int(os.environ["SC_NUM_SHARDS"])
 
 # ── SC_MODE Startup safety assertions ──────────────────────────────────────────
 if SC_MODE:
@@ -186,6 +228,16 @@ if SC_SHARD is None:
         print("FINAL_MEDPSY mode enabled: medpsy-4b full test split, 2-shard dual-GPU")
     if RAG_MEDPSY:
         print("RAG_MEDPSY mode enabled: medpsy-4b + RAG on MedQA test (500), 2-shard dual-GPU")
+    if BUILD_UNANS_V2_EVIDENCE:
+        print("BUILD_UNANS_V2_EVIDENCE mode enabled: producing hybrid retrieval (Phase 6) and reranking (Phase 7) on unanswerable_v2")
+    if UNANS_V2_SLM:
+        print(f"UNANS_V2_SLM mode enabled: model={UNANS_MODEL} baseline+RAG on unanswerable_v2 (val+test)")
+    if MEDPSY_UNANS_V2_BASELINE:
+        print("MEDPSY_UNANS_V2_BASELINE mode enabled: medpsy-4b Phase 5 baseline prompt on unanswerable_v2 (val+test), 2-GPU shards")
+    if MEDPSY_PUBMEDQA_BASELINE:
+        print("MEDPSY_PUBMEDQA_BASELINE mode enabled: medpsy-4b closed-book baseline on PubMedQA test (500), dual-GPU")
+    if MEDPSY_PUBMEDQA_RAG:
+        print("MEDPSY_PUBMEDQA_RAG mode enabled: medpsy-4b RAG on PubMedQA test (500), dual-GPU")
     if VAL_MEDPSY:
         print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
     if PILOT:
@@ -979,6 +1031,348 @@ if SC_MODE:
     print(f"=== SC_MODE SHARD {SC_SHARD} EXECUTION FINISHED SUCCESSFULLY ===", flush=True)
     print(f"Outputs stored in: {sc_out_dir}", flush=True)
     print("=" * 80 + "\n", flush=True)
+    sys.exit(0)
+
+
+# ── BUILD_UNANS_V2_EVIDENCE mode: Pre-pass retrieval and reranking for unanswerable_v2 ─
+if BUILD_UNANS_V2_EVIDENCE:
+    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or UNANS_V2_SLM or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or RAG_MEDPSY:
+        sys.exit("ERROR: BUILD_UNANS_V2_EVIDENCE must run alone.")
+    import shutil
+    print("\n=== BUILD_UNANS_V2_EVIDENCE STARTUP ===", flush=True)
+
+    v2_work = os.path.join(WORK, "work_unans_v2")
+    os.makedirs(v2_work, exist_ok=True)
+    v2_p1 = os.path.join(v2_work, "phase1")
+    os.makedirs(v2_p1, exist_ok=True)
+
+    val_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl")
+    test_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "test.jsonl")
+    if not os.path.exists(val_src) or not os.path.exists(test_src):
+        val_src = os.path.abspath("data/unanswerable_v2/val.jsonl")
+        test_src = os.path.abspath("data/unanswerable_v2/test.jsonl")
+    if not os.path.exists(val_src) or not os.path.exists(test_src):
+        sys.exit(f"ERROR: unanswerable_v2 files not found at {val_src} / {test_src}")
+
+    shutil.copyfile(val_src, os.path.join(v2_p1, "validation.jsonl"))
+    shutil.copyfile(test_src, os.path.join(v2_p1, "test.jsonl"))
+
+    for n in (2, 3):
+        src_dir = os.path.join(WORK, f"phase{n}")
+        dst = os.path.join(v2_work, f"phase{n}")
+        if os.path.isdir(src_dir) and not os.path.exists(dst):
+            os.symlink(src_dir, dst)
+
+    print("\n--- Running Phase 6 (Hybrid Retrieval) for unanswerable_v2 ---", flush=True)
+    run([sys.executable, "-m", "src.phase06_retrieve", "--config", "configs/base.yaml", "--work", v2_work])
+    print("\n--- Running Phase 7 (Reranking) for unanswerable_v2 ---", flush=True)
+    run([sys.executable, "-m", "src.phase07_rerank", "--config", "configs/base.yaml", "--work", v2_work])
+
+    v2_ev = os.path.join(v2_work, "phase7", "evidence.jsonl")
+    if not os.path.exists(v2_ev):
+        sys.exit(f"ERROR: Failed to produce v2 evidence at {v2_ev}")
+
+    out_dir = "/kaggle/working/outputs/kaggle_build/unans_v2" if os.path.exists("/kaggle/working") else "outputs/kaggle_build/unans_v2"
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copyfile(v2_ev, os.path.join(out_dir, "evidence.jsonl"))
+    print(f"\n[BUILD_UNANS_V2_EVIDENCE] Success: {v2_ev} -> {os.path.join(out_dir, 'evidence.jsonl')}")
+    print("=== BUILD_UNANS_V2_EVIDENCE COMPLETE ===\n", flush=True)
+    sys.exit(0)
+
+
+# ── UNANS_V2_SLM mode: 5 standard SLMs on unanswerable_v2 (baseline + RAG) ───
+if UNANS_V2_SLM:
+    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or BUILD_UNANS_V2_EVIDENCE or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or RAG_MEDPSY:
+        sys.exit("ERROR: UNANS_V2_SLM must run alone.")
+    import shutil
+    target_model = UNANS_MODEL
+    print(f"\n=== UNANS_V2_SLM STARTUP (model={target_model}, datasets=unanswerable_v2, modes=baseline+rag) ===", flush=True)
+
+    # 1. Setup work directory for unans_v2
+    v2_work = os.path.join(WORK, "work_unans_v2")
+    os.makedirs(v2_work, exist_ok=True)
+    v2_p1 = os.path.join(v2_work, "phase1")
+    os.makedirs(v2_p1, exist_ok=True)
+
+    # Link/copy data/unanswerable_v2/{val,test}.jsonl into phase1/
+    val_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl")
+    test_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "test.jsonl")
+    if not os.path.exists(val_src) or not os.path.exists(test_src):
+        # Fallback to local repo paths if running outside /tmp
+        val_src = os.path.abspath("data/unanswerable_v2/val.jsonl")
+        test_src = os.path.abspath("data/unanswerable_v2/test.jsonl")
+    if not os.path.exists(val_src) or not os.path.exists(test_src):
+        sys.exit(f"ERROR: unanswerable_v2 files not found at {val_src} / {test_src}")
+
+    shutil.copyfile(val_src, os.path.join(v2_p1, "validation.jsonl"))
+    shutil.copyfile(test_src, os.path.join(v2_p1, "test.jsonl"))
+
+    # Link phase2 (corpus) and phase3 (indexes) from build directory
+    for n in (2, 3):
+        src_dir = os.path.join(WORK, f"phase{n}")
+        dst = os.path.join(v2_work, f"phase{n}")
+        if os.path.isdir(src_dir) and not os.path.exists(dst):
+            os.symlink(src_dir, dst)
+
+    # 2. Check if retrieval (phase6) and rerank (phase7) evidence exists for v2
+    v2_ev = os.path.join(v2_work, "phase7", "evidence.jsonl")
+    if not os.path.exists(v2_ev):
+        # Check attached inputs for pre-computed evidence
+        attached_ev = glob.glob("/kaggle/input/**/unans_v2/evidence.jsonl", recursive=True)
+        if attached_ev and os.path.exists(attached_ev[0]):
+            os.makedirs(os.path.join(v2_work, "phase7"), exist_ok=True)
+            shutil.copyfile(attached_ev[0], v2_ev)
+            print(f"Copied attached pre-pass evidence from {attached_ev[0]} -> {v2_ev}", flush=True)
+        else:
+            print("\n--- Producing hybrid retrieval (Phase 6) and reranking (Phase 7) for unanswerable_v2 questions ---", flush=True)
+            run([sys.executable, "-m", "src.phase06_retrieve", "--config", "configs/base.yaml", "--work", v2_work])
+            run([sys.executable, "-m", "src.phase07_rerank", "--config", "configs/base.yaml", "--work", v2_work])
+            if not os.path.exists(v2_ev):
+                sys.exit(f"ERROR: Failed to produce v2 evidence at {v2_ev}")
+    else:
+        print(f"Using existing v2 retrieval evidence at {v2_ev}", flush=True)
+
+    # 3. Run QA pipeline (baseline + RAG, split all_needed)
+    qa_cmd = build_qa_cmd(
+        models_list=[target_model],
+        modes_list=["baseline", "rag"],
+        split="all_needed",
+        work_dir=v2_work,
+        skip_format_check=True,
+    )
+    print(f"\n--- Running QA pipeline for {target_model} on unanswerable_v2 (baseline + RAG) ---", flush=True)
+    run(qa_cmd)
+
+    # 4. Save results to target outputs directory: outputs/kaggle_qa/unans_v2/<model>/
+    out_dir = f"/kaggle/working/outputs/kaggle_qa/unans_v2/{target_model}" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/unans_v2/{target_model}"
+    os.makedirs(out_dir, exist_ok=True)
+
+    p5_src = os.path.join(v2_work, "phase5", f"{target_model}.jsonl")
+    p8_src = os.path.join(v2_work, "phase8", f"{target_model}.jsonl")
+    if os.path.exists(p5_src):
+        shutil.copyfile(p5_src, os.path.join(out_dir, f"baseline_{target_model}.jsonl"))
+        print(f"Saved baseline output -> {os.path.join(out_dir, f'baseline_{target_model}.jsonl')}")
+    if os.path.exists(p8_src):
+        shutil.copyfile(p8_src, os.path.join(out_dir, f"rag_{target_model}.jsonl"))
+        print(f"Saved RAG output -> {os.path.join(out_dir, f'rag_{target_model}.jsonl')}")
+
+    print(f"\n=== UNANS_V2_SLM COMPLETE for {target_model} ===\n", flush=True)
+    sys.exit(0)
+
+
+# ── MEDPSY_UNANS_V2_BASELINE mode: MedPsy-4B on unanswerable_v2 (val+test) with Phase 5 baseline prompt ─
+if MEDPSY_UNANS_V2_BASELINE:
+    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or RAG_MEDPSY or UNANS_V2_SLM or BUILD_UNANS_V2_EVIDENCE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG:
+        sys.exit("ERROR: MEDPSY_UNANS_V2_BASELINE must run alone.")
+    import math
+    import shutil
+    import threading
+
+    NUM_SHARDS = 2
+    print("\n=== MEDPSY_UNANS_V2_BASELINE STARTUP (datasets=unanswerable_v2, split=all_needed, mode=baseline) ===", flush=True)
+
+    v2_work = os.path.join(WORK, "work_unans_v2")
+    os.makedirs(v2_work, exist_ok=True)
+    v2_p1 = os.path.join(v2_work, "phase1")
+    os.makedirs(v2_p1, exist_ok=True)
+
+    val_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl")
+    test_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "test.jsonl")
+    if not os.path.exists(val_src) or not os.path.exists(test_src):
+        val_src = os.path.abspath("data/unanswerable_v2/val.jsonl")
+        test_src = os.path.abspath("data/unanswerable_v2/test.jsonl")
+    if not os.path.exists(val_src) or not os.path.exists(test_src):
+        sys.exit(f"ERROR: unanswerable_v2 files not found at {val_src} / {test_src}")
+
+    shutil.copyfile(val_src, os.path.join(v2_p1, "validation.jsonl"))
+    shutil.copyfile(test_src, os.path.join(v2_p1, "test.jsonl"))
+
+    un_errors = {}
+
+    def run_un_base_shard(shard_idx):
+        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+        try:
+            cmd = build_qa_cmd(
+                models_list=["medpsy-4b"],
+                modes_list=["baseline"],
+                split="all_needed",
+                work_dir=v2_work,
+                skip_format_check=True,
+                shard=shard_idx,
+                num_shards=NUM_SHARDS,
+            )
+            print(f"\n[shard {shard_idx}] Starting MedPsy unanswerable_v2 baseline on GPU {shard_idx}...", flush=True)
+            run(cmd, extra_env=env)
+        except Exception as exc:
+            un_errors[shard_idx] = str(exc)
+
+    threads = [threading.Thread(target=run_un_base_shard, args=(i,), name=f"unans-base-shard-{i}") for i in range(NUM_SHARDS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if un_errors:
+        print("\nERROR: one or more shards failed:", un_errors, flush=True)
+        sys.exit(1)
+
+    print("\n=== MERGING UNANSWERABLE_V2 BASELINE SHARDS ===", flush=True)
+    p5_dir = os.path.join(v2_work, "phase5")
+    rows = []
+    for sid in range(NUM_SHARDS):
+        sp = os.path.join(p5_dir, f"medpsy-4b_shard{sid}.jsonl")
+        with open(sp) as fh:
+            part = [json.loads(l) for l in fh if l.strip()]
+        rows.extend(part)
+    out_path = os.path.join(p5_dir, "baseline_medpsy-4b.jsonl")
+    with open(out_path, "w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    print(f"  merged baseline: {len(rows)} rows -> {out_path}", flush=True)
+
+    out_dir = f"/kaggle/working/outputs/kaggle_qa/unans_v2/medpsy-4b" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/unans_v2/medpsy-4b"
+    os.makedirs(out_dir, exist_ok=True)
+    shutil.copyfile(out_path, os.path.join(out_dir, "baseline_medpsy-4b.jsonl"))
+
+    n = len(rows)
+    val_rows = [r for r in rows if r.get("split") == "validation"]
+    test_rows = [r for r in rows if r.get("split") == "test"]
+    trunc = sum(1 for r in rows if r.get("truncated"))
+    print("\n=== MEDPSY UNANSWERABLE_V2 BASELINE SUMMARY ===", flush=True)
+    print(f"  Total questions : {n} (validation={len(val_rows)}, test={len(test_rows)})", flush=True)
+    print(f"  Truncated       : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
+    print(f"  Saved output to : {os.path.join(out_dir, 'baseline_medpsy-4b.jsonl')}", flush=True)
+    print("=== END MEDPSY UNANSWERABLE_V2 BASELINE SUMMARY ===\n", flush=True)
+    sys.exit(0)
+
+
+# ── MEDPSY_PUBMEDQA_BASELINE mode: MedPsy-4B closed-book baseline on PubMedQA test ─
+if MEDPSY_PUBMEDQA_BASELINE:
+    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or RAG_MEDPSY or UNANS_V2_SLM or BUILD_UNANS_V2_EVIDENCE or MEDPSY_UNANS_V2_BASELINE:
+        sys.exit("ERROR: MEDPSY_PUBMEDQA_BASELINE must run alone.")
+    import math
+    import threading
+
+    NUM_SHARDS = 2
+    EXPECTED_Q = 500   # PubMedQA test questions
+    print("\n=== MEDPSY_PUBMEDQA_BASELINE STARTUP (split=test, datasets=pubmedqa, mode=baseline) ===", flush=True)
+
+    pm_errors = {}
+
+    def run_pm_base_shard(shard_idx):
+        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+        try:
+            cmd = build_qa_cmd(models_list=["medpsy-4b"], modes_list=["baseline"], datasets="pubmedqa",
+                               split="test", work_dir=WORK, skip_format_check=True,
+                               shard=shard_idx, num_shards=NUM_SHARDS)
+            print(f"\n[shard {shard_idx}] Starting PubMedQA baseline on GPU {shard_idx}...", flush=True)
+            run(cmd, extra_env=env)
+        except Exception as exc:
+            pm_errors[shard_idx] = str(exc)
+
+    threads = [threading.Thread(target=run_pm_base_shard, args=(i,), name=f"pm-base-shard-{i}") for i in range(NUM_SHARDS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if pm_errors:
+        print("\nERROR: one or more shards failed:", pm_errors, flush=True)
+        sys.exit(1)
+
+    print("\n=== MERGING PUBMEDQA BASELINE SHARDS ===", flush=True)
+    p5_dir = os.path.join(WORK, "phase5")
+    rows = []
+    for sid in range(NUM_SHARDS):
+        sp = os.path.join(p5_dir, f"medpsy-4b_shard{sid}.jsonl")
+        with open(sp) as fh:
+            part = [json.loads(l) for l in fh if l.strip()]
+        rows.extend(part)
+    out_path = os.path.join(p5_dir, "medpsy-4b_pubmedqa_baseline.jsonl")
+    with open(out_path, "w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    print(f"  merged baseline: {len(rows)} rows -> {out_path}", flush=True)
+
+    final_dir = f"/kaggle/working/outputs/kaggle_qa/medpsy_pubmedqa_baseline" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/medpsy_pubmedqa_baseline"
+    os.makedirs(final_dir, exist_ok=True)
+    import shutil
+    shutil.copyfile(out_path, os.path.join(final_dir, "medpsy-4b_pubmedqa_baseline.jsonl"))
+
+    n = len(rows)
+    n_c = sum(1 for r in rows if r.get("correct"))
+    p = n_c / n if n else 0.0
+    m = 1.96 * math.sqrt(p * (1 - p) / n) if n else 0.0
+    trunc = sum(1 for r in rows if r.get("truncated"))
+    print("\n=== MEDPSY PUBMEDQA BASELINE SUMMARY ===", flush=True)
+    print(f"  Accuracy  : {p:.4f}  95%CI=({max(0, p - m):.4f}, {min(1, p + m):.4f})  {n_c}/{n} correct", flush=True)
+    print(f"  Truncated : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
+    print("=== END MEDPSY PUBMEDQA BASELINE SUMMARY ===\n", flush=True)
+    sys.exit(0)
+
+
+# ── MEDPSY_PUBMEDQA_RAG mode: MedPsy-4B RAG on PubMedQA test ─────────────────
+if MEDPSY_PUBMEDQA_RAG:
+    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or RAG_MEDPSY or UNANS_V2_SLM or BUILD_UNANS_V2_EVIDENCE or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE:
+        sys.exit("ERROR: MEDPSY_PUBMEDQA_RAG must run alone.")
+    import math
+    import threading
+
+    NUM_SHARDS = 2
+    EXPECTED_Q = 500   # PubMedQA test questions
+    ev_path = os.path.join(WORK, "phase7", "evidence.jsonl")
+    if not os.path.exists(ev_path):
+        sys.exit(f"ERROR: Phase 7 evidence not found at {ev_path}; attach the medrag-build output.")
+    print("\n=== MEDPSY_PUBMEDQA_RAG STARTUP (split=test, datasets=pubmedqa, mode=rag) ===", flush=True)
+
+    pm_errors = {}
+
+    def run_pm_rag_shard(shard_idx):
+        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+        try:
+            cmd = build_qa_cmd(models_list=["medpsy-4b"], modes_list=["rag"], datasets="pubmedqa",
+                               split="test", work_dir=WORK, skip_format_check=True,
+                               shard=shard_idx, num_shards=NUM_SHARDS)
+            print(f"\n[shard {shard_idx}] Starting PubMedQA RAG on GPU {shard_idx}...", flush=True)
+            run(cmd, extra_env=env)
+        except Exception as exc:
+            pm_errors[shard_idx] = str(exc)
+
+    threads = [threading.Thread(target=run_pm_rag_shard, args=(i,), name=f"pm-rag-shard-{i}") for i in range(NUM_SHARDS)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if pm_errors:
+        print("\nERROR: one or more shards failed:", pm_errors, flush=True)
+        sys.exit(1)
+
+    print("\n=== MERGING PUBMEDQA RAG SHARDS ===", flush=True)
+    p8_dir = os.path.join(WORK, "phase8")
+    rows = []
+    for sid in range(NUM_SHARDS):
+        sp = os.path.join(p8_dir, f"medpsy-4b_shard{sid}.jsonl")
+        with open(sp) as fh:
+            part = [json.loads(l) for l in fh if l.strip()]
+        rows.extend(part)
+    out_path = os.path.join(p8_dir, "medpsy-4b_pubmedqa_rag.jsonl")
+    with open(out_path, "w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+    print(f"  merged rag: {len(rows)} rows -> {out_path}", flush=True)
+
+    final_dir = f"/kaggle/working/outputs/kaggle_qa/medpsy_pubmedqa_rag" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/medpsy_pubmedqa_rag"
+    os.makedirs(final_dir, exist_ok=True)
+    import shutil
+    shutil.copyfile(out_path, os.path.join(final_dir, "medpsy-4b_pubmedqa_rag.jsonl"))
+
+    n = len(rows)
+    n_c = sum(1 for r in rows if r.get("correct"))
+    p = n_c / n if n else 0.0
+    m = 1.96 * math.sqrt(p * (1 - p) / n) if n else 0.0
+    trunc = sum(1 for r in rows if r.get("truncated"))
+    print("\n=== MEDPSY PUBMEDQA RAG SUMMARY ===", flush=True)
+    print(f"  Accuracy  : {p:.4f}  95%CI=({max(0, p - m):.4f}, {min(1, p + m):.4f})  {n_c}/{n} correct", flush=True)
+    print(f"  Truncated : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
+    print("=== END MEDPSY PUBMEDQA RAG SUMMARY ===\n", flush=True)
     sys.exit(0)
 
 

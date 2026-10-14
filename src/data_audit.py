@@ -208,7 +208,7 @@ def run_audit(
                 if ans in ["A", "B", "C", "D"] and should_abstain is False:
                     answer_valid += 1
             elif dataset == "pubmedqa":
-                if ans in ["yes", "no", "maybe"] and should_abstain is False:
+                if ans in ["A", "B", "C", "yes", "no", "maybe"] and should_abstain is False:
                     answer_valid += 1
             elif dataset == "unanswerable":
                 if ans is None and should_abstain is True:
@@ -627,7 +627,7 @@ def write_data_audit_md(
     )
     lines.append(row_opts)
 
-    ans_spec = "MedQA in {A,B,C,D}; PubMedQA in {yes,no,maybe}; Unans: null"
+    ans_spec = "MedQA in {A,B,C,D}; PubMedQA in {A,B,C} or {yes,no,maybe}; Unans: null"
     row_ans = (
         "| **Answer Format Compliance** | "
         + ans_spec

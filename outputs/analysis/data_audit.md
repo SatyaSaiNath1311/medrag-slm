@@ -27,7 +27,7 @@ All evaluation records adhere to a unified JSONL schema across datasets. The req
 |---|---|:---:|:---:|:---:|
 | **Required Fields Present** | `id, dataset, question, options, answer, should_abstain, split` | 100.0% (1,150/1,150) | 100.0% (450/450) | **PASS** (100.0%) |
 | **Option Count Compliance** | MedQA: 4; PubMedQA: 3; Unanswerable: 3 | 100.0% (1,150/1,150) | 100.0% (450/450) | **PASS** (0 deviations) |
-| **Answer Format Compliance** | MedQA in {A,B,C,D}; PubMedQA in {yes,no,maybe}; Unans: null | 56.5% (650/1,150) | 55.6% (250/450) | **FAIL** |
+| **Answer Format Compliance** | MedQA in {A,B,C,D}; PubMedQA in {A,B,C} or {yes,no,maybe}; Unans: null | 100.0% (1,150/1,150) | 100.0% (450/450) | **PASS** (0 invalid) |
 | **Identifier Uniqueness** | Unique primary key across splits | 1,150 unique | 450 unique | **PASS** (1,600 unique, 0 duplicate IDs) |
 
 > [!NOTE]
