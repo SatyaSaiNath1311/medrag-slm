@@ -1,0 +1,230 @@
+{
+  "qwen3-1.7b": {
+    "scorable": 296,
+    "truncated": 0,
+    "no_line": 204,
+    "total_cited_passages": 766,
+    "pair_entail": [
+      314,
+      766
+    ],
+    "pair_entail_rate": 0.4099,
+    "corrected_est": [
+      0.2368,
+      0.1415,
+      0.402
+    ],
+    "answer_support": [
+      186,
+      296
+    ],
+    "answer_support_rate": 0.6284,
+    "answer_support_correct": [
+      108,
+      149
+    ],
+    "answer_support_wrong": [
+      78,
+      147
+    ],
+    "citation_recall_available": [
+      211,
+      296
+    ],
+    "citation_recall_cited": [
+      186,
+      211
+    ],
+    "citation_recall_rate": 0.8815
+  },
+  "phi4-mini": {
+    "scorable": 277,
+    "truncated": 0,
+    "no_line": 223,
+    "total_cited_passages": 407,
+    "pair_entail": [
+      188,
+      407
+    ],
+    "pair_entail_rate": 0.4619,
+    "corrected_est": [
+      0.2617,
+      0.1585,
+      0.4283
+    ],
+    "answer_support": [
+      136,
+      277
+    ],
+    "answer_support_rate": 0.491,
+    "answer_support_correct": [
+      79,
+      152
+    ],
+    "answer_support_wrong": [
+      57,
+      125
+    ],
+    "citation_recall_available": [
+      189,
+      277
+    ],
+    "citation_recall_cited": [
+      136,
+      189
+    ],
+    "citation_recall_rate": 0.7196
+  },
+  "smollm3-3b": {
+    "scorable": 500,
+    "truncated": 0,
+    "no_line": 0,
+    "total_cited_passages": 519,
+    "pair_entail": [
+      203,
+      519
+    ],
+    "pair_entail_rate": 0.3911,
+    "corrected_est": [
+      0.2277,
+      0.1353,
+      0.3925
+    ],
+    "answer_support": [
+      196,
+      500
+    ],
+    "answer_support_rate": 0.392,
+    "answer_support_correct": [
+      114,
+      236
+    ],
+    "answer_support_wrong": [
+      82,
+      264
+    ],
+    "citation_recall_available": [
+      324,
+      500
+    ],
+    "citation_recall_cited": [
+      196,
+      324
+    ],
+    "citation_recall_rate": 0.6049
+  },
+  "qwen3-4b": {
+    "scorable": 500,
+    "truncated": 0,
+    "no_line": 0,
+    "total_cited_passages": 1345,
+    "pair_entail": [
+      526,
+      1345
+    ],
+    "pair_entail_rate": 0.3911,
+    "corrected_est": [
+      0.2277,
+      0.1353,
+      0.3925
+    ],
+    "answer_support": [
+      301,
+      500
+    ],
+    "answer_support_rate": 0.602,
+    "answer_support_correct": [
+      189,
+      302
+    ],
+    "answer_support_wrong": [
+      112,
+      198
+    ],
+    "citation_recall_available": [
+      337,
+      500
+    ],
+    "citation_recall_cited": [
+      301,
+      337
+    ],
+    "citation_recall_rate": 0.8932
+  },
+  "gemma3-4b": {
+    "scorable": 485,
+    "truncated": 0,
+    "no_line": 15,
+    "total_cited_passages": 1110,
+    "pair_entail": [
+      445,
+      1110
+    ],
+    "pair_entail_rate": 0.4009,
+    "corrected_est": [
+      0.2324,
+      0.1385,
+      0.3975
+    ],
+    "answer_support": [
+      283,
+      485
+    ],
+    "answer_support_rate": 0.5835,
+    "answer_support_correct": [
+      166,
+      255
+    ],
+    "answer_support_wrong": [
+      117,
+      230
+    ],
+    "citation_recall_available": [
+      333,
+      485
+    ],
+    "citation_recall_cited": [
+      283,
+      333
+    ],
+    "citation_recall_rate": 0.8498
+  },
+  "medpsy-4b": {
+    "scorable": 379,
+    "truncated": 108,
+    "no_line": 13,
+    "total_cited_passages": 677,
+    "pair_entail": [
+      311,
+      677
+    ],
+    "pair_entail_rate": 0.4594,
+    "corrected_est": [
+      0.2605,
+      0.1577,
+      0.427
+    ],
+    "answer_support": [
+      201,
+      379
+    ],
+    "answer_support_rate": 0.5303,
+    "answer_support_correct": [
+      187,
+      351
+    ],
+    "answer_support_wrong": [
+      14,
+      28
+    ],
+    "citation_recall_available": [
+      251,
+      379
+    ],
+    "citation_recall_cited": [
+      201,
+      251
+    ],
+    "citation_recall_rate": 0.8008
+  }
+}
