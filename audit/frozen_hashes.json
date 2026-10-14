@@ -1,0 +1,158 @@
+{
+  "created_at": "2026-10-14T05:25:56.412947+00:00",
+  "total_files": 25,
+  "missing_count": 0,
+  "missing_files": [],
+  "files": {
+    "data/unanswerable_v2/test.jsonl": {
+      "sha256": "a0e45676dced360b2ac64e8fc33dbb49782c4fd9022e93190e633c9d66396078",
+      "bytes": 72476,
+      "lines": 140,
+      "last_modified": "2026-10-08T16:32:33.119248+00:00"
+    },
+    "outputs/kaggle_build/work/phase1/test.jsonl": {
+      "sha256": "fe7fe3fb88c77c4ffc6574c8716ec0b3f4787fbfaf2c22e2eb5741ac040cc34a",
+      "bytes": 1537064,
+      "lines": 1150,
+      "last_modified": "2026-10-02T14:01:18.486203+00:00"
+    },
+    "outputs/sc_test/medpsy-4b/outputs/sc_test/medpsy-4b/medqa.jsonl": {
+      "sha256": "8fc066de282d42e8a98925a3183f76e9049a46cc732d756ba3aade4bd2249227",
+      "bytes": 308983,
+      "lines": 500,
+      "last_modified": "2026-10-11T10:19:26.773988+00:00"
+    },
+    "outputs/sc_test_s2_pubmedqa/outputs/sc_test/medpsy-4b/pubmedqa.jsonl": {
+      "sha256": "15dd78a1db4ec128d4d3f0077e5712c9b0285eb6999e91d31cbc909957d9f711",
+      "bytes": 312431,
+      "lines": 500,
+      "last_modified": "2026-10-12T05:05:50.609143+00:00"
+    },
+    "outputs/sc_test_s3_unanswerable/outputs/sc_test/medpsy-4b/unanswerable_v2.jsonl": {
+      "sha256": "c092b43e4b55f17fb34fbc20900787c8d66eb72b45c7845b92bcec4bbede5222",
+      "bytes": 92179,
+      "lines": 140,
+      "last_modified": "2026-10-12T09:37:25.090803+00:00"
+    },
+    "outputs/analysis_test/reliability_test_results.json": {
+      "sha256": "0efa4e46ea4fc68c47357146691b80fd02280a39c88ebebec19d3cc0b77d9057",
+      "bytes": 2011,
+      "lines": 114,
+      "last_modified": "2026-10-12T09:52:38.086943+00:00"
+    },
+    "outputs/analysis_nli/medpsy_test_citation_metrics.json": {
+      "sha256": "ec26b7de45be3f3f9c2ec057a415597a7cc37bef2a69b92995bc547bba109140",
+      "bytes": 238,
+      "lines": 18,
+      "last_modified": "2026-10-12T10:37:43.021873+00:00"
+    },
+    "outputs/kaggle_qa/medpsy_final/work/phase5/medpsy-4b.jsonl": {
+      "sha256": "39ce6c4a41126a99db349e67bee538420644825e5d596cdb0580288bf8961d7b",
+      "bytes": 2073544,
+      "lines": 650,
+      "last_modified": "2026-10-03T15:24:39.938818+00:00"
+    },
+    "outputs/kaggle_qa/medpsy_final/work/phase10/medpsy-4b.jsonl": {
+      "sha256": "88a258a32b911ea4af7abb5e02759dcea4c7b0dd8dd2bd94382db2a45c7ea699",
+      "bytes": 1302856,
+      "lines": 500,
+      "last_modified": "2026-10-03T15:24:33.271266+00:00"
+    },
+    "outputs/kaggle_qa/medpsy_rag/work/phase8/medpsy-4b.jsonl": {
+      "sha256": "a34ef53526b5f13aad3dbe46f502cb7dc0050b4c2c4a5f4e571b9066656ad38c",
+      "bytes": 2025339,
+      "lines": 500,
+      "last_modified": "2026-10-04T12:02:40.599559+00:00"
+    },
+    "outputs/kaggle_qa/full/qwen3-1.7b/work/phase5/qwen3-1.7b.jsonl": {
+      "sha256": "ac5023ebb5e46e50be356e72ee9ac971676c44689a3e98beb31d25f181ec6963",
+      "bytes": 853559,
+      "lines": 1600,
+      "last_modified": "2026-10-02T06:15:01.338328+00:00"
+    },
+    "outputs/kaggle_qa/full/phi4-mini/work/phase5/phi4-mini.jsonl": {
+      "sha256": "99951403bab1efacfc832ddcf0e550fd16794ecd50cc49e5a55d5c21a7619b71",
+      "bytes": 852398,
+      "lines": 1600,
+      "last_modified": "2026-10-02T06:54:39.672072+00:00"
+    },
+    "outputs/kaggle_qa/full/smollm3-3b/work/phase5/smollm3-3b.jsonl": {
+      "sha256": "df99d44e6f457f82a7e6ff03637adc2c4fae197d5c582f528824be6588d02d52",
+      "bytes": 891850,
+      "lines": 1600,
+      "last_modified": "2026-10-02T07:31:03.266052+00:00"
+    },
+    "outputs/kaggle_qa/full/qwen3-4b/work/phase5/qwen3-4b.jsonl": {
+      "sha256": "91369c4fedc74b90bdbb1edb22d989a0a458c4a624a18a6208bdde581b16daaf",
+      "bytes": 848386,
+      "lines": 1600,
+      "last_modified": "2026-10-02T08:20:54.583599+00:00"
+    },
+    "outputs/kaggle_qa/full/gemma3-4b/work/phase5/gemma3-4b.jsonl": {
+      "sha256": "7bd52a0356772b075d92517b82dbb05c5f5f686ed975d3beb7f78bded6b5511f",
+      "bytes": 836260,
+      "lines": 1600,
+      "last_modified": "2026-10-02T10:00:19.770557+00:00"
+    },
+    "outputs/kaggle_qa/full/qwen3-1.7b/work/phase8/qwen3-1.7b.jsonl": {
+      "sha256": "8d98502d94f19696d446b13cff7235c6e542934253a435838ac07ce206ff950f",
+      "bytes": 1465391,
+      "lines": 1600,
+      "last_modified": "2026-10-02T06:15:02.694028+00:00"
+    },
+    "outputs/kaggle_qa/full/phi4-mini/work/phase8/phi4-mini.jsonl": {
+      "sha256": "37087f0c71294099497408d22f4e8ee5c11ea7f047cd830b21f064a2ee036b04",
+      "bytes": 1384851,
+      "lines": 1600,
+      "last_modified": "2026-10-02T06:54:42.442513+00:00"
+    },
+    "outputs/kaggle_qa/full/smollm3-3b/work/phase8/smollm3-3b.jsonl": {
+      "sha256": "15bbdae873769046f689feb2cf86257b92f8e3089eca8d2d30defdab60a6f3b4",
+      "bytes": 1461115,
+      "lines": 1600,
+      "last_modified": "2026-10-02T07:31:06.124005+00:00"
+    },
+    "outputs/kaggle_qa/full/qwen3-4b/work/phase8/qwen3-4b.jsonl": {
+      "sha256": "2b1906e2192b8e4784db351fe01c5856760636af0f370e9aee9c0ffa7da61559",
+      "bytes": 1326030,
+      "lines": 1600,
+      "last_modified": "2026-10-02T08:20:56.540902+00:00"
+    },
+    "outputs/kaggle_qa/full/gemma3-4b_rag/work/phase8/gemma3-4b.jsonl": {
+      "sha256": "260b1d91a2b388d74830106f8c161801d9397911293d96a86860d9a2f3d3ca70",
+      "bytes": 1284793,
+      "lines": 1600,
+      "last_modified": "2026-10-02T11:48:53.653090+00:00"
+    },
+    "outputs/kaggle_qa/context/work/phase10/qwen3-1.7b.jsonl": {
+      "sha256": "f683de3c024ac2795e552906a39cdcf2dcf666f8eff617c518a389c1e80f5561",
+      "bytes": 443386,
+      "lines": 700,
+      "last_modified": "2026-10-02T14:34:41.713362+00:00"
+    },
+    "outputs/kaggle_qa/context/work/phase10/phi4-mini.jsonl": {
+      "sha256": "8bfe4a3a15748d9a45f994f79a12e94982e56246ccb79060d6d8a3800c7c3ed6",
+      "bytes": 372136,
+      "lines": 700,
+      "last_modified": "2026-10-02T14:34:41.048252+00:00"
+    },
+    "outputs/kaggle_qa/context/work/phase10/smollm3-3b.jsonl": {
+      "sha256": "f5ab1e1687fc5b68703a388647602f2638acd78ec960f12675bd96b97f9ea100",
+      "bytes": 385616,
+      "lines": 700,
+      "last_modified": "2026-10-02T14:34:44.663358+00:00"
+    },
+    "outputs/kaggle_qa/context/work/phase10/qwen3-4b.jsonl": {
+      "sha256": "5f57510be691c880c9e2ac918666dd74df23cbe48e4c42f34e3f9b4cddd866cd",
+      "bytes": 343903,
+      "lines": 700,
+      "last_modified": "2026-10-02T14:34:43.061328+00:00"
+    },
+    "outputs/kaggle_qa/context/work/phase10/gemma3-4b.jsonl": {
+      "sha256": "ceabfb38ffc078b07a9a95eda203b32092892d8d0d5e27ff499473c2673a1849",
+      "bytes": 348976,
+      "lines": 700,
+      "last_modified": "2026-10-02T15:38:07.328315+00:00"
+    }
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "timestamp": "2026-10-14T05:25:56.482175+00:00",
+  "repository_root": "/Users/satyasainathteeparthi/Documents/MTECH/Phase 1 Medrag/medrag-slm",
+  "check_a_overlap": {
+    "status": "PASS",
+    "details": {
+      "phase1_test_unique_ids": true,
+      "phase1_val_unique_ids": true,
+      "unans_v2_test_unique_ids": true,
+      "unans_v2_val_unique_ids": true,
+      "p1_id_overlap_count": 0,
+      "p1_text_overlap_count": 0,
+      "u2_id_overlap_count": 0,
+      "u2_text_overlap_count": 0,
+      "cross_benchmark_id_overlap": 0,
+      "cross_test_text_overlap": 0
+    }
+  },
+  "check_b_corpus_overlap": {
+    "status": "PASS",
+    "details": {
+      "corpus_paths_scanned": [
+        "/Users/satyasainathteeparthi/Documents/MTECH/Phase 1 Medrag/medrag-slm/outputs/kaggle_build/work/phase2/corpus.jsonl"
+      ],
+      "total_chunks_scanned": 124077,
+      "total_test_13grams": 74314,
+      "exact_13gram_hits_count": 0,
+      "substantive_contamination_count": 0
+    }
+  },
+  "check_c_frozen_hashes": {
+    "status": "PASS",
+    "details": {
+      "total_files_audited": 25,
+      "missing_count": 0,
+      "mismatch_count": 0,
+      "mismatches": []
+    }
+  },
+  "check_d_validation_only": {
+    "status": "PASS",
+    "details": {
+      "sc_reliability_fit_split": "validation",
+      "test_threshold_used": 0.5118812259442822,
+      "single_pass_reliability_model": "verified",
+      "adaptive_rag_qwen3-1.7b": {
+        "n_val": 400,
+        "n_test": 1000,
+        "tuned_split": "validation"
+      },
+      "adaptive_rag_phi4-mini": {
+        "n_val": 400,
+        "n_test": 1000,
+        "tuned_split": "validation"
+      },
+      "adaptive_rag_smollm3-3b": {
+        "n_val": 400,
+        "n_test": 1000,
+        "tuned_split": "validation"
+      },
+      "adaptive_rag_qwen3-4b": {
+        "n_val": 400,
+        "n_test": 1000,
+        "tuned_split": "validation"
+      },
+      "adaptive_rag_gemma3-4b": {
+        "n_val": 400,
+        "n_test": 1000,
+        "tuned_split": "validation"
+      },
+      "phase9_abstention": "verified",
+      "nli_citation_metrics": "verified"
+    }
+  },
+  "check_e_output_integrity": {
+    "status": "PASS"
+  },
+  "overall_status": "PASS"
+}
