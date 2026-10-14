@@ -62,7 +62,7 @@ SC_NUM_SHARDS = 2
 
 # ── Specialized Task Modes (Tasks 4 & 5) ──────────────────────────────────────
 # Set EXACTLY ONE of the following modes to True before running/pushing with `kaggle kernels push`:
-BUILD_UNANS_V2_EVIDENCE = False  # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
+BUILD_UNANS_V2_EVIDENCE = True  # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
 UNANS_V2_SLM = False             # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
 UNANS_MODEL = "qwen3-4b"         # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
 MEDPSY_UNANS_V2_BASELINE = False # Task 4 MedPsy: run medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
