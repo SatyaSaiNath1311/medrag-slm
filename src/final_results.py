@@ -13,7 +13,26 @@ import json
 import math
 import os
 import random
+import sys
 from pathlib import Path
+
+# Add repo root to sys.path
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.answer_validity import (
+    is_strict_correct,
+    is_fallback_correct,
+    is_truncated,
+    is_parsed,
+    strict_correct_list,
+    fallback_correct_list,
+    strict_accuracy,
+    fallback_accuracy,
+    truncation_rate,
+    parse_rate as calc_parse_rate,
+)
 
 
 # ---------- statistics ----------
@@ -174,11 +193,11 @@ def compute_cmh_results(stats_list):
 
 
 def acc(rows):
-    return round(sum(r["correct"] for r in rows) / len(rows), 4) if rows else None
+    return strict_accuracy(rows)
 
 
 def parse_rate(rows):
-    return round(sum(bool(r.get("parsed")) for r in rows) / len(rows), 4) if rows else None
+    return calc_parse_rate(rows)
 
 
 def fallback_count(rows):
@@ -188,8 +207,6 @@ def fallback_count(rows):
 def mean_sec(rows):
     return round(sum(r["seconds"] for r in rows) / len(rows), 4) if rows else None
 
-
-# ---------- per-model stats ----------
 
 # ---------- per-model stats ----------
 
@@ -218,30 +235,50 @@ def model_stats(model_name, p5_path, p8_path=None, p10_path=None):
         test_medqa = [r for r in test_ans if r.get("dataset") == "medqa"]
         test_pubmed = [r for r in test_ans if r.get("dataset") == "pubmedqa"]
 
-        corr_all = [r["correct"] for r in test_ans]
-        corr_med = [r["correct"] for r in test_medqa]
-        corr_pub = [r["correct"] for r in test_pubmed]
+        strict_all = strict_correct_list(test_ans)
+        strict_med = strict_correct_list(test_medqa)
+        strict_pub = strict_correct_list(test_pubmed)
 
-        # If model only evaluated on one dataset (e.g. MedQA only for medpsy-4b),
-        # acc_overall is None ("n/a") to avoid conflating a partial benchmark with 2-dataset overall.
+        fallback_all = fallback_correct_list(test_ans)
+        fallback_med = fallback_correct_list(test_medqa)
+        fallback_pub = fallback_correct_list(test_pubmed)
+
         has_full_eval = bool(test_medqa and test_pubmed)
-        trunc_rate = round(sum(bool(r.get("truncated")) for r in b_rows) / len(b_rows), 4) if b_rows else None
+        medqa_trunc_rate = truncation_rate(test_medqa)
+        overall_trunc_rate = truncation_rate(test_ans)
 
         result["baseline"] = {
             "n_test_answerable": len(test_ans),
-            "acc_overall": acc(test_ans) if has_full_eval else None,
-            "ci_overall": bootstrap_ci(corr_all) if has_full_eval else (None, None),
-            "acc_medqa": acc(test_medqa) if test_medqa else None,
-            "ci_medqa": bootstrap_ci(corr_med) if test_medqa else (None, None),
-            "acc_pubmedqa": acc(test_pubmed) if test_pubmed else None,
-            "ci_pubmedqa": bootstrap_ci(corr_pub) if test_pubmed else (None, None),
-            "parse_rate": parse_rate(b_rows),
-            "truncation_rate": trunc_rate,
+            # Strict accuracy (primary)
+            "strict_acc_overall": strict_accuracy(test_ans) if has_full_eval else None,
+            "strict_ci_overall": bootstrap_ci(strict_all) if has_full_eval else (None, None),
+            "strict_acc_medqa": strict_accuracy(test_medqa) if test_medqa else None,
+            "strict_ci_medqa": bootstrap_ci(strict_med) if test_medqa else (None, None),
+            "strict_acc_pubmedqa": strict_accuracy(test_pubmed) if test_pubmed else None,
+            "strict_ci_pubmedqa": bootstrap_ci(strict_pub) if test_pubmed else (None, None),
+            # With-fallback accuracy (secondary, labelled)
+            "fallback_acc_overall": fallback_accuracy(test_ans) if has_full_eval else None,
+            "fallback_ci_overall": bootstrap_ci(fallback_all) if has_full_eval else (None, None),
+            "fallback_acc_medqa": fallback_accuracy(test_medqa) if test_medqa else None,
+            "fallback_ci_medqa": bootstrap_ci(fallback_med) if test_medqa else (None, None),
+            "fallback_acc_pubmedqa": fallback_accuracy(test_pubmed) if test_pubmed else None,
+            "fallback_ci_pubmedqa": bootstrap_ci(fallback_pub) if test_pubmed else (None, None),
+            # Primary aliases
+            "acc_overall": strict_accuracy(test_ans) if has_full_eval else None,
+            "ci_overall": bootstrap_ci(strict_all) if has_full_eval else (None, None),
+            "acc_medqa": strict_accuracy(test_medqa) if test_medqa else None,
+            "ci_medqa": bootstrap_ci(strict_med) if test_medqa else (None, None),
+            "acc_pubmedqa": strict_accuracy(test_pubmed) if test_pubmed else None,
+            "ci_pubmedqa": bootstrap_ci(strict_pub) if test_pubmed else (None, None),
+            # Parse & Truncation (computed strictly on target rows)
+            "parse_rate": calc_parse_rate(test_ans),
+            "truncation_rate": overall_trunc_rate,
+            "medqa_truncation_rate": medqa_trunc_rate,
             "fallback_count": fallback_count(b_rows),
             "mean_sec_per_q": mean_sec(test_ans),
-            "correct_list": corr_all,
-            "correct_medqa": corr_med,
-            "correct_pubmedqa": corr_pub,
+            "correct_list": strict_all,
+            "correct_medqa": strict_med,
+            "correct_pubmedqa": strict_pub,
         }
     else:
         result["baseline"] = None
@@ -252,30 +289,49 @@ def model_stats(model_name, p5_path, p8_path=None, p10_path=None):
         test_medqa = [r for r in test_ans if r.get("dataset") == "medqa"]
         test_pubmed = [r for r in test_ans if r.get("dataset") == "pubmedqa"]
 
-        corr_all = [r["correct"] for r in test_ans]
-        corr_med = [r["correct"] for r in test_medqa]
-        corr_pub = [r["correct"] for r in test_pubmed]
+        strict_all = strict_correct_list(test_ans)
+        strict_med = strict_correct_list(test_medqa)
+        strict_pub = strict_correct_list(test_pubmed)
+
+        fallback_all = fallback_correct_list(test_ans)
+        fallback_med = fallback_correct_list(test_medqa)
+        fallback_pub = fallback_correct_list(test_pubmed)
+
         has_full_eval = bool(test_medqa and test_pubmed)
-        trunc_rate = round(sum(bool(r.get("truncated")) for r in r_rows) / len(r_rows), 4) if r_rows else None
+        medqa_trunc_rate = truncation_rate(test_medqa)
+        overall_trunc_rate = truncation_rate(test_ans)
 
         result["rag"] = {
             "n_test_answerable": len(test_ans),
-            "acc_overall": acc(test_ans) if has_full_eval else None,
-            "ci_overall": bootstrap_ci(corr_all) if has_full_eval else (None, None),
-            "acc_medqa": acc(test_medqa) if test_medqa else None,
-            "ci_medqa": bootstrap_ci(corr_med) if test_medqa else (None, None),
-            "acc_pubmedqa": acc(test_pubmed) if test_pubmed else None,
-            "ci_pubmedqa": bootstrap_ci(corr_pub) if test_pubmed else (None, None),
-            "parse_rate": parse_rate(r_rows),
-            "truncation_rate": trunc_rate,
+            "strict_acc_overall": strict_accuracy(test_ans) if has_full_eval else None,
+            "strict_ci_overall": bootstrap_ci(strict_all) if has_full_eval else (None, None),
+            "strict_acc_medqa": strict_accuracy(test_medqa) if test_medqa else None,
+            "strict_ci_medqa": bootstrap_ci(strict_med) if test_medqa else (None, None),
+            "strict_acc_pubmedqa": strict_accuracy(test_pubmed) if test_pubmed else None,
+            "strict_ci_pubmedqa": bootstrap_ci(strict_pub) if test_pubmed else (None, None),
+            "fallback_acc_overall": fallback_accuracy(test_ans) if has_full_eval else None,
+            "fallback_ci_overall": bootstrap_ci(fallback_all) if has_full_eval else (None, None),
+            "fallback_acc_medqa": fallback_accuracy(test_medqa) if test_medqa else None,
+            "fallback_ci_medqa": bootstrap_ci(fallback_med) if test_medqa else (None, None),
+            "fallback_acc_pubmedqa": fallback_accuracy(test_pubmed) if test_pubmed else None,
+            "fallback_ci_pubmedqa": bootstrap_ci(fallback_pub) if test_pubmed else (None, None),
+            "acc_overall": strict_accuracy(test_ans) if has_full_eval else None,
+            "ci_overall": bootstrap_ci(strict_all) if has_full_eval else (None, None),
+            "acc_medqa": strict_accuracy(test_medqa) if test_medqa else None,
+            "ci_medqa": bootstrap_ci(strict_med) if test_medqa else (None, None),
+            "acc_pubmedqa": strict_accuracy(test_pubmed) if test_pubmed else None,
+            "ci_pubmedqa": bootstrap_ci(strict_pub) if test_pubmed else (None, None),
+            "parse_rate": calc_parse_rate(test_ans),
+            "truncation_rate": overall_trunc_rate,
+            "medqa_truncation_rate": medqa_trunc_rate,
             "fallback_count": fallback_count(r_rows),
             "mean_sec_per_q": mean_sec(test_ans),
-            "correct_list": corr_all,
-            "correct_medqa": corr_med,
-            "correct_pubmedqa": corr_pub,
+            "correct_list": strict_all,
+            "correct_medqa": strict_med,
+            "correct_pubmedqa": strict_pub,
         }
 
-        # McNemar RAG vs Baseline
+        # McNemar RAG vs Baseline (Strict Rule)
         if b_rows:
             b_ans_by_id = {r["id"]: r for r in b_by_id.values()
                            if r.get("split") == "test" and not r.get("should_abstain")}
@@ -283,15 +339,15 @@ def model_stats(model_name, p5_path, p8_path=None, p10_path=None):
                            if r.get("split") == "test" and not r.get("should_abstain")}
             shared_ans = sorted(set(b_ans_by_id) & set(r_ans_by_id))
 
-            b_corr = [b_ans_by_id[i]["correct"] for i in shared_ans]
-            r_corr = [r_ans_by_id[i]["correct"] for i in shared_ans]
-            result["mcnemar_p_overall"] = mcnemar_exact(b_corr, r_corr) if has_full_eval else None
+            b_strict = [1 if is_strict_correct(b_ans_by_id[i]) else 0 for i in shared_ans]
+            r_strict = [1 if is_strict_correct(r_ans_by_id[i]) else 0 for i in shared_ans]
+            result["mcnemar_p_overall"] = mcnemar_exact(b_strict, r_strict) if has_full_eval else None
 
             for ds in ("medqa", "pubmedqa"):
                 shared_ds = [i for i in shared_ans if b_ans_by_id[i].get("dataset") == ds]
                 if shared_ds:
-                    b_ds = [b_ans_by_id[i]["correct"] for i in shared_ds]
-                    r_ds = [r_ans_by_id[i]["correct"] for i in shared_ds]
+                    b_ds = [1 if is_strict_correct(b_ans_by_id[i]) else 0 for i in shared_ds]
+                    r_ds = [1 if is_strict_correct(r_ans_by_id[i]) else 0 for i in shared_ds]
                     result[f"mcnemar_p_{ds}"] = mcnemar_exact(b_ds, r_ds)
                 else:
                     result[f"mcnemar_p_{ds}"] = None
@@ -309,18 +365,23 @@ def model_stats(model_name, p5_path, p8_path=None, p10_path=None):
     if c_rows:
         test_ans = [r for r in c_rows if r.get("split") == "test" and not r.get("should_abstain")]
         test_pubmed = [r for r in test_ans if r.get("dataset") == "pubmedqa"]
-        corr_pub = [r["correct"] for r in test_pubmed]
-        trunc_rate = round(sum(bool(r.get("truncated")) for r in c_rows) / len(c_rows), 4) if c_rows else None
+        strict_pub = strict_correct_list(test_pubmed)
+        fallback_pub = fallback_correct_list(test_pubmed)
+        trunc_rate = truncation_rate(test_pubmed)
 
         result["context"] = {
             "n_test": len(test_pubmed),
-            "acc_pubmedqa": acc(test_pubmed),
-            "ci_pubmedqa": bootstrap_ci(corr_pub),
-            "parse_rate": parse_rate(c_rows),
+            "strict_acc_pubmedqa": strict_accuracy(test_pubmed),
+            "strict_ci_pubmedqa": bootstrap_ci(strict_pub),
+            "fallback_acc_pubmedqa": fallback_accuracy(test_pubmed),
+            "fallback_ci_pubmedqa": bootstrap_ci(fallback_pub),
+            "acc_pubmedqa": strict_accuracy(test_pubmed),
+            "ci_pubmedqa": bootstrap_ci(strict_pub),
+            "parse_rate": calc_parse_rate(test_pubmed),
             "truncation_rate": trunc_rate,
             "fallback_count": fallback_count(c_rows),
             "mean_sec_per_q": mean_sec(test_pubmed),
-            "correct_pubmedqa": corr_pub,
+            "correct_pubmedqa": strict_pub,
         }
     else:
         result["context"] = None
@@ -329,7 +390,7 @@ def model_stats(model_name, p5_path, p8_path=None, p10_path=None):
 
 
 def compute_medpsy_comparisons(stats_list):
-    """Compute pairwise exact McNemar comparison of MedPsy-4B vs all other baselines on MedQA."""
+    """Compute pairwise exact McNemar comparison of MedPsy-4B vs all other baselines on MedQA using strict rule."""
     mp_stat = next((s for s in stats_list if s["model"] == "medpsy-4b"), None)
     if not mp_stat or not mp_stat.get("b_by_id"):
         return []
@@ -353,20 +414,26 @@ def compute_medpsy_comparisons(stats_list):
         if not shared_ids:
             continue
 
-        b = sum(1 for i in shared_ids if mp_dict[i]["correct"] and not other_dict[i]["correct"])
-        c = sum(1 for i in shared_ids if not mp_dict[i]["correct"] and other_dict[i]["correct"])
-        p = mcnemar_exact([mp_dict[i]["correct"] for i in shared_ids],
-                          [other_dict[i]["correct"] for i in shared_ids])
+        mp_strict = [1 if is_strict_correct(mp_dict[i]) else 0 for i in shared_ids]
+        other_strict = [1 if is_strict_correct(other_dict[i]) else 0 for i in shared_ids]
+        b_strict = sum(1 for m, o in zip(mp_strict, other_strict) if m and not o)
+        c_strict = sum(1 for m, o in zip(mp_strict, other_strict) if not m and o)
+        p_strict = mcnemar_exact(mp_strict, other_strict)
+
+        mp_fb = [1 if is_fallback_correct(mp_dict[i]) else 0 for i in shared_ids]
+        other_fb = [1 if is_fallback_correct(other_dict[i]) else 0 for i in shared_ids]
 
         comps.append({
             "model": s["model"],
             "n_shared": len(shared_ids),
-            "medpsy_corr": sum(mp_dict[i]["correct"] for i in shared_ids),
-            "other_corr": sum(other_dict[i]["correct"] for i in shared_ids),
-            "medpsy_only_wins": b,
-            "other_only_wins": c,
-            "p_value": p,
-            "significant": p < 0.05,
+            "medpsy_strict_corr": sum(mp_strict),
+            "other_strict_corr": sum(other_strict),
+            "medpsy_fallback_corr": sum(mp_fb),
+            "other_fallback_corr": sum(other_fb),
+            "medpsy_only_wins": b_strict,
+            "other_only_wins": c_strict,
+            "p_value": p_strict,
+            "significant": p_strict < 0.05,
         })
     return comps
 
@@ -387,8 +454,10 @@ def write_markdown(stats_list, out_path):
     lines.append("# Final Results: Baseline vs Full RAG Benchmark\n")
     lines.append(
         "> **Test set, answerable questions only** (should_abstain==False).\n"
+        "> **Primary Evaluation**: Strict Accuracy — a question counts as correct only if parsed, NOT truncated, and matching gold.\n"
+        "> **Secondary Evaluation**: With-Fallback Accuracy — includes logprob or random fallback letters for comparison.\n"
         "> 95% CI: percentile bootstrap (1 000 resamples, seed 42).\n"
-        "> McNemar: exact two-sided binomial test on discordant pairs.\n"
+        "> McNemar: exact two-sided binomial test on discordant pairs under strict rule.\n"
         "> Sec/Q: mean seconds per question over test-split answerable rows only.\n"
         "> **Note on medpsy-4b**: Evaluated on MedQA test baseline ($N=500$) and PubMedQA test +Abstract ($N=500$). "
         "Missing modes/splits are displayed as `n/a`.\n"
@@ -398,47 +467,62 @@ def write_markdown(stats_list, out_path):
     # Main accuracy table
     lines.append("## Accuracy")
     lines.append(
-        "| Model | Baseline Overall [95% CI] | Baseline MedQA [95% CI] | Baseline PubMedQA [95% CI] "
-        "| RAG Overall [95% CI] | RAG MedQA [95% CI] | RAG PubMedQA [95% CI] "
+        "| Model | Baseline Overall (Strict [95% CI]) | Baseline Overall (With-Fallback) "
+        "| Baseline MedQA (Strict [95% CI]) | Baseline MedQA (With-Fallback) "
+        "| Baseline PubMedQA (Strict [95% CI]) | Baseline PubMedQA (With-Fallback) "
+        "| RAG Overall (Strict [95% CI]) | RAG Overall (With-Fallback) "
+        "| RAG MedQA (Strict [95% CI]) | RAG MedQA (With-Fallback) "
+        "| RAG PubMedQA (Strict [95% CI]) | RAG PubMedQA (With-Fallback) "
         "| McNemar p overall | McNemar p MedQA | McNemar p PubMedQA |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for s in stats_list:
         b = s.get("baseline")
         r = s.get("rag")
-        b_ov = fmt_acc_ci(b["acc_overall"], b["ci_overall"]) if b else "n/a"
-        b_mq = fmt_acc_ci(b["acc_medqa"], b["ci_medqa"]) if b else "n/a"
-        b_pm = fmt_acc_ci(b["acc_pubmedqa"], b["ci_pubmedqa"]) if b else "n/a"
+        b_ov_strict = fmt_acc_ci(b["strict_acc_overall"], b["strict_ci_overall"]) if b else "n/a"
+        b_ov_fb = f"{b['fallback_acc_overall']:.4f}" if (b and b["fallback_acc_overall"] is not None) else "n/a"
 
-        r_ov = fmt_acc_ci(r["acc_overall"], r["ci_overall"]) if r else "n/a"
-        r_mq = fmt_acc_ci(r["acc_medqa"], r["ci_medqa"]) if r else "n/a"
-        r_pm = fmt_acc_ci(r["acc_pubmedqa"], r["ci_pubmedqa"]) if r else "n/a"
+        b_mq_strict = fmt_acc_ci(b["strict_acc_medqa"], b["strict_ci_medqa"]) if b else "n/a"
+        b_mq_fb = f"{b['fallback_acc_medqa']:.4f}" if (b and b["fallback_acc_medqa"] is not None) else "n/a"
+
+        b_pm_strict = fmt_acc_ci(b["strict_acc_pubmedqa"], b["strict_ci_pubmedqa"]) if b else "n/a"
+        b_pm_fb = f"{b['fallback_acc_pubmedqa']:.4f}" if (b and b["fallback_acc_pubmedqa"] is not None) else "n/a"
+
+        r_ov_strict = fmt_acc_ci(r["strict_acc_overall"], r["strict_ci_overall"]) if r else "n/a"
+        r_ov_fb = f"{r['fallback_acc_overall']:.4f}" if (r and r["fallback_acc_overall"] is not None) else "n/a"
+
+        r_mq_strict = fmt_acc_ci(r["strict_acc_medqa"], r["strict_ci_medqa"]) if r else "n/a"
+        r_mq_fb = f"{r['fallback_acc_medqa']:.4f}" if (r and r["fallback_acc_medqa"] is not None) else "n/a"
+
+        r_pm_strict = fmt_acc_ci(r["strict_acc_pubmedqa"], r["strict_ci_pubmedqa"]) if r else "n/a"
+        r_pm_fb = f"{r['fallback_acc_pubmedqa']:.4f}" if (r and r["fallback_acc_pubmedqa"] is not None) else "n/a"
 
         p_ov = format_p_value(s.get("mcnemar_p_overall"))
         p_med = format_p_value(s.get("mcnemar_p_medqa"))
         p_pub = format_p_value(s.get("mcnemar_p_pubmedqa"))
 
         lines.append(
-            f"| {s['model']} | {b_ov} | {b_mq} | {b_pm} | {r_ov} | {r_mq} | {r_pm} | {p_ov} | {p_med} | {p_pub} |"
+            f"| {s['model']} | {b_ov_strict} | {b_ov_fb} | {b_mq_strict} | {b_mq_fb} | {b_pm_strict} | {b_pm_fb} | "
+            f"{r_ov_strict} | {r_ov_fb} | {r_mq_strict} | {r_mq_fb} | {r_pm_strict} | {r_pm_fb} | {p_ov} | {p_med} | {p_pub} |"
         )
 
     lines.append("")
     lines.append("## Parse Rate, Truncation, and Speed")
     lines.append(
-        "| Model | Baseline Parse Rate | Baseline Truncated | Baseline Fallback | Baseline Sec/Q "
-        "| RAG Parse Rate | RAG Truncated | RAG Fallback | RAG Sec/Q |"
+        "| Model | Baseline Parse Rate | Baseline MedQA Truncated | Baseline Fallback | Baseline Sec/Q "
+        "| RAG Parse Rate | RAG MedQA Truncated | RAG Fallback | RAG Sec/Q |"
     )
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for s in stats_list:
         b = s.get("baseline")
         r = s.get("rag")
         b_pr = f"{b['parse_rate']:.4f}" if b and b["parse_rate"] is not None else "n/a"
-        b_tr = f"{b['truncation_rate']:.1%}" if b and b["truncation_rate"] is not None else "0.0%"
+        b_tr = f"{b['medqa_truncation_rate']:.1%}" if b and b["medqa_truncation_rate"] is not None else "0.0%"
         b_fb = str(b["fallback_count"]) if b and b["fallback_count"] is not None else "n/a"
         b_sq = f"{b['mean_sec_per_q']:.3f} s" if b and b["mean_sec_per_q"] is not None else "n/a"
 
         r_pr = f"{r['parse_rate']:.4f}" if r and r["parse_rate"] is not None else "n/a"
-        r_tr = f"{r['truncation_rate']:.1%}" if r and r["truncation_rate"] is not None else "0.0%"
+        r_tr = f"{r['medqa_truncation_rate']:.1%}" if r and r["medqa_truncation_rate"] is not None else "0.0%"
         r_fb = str(r["fallback_count"]) if r and r["fallback_count"] is not None else "n/a"
         r_sq = f"{r['mean_sec_per_q']:.3f} s" if r and r["mean_sec_per_q"] is not None else "n/a"
 
@@ -452,16 +536,17 @@ def write_markdown(stats_list, out_path):
         lines.append("")
         lines.append("## PubMedQA +Abstract (Oracle Context Benchmark)")
         lines.append(
-            "| Model | PubMedQA +Abstract Acc [95% CI] | Parse Rate | Truncated | Sec/Q |"
+            "| Model | PubMedQA +Abstract (Strict [95% CI]) | PubMedQA +Abstract (With-Fallback) | Parse Rate | Truncated | Sec/Q |"
         )
-        lines.append("|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|")
         for s in ctx_models:
             c = s["context"]
-            c_acc = fmt_acc_ci(c["acc_pubmedqa"], c["ci_pubmedqa"])
+            c_acc_strict = fmt_acc_ci(c["strict_acc_pubmedqa"], c["strict_ci_pubmedqa"])
+            c_acc_fb = f"{c['fallback_acc_pubmedqa']:.4f}" if c.get("fallback_acc_pubmedqa") is not None else "n/a"
             c_pr = f"{c['parse_rate']:.4f}" if c.get("parse_rate") is not None else "n/a"
             c_tr = f"{c['truncation_rate']:.1%}" if c.get("truncation_rate") is not None else "0.0%"
             c_sq = f"{c['mean_sec_per_q']:.3f} s" if c.get("mean_sec_per_q") is not None else "n/a"
-            lines.append(f"| {s['model']} | {c_acc} | {c_pr} | {c_tr} | {c_sq} |")
+            lines.append(f"| {s['model']} | {c_acc_strict} | {c_acc_fb} | {c_pr} | {c_tr} | {c_sq} |")
 
     # MedPsy-4B Pairwise Comparison Section
     medpsy_comps = compute_medpsy_comparisons(stats_list)
@@ -470,13 +555,15 @@ def write_markdown(stats_list, out_path):
         lines.append("## MedPsy-4B vs. Standard SLM Baselines (MedQA Test Split, $N=500$)")
         lines.append(
             "> Pairwise McNemar exact two-sided test on discordant pairs for MedQA test ($N=500$).  \n"
+            "> - **Primary Rule**: Evaluated under strict answer validity (truncated answers count as wrong; unparsed count as wrong).  \n"
             "> - **MedPsy-Only Wins ($b$)**: Questions answered correctly by MedPsy-4B but wrong by baseline.  \n"
-            "> - **Baseline-Only Wins ($c$)**: Questions answered correctly by baseline but wrong by MedPsy-4B.\n"
+            "> - **Baseline-Only Wins ($c$)**: Questions answered correctly by baseline but wrong by MedPsy-4B.  \n"
+            "> - **Secondary (With-Fallback)**: Accuracy including fallback letters is shown side-by-side for reference.\n"
         )
         lines.append(
-            "| Comparison | MedPsy-4B Acc | Baseline Acc | MedPsy-Only ($b$) | Baseline-Only ($c$) | McNemar $p$-value | Significant? |"
+            "| Comparison | MedPsy-4B Strict Acc | Baseline Strict Acc | MedPsy-Only ($b$) | Baseline-Only ($c$) | McNemar $p$-value | Significant? | MedPsy Fallback Acc | Baseline Fallback Acc |"
         )
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
         for comp in medpsy_comps:
             p_val = comp["p_value"]
             p_str = format_p_value(p_val)
@@ -484,9 +571,11 @@ def write_markdown(stats_list, out_path):
             is_sig_05 = (p_val < 0.05) if isinstance(p_val, (int, float)) else True
             sig_str = "**Yes (p < 0.001)**" if is_sig_001 else ("Yes (p < 0.05)" if is_sig_05 else f"No (p = {p_val:.3f})")
             lines.append(
-                f"| MedPsy-4B vs. **{comp['model']}** | {comp['medpsy_corr']/comp['n_shared']:.1%} | "
-                f"{comp['other_corr']/comp['n_shared']:.1%} | {comp['medpsy_only_wins']} | "
-                f"{comp['other_only_wins']} | {p_str} | {sig_str} |"
+                f"| MedPsy-4B vs. **{comp['model']}** | {comp['medpsy_strict_corr']/comp['n_shared']:.1%} | "
+                f"{comp['other_strict_corr']/comp['n_shared']:.1%} | {comp['medpsy_only_wins']} | "
+                f"{comp['other_only_wins']} | {p_str} | {sig_str} | "
+                f"{comp['medpsy_fallback_corr']/comp['n_shared']:.1%} | "
+                f"{comp['other_fallback_corr']/comp['n_shared']:.1%} |"
             )
 
     lines.append("")
@@ -565,18 +654,22 @@ def write_markdown(stats_list, out_path):
 def write_csv(stats_list, out_path):
     fields = [
         "model",
-        "baseline_acc_overall", "baseline_ci_lo", "baseline_ci_hi",
-        "baseline_acc_medqa", "baseline_ci_medqa_lo", "baseline_ci_medqa_hi",
-        "baseline_acc_pubmedqa", "baseline_ci_pubmedqa_lo", "baseline_ci_pubmedqa_hi",
-        "baseline_parse_rate", "baseline_truncation_rate", "baseline_fallback_count", "baseline_sec_per_q",
-        "rag_acc_overall", "rag_ci_lo", "rag_ci_hi",
-        "rag_acc_medqa", "rag_ci_medqa_lo", "rag_ci_medqa_hi",
-        "rag_acc_pubmedqa", "rag_ci_pubmedqa_lo", "rag_ci_pubmedqa_hi",
-        "rag_parse_rate", "rag_truncation_rate", "rag_fallback_count", "rag_sec_per_q",
-        "context_acc_pubmedqa", "context_ci_pubmedqa_lo", "context_ci_pubmedqa_hi",
+        "baseline_strict_acc_overall", "baseline_fallback_acc_overall", "baseline_ci_lo", "baseline_ci_hi",
+        "baseline_strict_acc_medqa", "baseline_fallback_acc_medqa", "baseline_ci_medqa_lo", "baseline_ci_medqa_hi",
+        "baseline_strict_acc_pubmedqa", "baseline_fallback_acc_pubmedqa", "baseline_ci_pubmedqa_lo", "baseline_ci_pubmedqa_hi",
+        "baseline_parse_rate", "baseline_truncation_rate", "baseline_medqa_truncation_rate", "baseline_fallback_count", "baseline_sec_per_q",
+        "rag_strict_acc_overall", "rag_fallback_acc_overall", "rag_ci_lo", "rag_ci_hi",
+        "rag_strict_acc_medqa", "rag_fallback_acc_medqa", "rag_ci_medqa_lo", "rag_ci_medqa_hi",
+        "rag_strict_acc_pubmedqa", "rag_fallback_acc_pubmedqa", "rag_ci_pubmedqa_lo", "rag_ci_pubmedqa_hi",
+        "rag_parse_rate", "rag_truncation_rate", "rag_medqa_truncation_rate", "rag_fallback_count", "rag_sec_per_q",
+        "context_strict_acc_pubmedqa", "context_fallback_acc_pubmedqa", "context_ci_pubmedqa_lo", "context_ci_pubmedqa_hi",
         "context_parse_rate", "context_truncation_rate", "context_sec_per_q",
         "mcnemar_p_overall", "mcnemar_p_medqa", "mcnemar_p_pubmedqa",
         "n_test_answerable",
+        # Backward-compatibility aliases
+        "baseline_acc_overall", "baseline_acc_medqa", "baseline_acc_pubmedqa",
+        "rag_acc_overall", "rag_acc_medqa", "rag_acc_pubmedqa",
+        "context_acc_pubmedqa",
     ]
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
@@ -585,42 +678,59 @@ def write_csv(stats_list, out_path):
             b, r, c = s.get("baseline"), s.get("rag"), s.get("context")
             w.writerow({
                 "model": s["model"],
-                "baseline_acc_overall":      b["acc_overall"] if b else "",
-                "baseline_ci_lo":            b["ci_overall"][0] if b and b["ci_overall"] else "",
-                "baseline_ci_hi":            b["ci_overall"][1] if b and b["ci_overall"] else "",
-                "baseline_acc_medqa":        b["acc_medqa"] if b else "",
-                "baseline_ci_medqa_lo":      b["ci_medqa"][0] if b and b["ci_medqa"] else "",
-                "baseline_ci_medqa_hi":      b["ci_medqa"][1] if b and b["ci_medqa"] else "",
-                "baseline_acc_pubmedqa":     b["acc_pubmedqa"] if b else "",
-                "baseline_ci_pubmedqa_lo":   b["ci_pubmedqa"][0] if b and b["ci_pubmedqa"] else "",
-                "baseline_ci_pubmedqa_hi":   b["ci_pubmedqa"][1] if b and b["ci_pubmedqa"] else "",
-                "baseline_parse_rate":       b["parse_rate"] if b else "",
-                "baseline_truncation_rate":  b["truncation_rate"] if b else "",
-                "baseline_fallback_count":   b["fallback_count"] if b else "",
-                "baseline_sec_per_q":        b["mean_sec_per_q"] if b else "",
-                "rag_acc_overall":           r["acc_overall"] if r else "",
-                "rag_ci_lo":                 r["ci_overall"][0] if r and r["ci_overall"] else "",
-                "rag_ci_hi":                 r["ci_overall"][1] if r and r["ci_overall"] else "",
-                "rag_acc_medqa":             r["acc_medqa"] if r else "",
-                "rag_ci_medqa_lo":           r["ci_medqa"][0] if r and r["ci_medqa"] else "",
-                "rag_ci_medqa_hi":           r["ci_medqa"][1] if r and r["ci_medqa"] else "",
-                "rag_acc_pubmedqa":          r["acc_pubmedqa"] if r else "",
-                "rag_ci_pubmedqa_lo":        r["ci_pubmedqa"][0] if r and r["ci_pubmedqa"] else "",
-                "rag_ci_pubmedqa_hi":        r["ci_pubmedqa"][1] if r and r["ci_pubmedqa"] else "",
-                "rag_parse_rate":            r["parse_rate"] if r else "",
-                "rag_truncation_rate":       r["truncation_rate"] if r else "",
-                "rag_fallback_count":        r["fallback_count"] if r else "",
-                "rag_sec_per_q":             r["mean_sec_per_q"] if r else "",
-                "context_acc_pubmedqa":      c["acc_pubmedqa"] if c else "",
-                "context_ci_pubmedqa_lo":    c["ci_pubmedqa"][0] if c and c["ci_pubmedqa"] else "",
-                "context_ci_pubmedqa_hi":    c["ci_pubmedqa"][1] if c and c["ci_pubmedqa"] else "",
-                "context_parse_rate":        c["parse_rate"] if c else "",
-                "context_truncation_rate":   c["truncation_rate"] if c else "",
-                "context_sec_per_q":         c["mean_sec_per_q"] if c else "",
-                "mcnemar_p_overall":         s.get("mcnemar_p_overall", ""),
-                "mcnemar_p_medqa":           s.get("mcnemar_p_medqa", ""),
-                "mcnemar_p_pubmedqa":        s.get("mcnemar_p_pubmedqa", ""),
-                "n_test_answerable":         b["n_test_answerable"] if b else (r["n_test_answerable"] if r else 0),
+                "baseline_strict_acc_overall":   b["strict_acc_overall"] if b else "",
+                "baseline_fallback_acc_overall": b["fallback_acc_overall"] if b else "",
+                "baseline_ci_lo":                b["strict_ci_overall"][0] if b and b["strict_ci_overall"] else "",
+                "baseline_ci_hi":                b["strict_ci_overall"][1] if b and b["strict_ci_overall"] else "",
+                "baseline_strict_acc_medqa":     b["strict_acc_medqa"] if b else "",
+                "baseline_fallback_acc_medqa":   b["fallback_acc_medqa"] if b else "",
+                "baseline_ci_medqa_lo":          b["strict_ci_medqa"][0] if b and b["strict_ci_medqa"] else "",
+                "baseline_ci_medqa_hi":          b["strict_ci_medqa"][1] if b and b["strict_ci_medqa"] else "",
+                "baseline_strict_acc_pubmedqa":  b["strict_acc_pubmedqa"] if b else "",
+                "baseline_fallback_acc_pubmedqa":b["fallback_acc_pubmedqa"] if b else "",
+                "baseline_ci_pubmedqa_lo":       b["strict_ci_pubmedqa"][0] if b and b["strict_ci_pubmedqa"] else "",
+                "baseline_ci_pubmedqa_hi":       b["strict_ci_pubmedqa"][1] if b and b["strict_ci_pubmedqa"] else "",
+                "baseline_parse_rate":           b["parse_rate"] if b else "",
+                "baseline_truncation_rate":      b["truncation_rate"] if b else "",
+                "baseline_medqa_truncation_rate":b["medqa_truncation_rate"] if b else "",
+                "baseline_fallback_count":       b["fallback_count"] if b else "",
+                "baseline_sec_per_q":            b["mean_sec_per_q"] if b else "",
+                "rag_strict_acc_overall":        r["strict_acc_overall"] if r else "",
+                "rag_fallback_acc_overall":      r["fallback_acc_overall"] if r else "",
+                "rag_ci_lo":                     r["strict_ci_overall"][0] if r and r["strict_ci_overall"] else "",
+                "rag_ci_hi":                     r["strict_ci_overall"][1] if r and r["strict_ci_overall"] else "",
+                "rag_strict_acc_medqa":          r["strict_acc_medqa"] if r else "",
+                "rag_fallback_acc_medqa":        r["fallback_acc_medqa"] if r else "",
+                "rag_ci_medqa_lo":               r["strict_ci_medqa"][0] if r and r["strict_ci_medqa"] else "",
+                "rag_ci_medqa_hi":               r["strict_ci_medqa"][1] if r and r["strict_ci_medqa"] else "",
+                "rag_strict_acc_pubmedqa":       r["strict_acc_pubmedqa"] if r else "",
+                "rag_fallback_acc_pubmedqa":     r["fallback_acc_pubmedqa"] if r else "",
+                "rag_ci_pubmedqa_lo":            r["strict_ci_pubmedqa"][0] if r and r["strict_ci_pubmedqa"] else "",
+                "rag_ci_pubmedqa_hi":            r["strict_ci_pubmedqa"][1] if r and r["strict_ci_pubmedqa"] else "",
+                "rag_parse_rate":                r["parse_rate"] if r else "",
+                "rag_truncation_rate":           r["truncation_rate"] if r else "",
+                "rag_medqa_truncation_rate":     r["medqa_truncation_rate"] if r else "",
+                "rag_fallback_count":            r["fallback_count"] if r else "",
+                "rag_sec_per_q":                 r["mean_sec_per_q"] if r else "",
+                "context_strict_acc_pubmedqa":   c["strict_acc_pubmedqa"] if c else "",
+                "context_fallback_acc_pubmedqa": c["fallback_acc_pubmedqa"] if c else "",
+                "context_ci_pubmedqa_lo":        c["strict_ci_pubmedqa"][0] if c and c["strict_ci_pubmedqa"] else "",
+                "context_ci_pubmedqa_hi":        c["strict_ci_pubmedqa"][1] if c and c["strict_ci_pubmedqa"] else "",
+                "context_parse_rate":            c["parse_rate"] if c else "",
+                "context_truncation_rate":       c["truncation_rate"] if c else "",
+                "context_sec_per_q":             c["mean_sec_per_q"] if c else "",
+                "mcnemar_p_overall":             s.get("mcnemar_p_overall", ""),
+                "mcnemar_p_medqa":               s.get("mcnemar_p_medqa", ""),
+                "mcnemar_p_pubmedqa":            s.get("mcnemar_p_pubmedqa", ""),
+                "n_test_answerable":             b["n_test_answerable"] if b else (r["n_test_answerable"] if r else 0),
+                # Aliases
+                "baseline_acc_overall":          b["strict_acc_overall"] if b else "",
+                "baseline_acc_medqa":            b["strict_acc_medqa"] if b else "",
+                "baseline_acc_pubmedqa":         b["strict_acc_pubmedqa"] if b else "",
+                "rag_acc_overall":               r["strict_acc_overall"] if r else "",
+                "rag_acc_medqa":                 r["strict_acc_medqa"] if r else "",
+                "rag_acc_pubmedqa":              r["strict_acc_pubmedqa"] if r else "",
+                "context_acc_pubmedqa":          c["strict_acc_pubmedqa"] if c else "",
             })
     print(f"Saved CSV: {out_path}")
 
@@ -658,15 +768,19 @@ def print_table(stats_list):
     # MedPsy pairwise McNemar comparison
     medpsy_comps = compute_medpsy_comparisons(stats_list)
     if medpsy_comps:
-        print("\nMEDPSY-4B vs OTHER BASELINES (MedQA Test Split, N=500):")
-        print("-" * 100)
-        print(f"{'Baseline Comparison':<30} {'MedPsy Acc':<12} {'Other Acc':<12} {'b (MedPsy+)':<14} {'c (Other+)':<14} {'McNemar p':<12}")
-        print("-" * 100)
+        print("\nMEDPSY-4B vs OTHER BASELINES (MedQA Test Split, N=500, Strict Rule):")
+        print("-" * 115)
+        print(f"{'Baseline Comparison':<24} {'MedPsy Strict':<15} {'Other Strict':<14} {'b (MedPsy+)':<13} {'c (Other+)':<13} {'McNemar p':<14} {'MedPsy Fallback':<16} {'Other Fallback':<16}")
+        print("-" * 115)
         for comp in medpsy_comps:
             p_val = comp["p_value"]
             p_str = format_p_value(p_val)
-            print(f"vs {comp['model']:<27} {comp['medpsy_corr']/comp['n_shared']:<12.1%} {comp['other_corr']/comp['n_shared']:<12.1%} {comp['medpsy_only_wins']:<14} {comp['other_only_wins']:<14} {p_str:<12}")
-        print("=" * 100)
+            mp_s = f"{comp['medpsy_strict_corr']/comp['n_shared']:.1%}"
+            oth_s = f"{comp['other_strict_corr']/comp['n_shared']:.1%}"
+            mp_fb = f"{comp['medpsy_fallback_corr']/comp['n_shared']:.1%}"
+            oth_fb = f"{comp['other_fallback_corr']/comp['n_shared']:.1%}"
+            print(f"vs {comp['model']:<21} {mp_s:<15} {oth_s:<14} {comp['medpsy_only_wins']:<13} {comp['other_only_wins']:<13} {p_str:<14} {mp_fb:<16} {oth_fb:<16}")
+        print("=" * 115)
 
 
 def main():

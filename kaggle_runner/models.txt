@@ -5,3 +5,8 @@
 # phi4-mini
 # qwen3-4b
 # smollm3-3b
+# medpsy-4b
+# medpsy-1.7b
+# qwen3-1.7b-thinking
+# qwen3-4b-thinking-2507
+# medgemma-1.5-4b-it

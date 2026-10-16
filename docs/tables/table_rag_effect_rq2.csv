@@ -1,0 +1,9 @@
+Model,Group,N Common,Baseline Strict Acc (95% CI),Baseline With-Fallback Acc,RAG Strict Acc (95% CI),RAG With-Fallback Acc,Delta Strict Acc,b (Base+ / RAG-),c (Base- / RAG+),Discordant OR,McNemar p (exact)
+gemma3-4b,Generic,1400,"0.4857 [0.4593, 0.5114]",0.4857,"0.5029 [0.4764, 0.5279]",0.5029,+0.0171,200,224,1.120,0.26398
+medgemma-1.5-4b-it,Medical,-,-,-,-,-,-,-,-,-,PENDING
+medpsy-1.7b,Medical,-,-,-,-,-,-,-,-,-,PENDING
+medpsy-4b,Medical,500,"0.8320 [0.8, 0.864]",0.8760,"0.7260 [0.684, 0.764]",0.8900,-0.1060,78,25,0.321,0.00000
+qwen3-1.7b,Generic,1400,"0.4657 [0.4407, 0.4907]",0.4657,"0.4914 [0.465, 0.5172]",0.4914,+0.0257,162,198,1.222,0.06494
+qwen3-1.7b-thinking,Generic,-,-,-,-,-,-,-,-,-,PENDING
+qwen3-4b,Generic,1400,"0.5514 [0.5243, 0.5757]",0.5514,"0.5471 [0.5229, 0.5729]",0.5471,-0.0043,189,183,0.968,0.79549
+qwen3-4b-thinking-2507,Generic,-,-,-,-,-,-,-,-,-,PENDING

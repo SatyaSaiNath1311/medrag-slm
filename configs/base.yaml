@@ -30,6 +30,33 @@ models:
     reasoning: true
     max_new_tokens_reasoning: 1024
     batch_size: 8
+  - name: medpsy-1.7b
+    id: qvac/MedPsy-1.7B
+    dtype: float16
+    reasoning: true
+    max_new_tokens_reasoning: 1024
+    batch_size: 8
+  - name: qwen3-1.7b-thinking
+    id: Qwen/Qwen3-1.7B
+    dtype: float16
+    reasoning: true
+    max_new_tokens_reasoning: 1024
+    batch_size: 8
+  - name: qwen3-4b-thinking-2507
+    id: Qwen/Qwen3-4B-Thinking-2507
+    dtype: float16
+    reasoning: true
+    max_new_tokens_reasoning: 1024
+    batch_size: 8
+  - name: medgemma-1.5-4b-it
+    id: google/medgemma-1.5-4b-it
+    dtype: float32
+    loader: gemma3
+    gated: true
+    kaggle_path_glob: "/kaggle/input/medgemma-1-5/transformers/medgemma-1.5-4b-it/*"
+    kaggle_handle: "google/medgemma-1-5/transformers/medgemma-1.5-4b-it"
+    batch_size_rag: 2
+
 
 # Used only for quick local checks on your laptop (CPU), never for results.
 tiny_model:
@@ -88,3 +115,29 @@ qa:
   min_parse_rate: 0.9
   tiny_min_parse_rate: 0.5
   tiny_questions: 3
+
+# ---------------- V3: Matched-Pair Generic vs Medical Experiment ----------------
+v3:
+  seed: 42
+  thinking_cap: 1024
+  truncation_caps: [1024, 2048]
+  truncation_sensitivity_n: 100
+  pilot_n: 50
+  conditions: ["C1", "C2", "C3", "C4", "C5"]
+  pairs:
+    P1:
+      name: "1.7B (Qwen)"
+      generic: "qwen3-1.7b"
+      medical: "medpsy-1.7b"
+      control: "qwen3-1.7b-thinking"
+    P2:
+      name: "4B (Qwen)"
+      generic: "qwen3-4b"
+      medical: "medpsy-4b"
+      control: "qwen3-4b-thinking-2507"
+    P3:
+      name: "4B (Gemma)"
+      generic: "gemma3-4b"
+      medical: "medgemma-1.5-4b-it"
+      control: null
+

@@ -1,0 +1,4 @@
+Analysis Layer,Stratification / Group,Common Odds Ratio,CMH / Stat,p-value,Interpretation
+Pooled CMH Test,"Generic Group (Qwen, Gemma, etc.)",1.053,Chi2=1.3424,0.246617,Not significant / pending
+Pooled CMH Test,"Medical Group (MedPsy, MedGemma)",0.535,Chi2=15.6907,7.5e-05,Significant RAG benefit
+Logistic Interaction (Model_Type x RAG),Generic vs Medical Differential RAG Gain,Beta_int=-0.6769,LR Chi2=17.8323,"Wald p=3e-05, LR p=2.4e-05",Differential RAG gain confirmed

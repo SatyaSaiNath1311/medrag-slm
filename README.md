@@ -83,4 +83,48 @@ A larger, challenging evaluation benchmark created by `src/build_unanswerable_v2
 - **Frozen-Test Rule**:
   The test partition (`data/unanswerable_v2/test.jsonl`) is cryptographically frozen (`test.sha256`) and must **NEVER** be examined, modified, or used for model prompt tuning, threshold calibration, or temperature fitting. All abstention parameters and operating thresholds must be tuned exclusively on `val.jsonl`.
 
+## v3 Matched-Pair Run Order (Generic vs. Medical Domain)
+The v3 study evaluates matched pairs of generic vs. medical-domain small language models across five identical conditions (C1: MedQA Baseline, C2: MedQA Full RAG, C3: PubMedQA Baseline, C4: PubMedQA Context, C5: Unanswerable v2):
+1. **1.7B Thinking Pair**: `medpsy-1.7b` vs. `qwen3-1.7b-thinking` (1,024 reasoning token cap).
+2. **4B Thinking Pair**: `medpsy-4b` vs. `qwen3-4b-thinking-2507` (1,024 reasoning token cap).
+3. **4B Non-Thinking Pair**: `medgemma-1.5-4b-it` vs. `gemma3-4b` (greedy direct answering).
+
+### Execution Workflow
+1. **Verify GPU Quota Budget**:
+   ```bash
+   python3 scripts/budget.py --hours 30.0
+   ```
+2. **Execute Validation Pilot ($N=50$)**:
+   Verify 100% answer extraction and check template compliance before running long jobs:
+   ```bash
+   export V3_RUN=1
+   export V3_MODEL="medpsy-1.7b"
+   export V3_PILOT=1
+   export V3_PILOT_N=50
+   python3 kaggle_runner/runner.py
+   ```
+3. **Execute Full Test Runs (Confirm Safety Gate)**:
+   ```bash
+   export V3_RUN=1
+   export V3_MODEL="medpsy-1.7b"
+   export V3_CONFIRM_TEST=1
+   python3 kaggle_runner/runner.py
+   ```
+   *(For full copy-paste commands, priority sequencing, and Kaggle Web-UI instructions for gated models like MedGemma-1.5-4B-IT, refer to [`scripts/gpu_queue.md`](scripts/gpu_queue.md).)*
+
+4. **Verify Integrity & Run Analysis**:
+   ```bash
+   # 1. Leakage and data integrity audit
+   python3 audit/final_leakage_audit.py
+
+   # 2. Matched-pair statistical tests (McNemar, Holm-Bonferroni, CMH, logistic interaction)
+   python3 src/analysis_pairs.py
+
+   # 3. Unanswerable v3 evaluation
+   python3 src/analysis_unanswerable_v3.py
+
+   # 4. Generate Figures 14-16
+   python3 src/make_pair_figures.py
+   ```
+
 

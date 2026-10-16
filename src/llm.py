@@ -237,17 +237,19 @@ class LLM:
             else:
                 print("    glob did not match any directory containing config.json", flush=True)
 
-            # b. a recursive search of /kaggle/input for a directory with config.json whose path contains "gemma-3-4b-it" (case-insensitive)
+            # b. a recursive search of /kaggle/input for a directory with config.json whose path contains model term (case-insensitive)
             if load_path is None and os.path.exists("/kaggle/input"):
-                print("  attempting recursive search in /kaggle/input for 'gemma-3-4b-it' with config.json...", flush=True)
+                search_term = mcfg.get("kaggle_search_term", mcfg.get("id", "").split("/")[-1].lower())
+                print(f"  attempting recursive search in /kaggle/input for '{search_term}' with config.json...", flush=True)
                 for root, dirs, files in os.walk("/kaggle/input"):
-                    if "gemma-3-4b-it" in root.lower() and "config.json" in files:
+                    if (search_term in root.lower() or "gemma-3-4b-it" in root.lower()) and "config.json" in files:
                         load_path = root
                         load_source = f"kaggle-models {load_path}"
                         print(f"    found via recursive search: {load_path}", flush=True)
                         break
                 if load_path is None:
                     print("    recursive search found no matching directory with config.json", flush=True)
+
 
             # c. if running on Kaggle (/kaggle/input exists): path = kagglehub.model_download(...)
             if load_path is None and os.path.exists("/kaggle/input"):
@@ -578,9 +580,12 @@ class LLM:
 
         return results
 
-    def generate_reasoning_safe(self, prompts, letters_list, max_new_tokens):
+    def generate_reasoning_safe(self, prompts, letters_list, max_new_tokens=None):
         """OOM-safe wrapper around generate_reasoning (same halving strategy)."""
+        if max_new_tokens is None:
+            max_new_tokens = self.cfg.get("max_new_tokens_reasoning", 1024)
         def _is_oom(exc):
+
             if isinstance(exc, self.torch.cuda.OutOfMemoryError):
                 return True
             if isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower():

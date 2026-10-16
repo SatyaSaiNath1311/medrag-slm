@@ -63,11 +63,25 @@ SC_NUM_SHARDS = 2
 # ── Specialized Task Modes (Tasks 4 & 5) ──────────────────────────────────────
 # Set EXACTLY ONE of the following modes to True before running/pushing with `kaggle kernels push`:
 BUILD_UNANS_V2_EVIDENCE = False # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
-UNANS_V2_SLM = True             # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
+UNANS_V2_SLM = False            # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
 UNANS_MODEL = "qwen3-1.7b"       # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
 MEDPSY_UNANS_V2_BASELINE = False # Task 4 MedPsy: run medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
 MEDPSY_PUBMEDQA_BASELINE = False # Task 5A: run medpsy-4b closed-book baseline on PubMedQA test (500), 2-GPU shards
 MEDPSY_PUBMEDQA_RAG = False      # Task 5B: run medpsy-4b RAG on PubMedQA test (500), 2-GPU shards
+
+# ── V3 Generic-vs-Medical Matched-Pair Experiment ─────────────────────────────
+# One model per push. Set V3_RUN=True, choose model and conditions, then push.
+# Pilot (V3_PILOT=True) runs the stratified N=50 val subset first; full run after.
+# Output path: outputs/v3/<model>/<condition>/<model>.jsonl
+V3_RUN = False               # v3 matched-pair run for ONE model across V3_CONDITIONS
+V3_MODEL = "medpsy-1.7b"     # one of: medpsy-1.7b, qwen3-1.7b-thinking, qwen3-4b-thinking-2507, medgemma-1.5-4b-it
+V3_CONDITIONS = "C1,C2,C3,C4,C5"  # comma-separated subset of {C1,C2,C3,C4,C5}
+V3_PILOT = False             # if True: run stratified N=50 validation pilot first (no test data touched)
+V3_PILOT_N = 50              # pilot size (validation only)
+V3_CONFIRM_TEST = False      # must be True before any condition touches the test split
+
+# Truncation sensitivity check (Task 6, validation only, no model inference at full scale)
+V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models
 
 # Optional legacy env overrides for base runner settings
 for flag, val in [
@@ -80,6 +94,8 @@ for flag, val in [
     ("PILOT", "PILOT"),
     ("PARALLEL_GPUS", "PARALLEL_GPUS"),
     ("TINY", "TINY"),
+    ("V3_RUN", "V3_RUN"),
+    ("V3_TRUNC_SENSITIVITY", "V3_TRUNC_SENSITIVITY"),
 ]:
     if flag in os.environ:
         locals()[val] = os.environ[flag].lower() in ("1", "true", "yes")
@@ -92,30 +108,34 @@ _active_special_modes = [
         ("MEDPSY_UNANS_V2_BASELINE", MEDPSY_UNANS_V2_BASELINE),
         ("MEDPSY_PUBMEDQA_BASELINE", MEDPSY_PUBMEDQA_BASELINE),
         ("MEDPSY_PUBMEDQA_RAG", MEDPSY_PUBMEDQA_RAG),
+        ("V3_RUN", V3_RUN),
+        ("V3_TRUNC_SENSITIVITY", V3_TRUNC_SENSITIVITY),
     ] if v
 ]
 if len(_active_special_modes) > 1:
     sys.exit(f"ERROR: Mutually exclusive runner modes enabled: {_active_special_modes}. Enable only one before pushing.")
 
 if _active_special_modes:
-    _conflicting_flags = [
-        m for m, v in [
-            ("TINY", TINY),
-            ("CHECK_ONLY", CHECK_ONLY),
-            ("PILOT", PILOT),
-            ("FINAL_MEDPSY", FINAL_MEDPSY),
-            ("VAL_MEDPSY", VAL_MEDPSY),
-            ("RAG_MEDPSY", RAG_MEDPSY),
-            ("SC_MODE", SC_MODE),
-            ("PROFILE", PROFILE),
-            ("PARALLEL_GPUS", PARALLEL_GPUS),
-        ] if v
+    _disallowed = [
+        ("PILOT", PILOT),
+        ("FINAL_MEDPSY", FINAL_MEDPSY),
+        ("VAL_MEDPSY", VAL_MEDPSY),
+        ("RAG_MEDPSY", RAG_MEDPSY),
+        ("SC_MODE", SC_MODE),
+        ("PROFILE", PROFILE),
+        ("PARALLEL_GPUS", PARALLEL_GPUS),
     ]
+    # For legacy special modes, TINY and CHECK_ONLY are also disallowed;
+    # for V3_RUN and V3_TRUNC_SENSITIVITY, TINY and CHECK_ONLY are supported.
+    if not (V3_RUN or V3_TRUNC_SENSITIVITY):
+        _disallowed.extend([("TINY", TINY), ("CHECK_ONLY", CHECK_ONLY)])
+    _conflicting_flags = [m for m, v in _disallowed if v]
     if _conflicting_flags:
         sys.exit(
             f"ERROR: Special mode {_active_special_modes[0]} cannot be run together with flags {_conflicting_flags}. "
             "Set these flags to False when running a special mode."
         )
+
 
 _active_legacy_modes = [
     m for m, v in [
@@ -242,6 +262,30 @@ if SC_SHARD is None:
         print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
     if PILOT:
         print("PILOT mode enabled: medpsy-4b pilot on 80-question val subset, single GPU")
+    if V3_RUN:
+        _v3_conditions = [c.strip() for c in V3_CONDITIONS.split(",") if c.strip()]
+        _v3_pilot_str = f" [PILOT N={V3_PILOT_N}]" if V3_PILOT else ""
+        print(f"V3_RUN mode enabled: model={V3_MODEL}, conditions={_v3_conditions}{_v3_pilot_str}")
+        if not V3_PILOT and not V3_CONFIRM_TEST:
+            sys.exit(
+                "\n" + "=" * 80 + "\n"
+                "ERROR: V3_RUN on the TEST split requires V3_CONFIRM_TEST=True.\n"
+                "The test set is frozen. Set V3_CONFIRM_TEST=True once you are ready for the final run.\n"
+                + "=" * 80 + "\n"
+            )
+        _v3_valid_models = [
+            "medpsy-1.7b", "qwen3-1.7b-thinking", "qwen3-4b-thinking-2507", "medgemma-1.5-4b-it",
+            "qwen3-1.7b", "qwen3-4b", "gemma3-4b", "medpsy-4b", "phi4-mini", "smollm3-3b",
+        ]
+        if V3_MODEL not in _v3_valid_models:
+            sys.exit(f"ERROR: V3_MODEL='{V3_MODEL}' is not a valid v3 model. Choose one of: {_v3_valid_models}")
+        _v3_valid_conditions = {"C1", "C2", "C3", "C4", "C5"}
+        _bad_conds = [c for c in _v3_conditions if c not in _v3_valid_conditions]
+        if _bad_conds:
+            sys.exit(f"ERROR: V3_CONDITIONS contains unknown conditions: {_bad_conds}. Valid: {_v3_valid_conditions}")
+    if V3_TRUNC_SENSITIVITY:
+        print("V3_TRUNC_SENSITIVITY mode enabled: cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models")
+
     if PARALLEL_GPUS:
         print("PARALLEL_GPUS mode enabled: splitting model list across 2 GPUs")
     if TINY:
@@ -1213,6 +1257,41 @@ if UNANS_V2_SLM:
         shutil.copyfile(p8_src, os.path.join(out_dir, f"rag_{target_model}.jsonl"))
         print(f"Saved RAG output -> {os.path.join(out_dir, f'rag_{target_model}.jsonl')}")
 
+    # Diagnostic disk usage before cleanup
+    if os.path.exists("/kaggle/working"):
+        print("\n--- Disk usage of /kaggle/working before cleanup ---", flush=True)
+        subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
+        subprocess.run(["du", "-shL", "/kaggle/working"], check=False)
+
+    # Remove every symlink under /kaggle/working (do not follow links) and purge caches
+    if os.path.exists("/kaggle/working"):
+        symlinks_to_remove = []
+        for root, dirs, files in os.walk("/kaggle/working", followlinks=False):
+            for name in dirs + files:
+                p = os.path.join(root, name)
+                if os.path.islink(p):
+                    symlinks_to_remove.append(p)
+        for p in symlinks_to_remove:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        for phase in ("phase2", "phase3"):
+            for base in ("/kaggle/working/work_unans_v2", "/kaggle/working/work/work_unans_v2"):
+                p = os.path.join(base, phase)
+                if os.path.islink(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+    shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
+    shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
+
+    if os.path.exists("/kaggle/working"):
+        print("\n--- Disk usage of /kaggle/working after cleanup ---", flush=True)
+        subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
+
     print(f"\n=== UNANS_V2_SLM COMPLETE for {target_model} ===\n", flush=True)
     sys.exit(0)
 
@@ -1299,6 +1378,42 @@ if MEDPSY_UNANS_V2_BASELINE:
     print(f"  Truncated       : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
     print(f"  Saved output to : {os.path.join(out_dir, 'baseline_medpsy-4b.jsonl')}", flush=True)
     print("=== END MEDPSY UNANSWERABLE_V2 BASELINE SUMMARY ===\n", flush=True)
+
+    # Diagnostic disk usage before cleanup
+    if os.path.exists("/kaggle/working"):
+        print("\n--- Disk usage of /kaggle/working before cleanup ---", flush=True)
+        subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
+        subprocess.run(["du", "-shL", "/kaggle/working"], check=False)
+
+    # Remove every symlink under /kaggle/working (do not follow links) and purge caches
+    if os.path.exists("/kaggle/working"):
+        symlinks_to_remove = []
+        for root, dirs, files in os.walk("/kaggle/working", followlinks=False):
+            for name in dirs + files:
+                p = os.path.join(root, name)
+                if os.path.islink(p):
+                    symlinks_to_remove.append(p)
+        for p in symlinks_to_remove:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        for phase in ("phase2", "phase3"):
+            for base in ("/kaggle/working/work_unans_v2", "/kaggle/working/work/work_unans_v2"):
+                p = os.path.join(base, phase)
+                if os.path.islink(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+    shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
+    shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
+
+    if os.path.exists("/kaggle/working"):
+        print("\n--- Disk usage of /kaggle/working after cleanup ---", flush=True)
+        subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
+
     sys.exit(0)
 
 
@@ -1793,7 +1908,76 @@ if PILOT:
     sys.exit(0)
 
 
+# ── V3_RUN mode ────────────────────────────────────────────────────────────────
+
+if V3_RUN:
+    import yaml
+    _v3_conditions = [c.strip() for c in V3_CONDITIONS.split(",") if c.strip()]
+    _v3_split = "validation" if V3_PILOT else "test"
+
+    _v3_out_base = (
+        f"/kaggle/working/outputs/v3/{V3_MODEL}"
+        if os.path.exists("/kaggle/working")
+        else f"outputs/v3/{V3_MODEL}"
+    )
+    os.makedirs(_v3_out_base, exist_ok=True)
+
+    cmd_v3 = [
+        sys.executable, "-m", "src.qa_pipeline_v3",
+        "--config", "configs/base.yaml",
+        "--work", WORK,
+        "--model", V3_MODEL,
+        "--split", _v3_split,
+        "--conditions", ",".join(_v3_conditions),
+        "--out", _v3_out_base,
+    ]
+    if V3_PILOT:
+        cmd_v3 += ["--pilot", "--pilot-n", str(V3_PILOT_N)]
+    if CHECK_ONLY:
+        cmd_v3 += ["--check-only"]
+    if TINY:
+        cmd_v3 += ["--tiny"]
+    run(cmd_v3)
+    print(f"\nV3_RUN COMPLETE: model={V3_MODEL} split={_v3_split} conditions={_v3_conditions}", flush=True)
+    sys.exit(0)
+
+
+# ── V3_TRUNC_SENSITIVITY mode ──────────────────────────────────────────────────
+
+if V3_TRUNC_SENSITIVITY:
+    import yaml
+    with open("configs/base.yaml") as _f:
+        _v3_cfg = yaml.safe_load(_f)
+    _trunc_n    = _v3_cfg.get("v3", {}).get("truncation_sensitivity_n", 100)
+    _trunc_caps = _v3_cfg.get("v3", {}).get("truncation_caps", [1024, 2048])
+    _trunc_models = [
+        "medpsy-1.7b", "qwen3-1.7b-thinking", "qwen3-4b-thinking-2507", "medpsy-4b",
+    ]
+    print(f"\nV3_TRUNC_SENSITIVITY: n={_trunc_n}, caps={_trunc_caps}, models={_trunc_models}", flush=True)
+    _trunc_out = (
+        "/kaggle/working/outputs/v3/trunc_sensitivity"
+        if os.path.exists("/kaggle/working")
+        else "outputs/v3/trunc_sensitivity"
+    )
+    os.makedirs(_trunc_out, exist_ok=True)
+    cmd_trunc = [
+        sys.executable, "-m", "src.truncation_sensitivity",
+        "--config", "configs/base.yaml",
+        "--work", WORK,
+        "--n", str(_trunc_n),
+        "--caps", ",".join(str(c) for c in _trunc_caps),
+        "--models", ",".join(_trunc_models),
+        "--out", _trunc_out,
+    ]
+    if TINY:
+        cmd_trunc += ["--tiny"]
+    run(cmd_trunc)
+    print(f"\nV3_TRUNC_SENSITIVITY COMPLETE — results in {_trunc_out}", flush=True)
+    sys.exit(0)
+
+
 # ── PARALLEL_GPUS mode ─────────────────────────────────────────────────────────
+
 
 if PARALLEL_GPUS:
     if not MODELS:

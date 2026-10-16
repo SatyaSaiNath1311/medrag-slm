@@ -1,0 +1,13 @@
+Model,Mode,Category,N Unans,CWA (conf>=0.90) %,Recall @ 5% FAR %
+qwen3-1.7b,Baseline (C4),ambiguous,17,94.1% (16/17),64.7% (11/17)
+qwen3-1.7b,Baseline (C4),fabricated_disease,17,100.0% (17/17),76.5% (13/17)
+qwen3-1.7b,Baseline (C4),fabricated_drug,17,94.1% (16/17),58.8% (10/17)
+qwen3-1.7b,Baseline (C4),false_premise,17,88.2% (15/17),64.7% (11/17)
+qwen3-1.7b,Baseline (C4),missing_info,16,81.2% (13/16),75.0% (12/16)
+qwen3-1.7b,Baseline (C4),out_of_scope,16,87.5% (14/16),68.8% (11/16)
+qwen3-1.7b,RAG (C5),ambiguous,17,76.5% (13/17),64.7% (11/17)
+qwen3-1.7b,RAG (C5),fabricated_disease,17,88.2% (15/17),52.9% (9/17)
+qwen3-1.7b,RAG (C5),fabricated_drug,17,94.1% (16/17),35.3% (6/17)
+qwen3-1.7b,RAG (C5),false_premise,17,76.5% (13/17),94.1% (16/17)
+qwen3-1.7b,RAG (C5),missing_info,16,87.5% (14/16),62.5% (10/16)
+qwen3-1.7b,RAG (C5),out_of_scope,16,87.5% (14/16),56.2% (9/16)

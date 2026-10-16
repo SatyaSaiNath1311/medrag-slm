@@ -548,8 +548,58 @@ def audit_check_e_output_integrity(audit_data: Dict[str, Any]) -> bool:
     ok = check_output_file(medpsy_sc_u2, gold_u2, "medpsy-4b Self-Consistency (Unanswerable v2 S3)")
     if not ok: passed = False
 
+    # 4. v3 Matched-Pair Outputs Check (outputs/v3)
+    print("\nAuditing v3 Matched-Pair Outputs (outputs/v3/)...")
+    v3_dir = REPO_ROOT / "outputs" / "v3"
+    v3_files_audited = 0
+    if not v3_dir.exists():
+        print("  [PENDING] outputs/v3/ does not exist yet. No v3 outputs to audit.")
+    else:
+        v3_files = sorted(v3_dir.glob("**/*.jsonl"))
+        for vf in v3_files:
+            # Skip manifest, scratch, or temporary files
+            if vf.name in ("manifest.jsonl",) or "scratch" in vf.parts:
+                continue
+            v3_files_audited += 1
+            rows = read_jsonl(vf)
+            # Check row IDs and duplicates within file
+            row_ids = [r.get("id") for r in rows if "id" in r]
+            dup_ids = [k for k, v in collections_counter(row_ids).items() if v > 1]
+            if dup_ids:
+                print(f"  [FAIL] v3 {vf.relative_to(REPO_ROOT)}: Duplicate IDs in output: {dup_ids[:3]}")
+                passed = False
+
+            # Check split: if pilot (val), verify split field and skip test gold alignment
+            val_rows = [r for r in rows if r.get("split") == "val"]
+            test_rows = [r for r in rows if r.get("split") in ("test", None)]
+            if val_rows and not test_rows:
+                print(f"  [INFO] v3 {vf.relative_to(REPO_ROOT)}: Pilot / Validation split ({len(val_rows)} rows, 0 dupes).")
+                continue
+
+            # Determine expected gold mapping based on dataset filename
+            ds_name = vf.stem.replace("_pilot", "")
+            expected_gold = None
+            if "medqa" in ds_name:
+                expected_gold = gold_medqa
+            elif "pubmedqa" in ds_name:
+                expected_gold = gold_pubmedqa
+            elif "unanswerable" in ds_name:
+                expected_gold = gold_u2
+
+            if expected_gold is not None:
+                ok = check_output_file(vf, expected_gold, f"v3 {vf.relative_to(REPO_ROOT)}", require_all=False)
+                if not ok:
+                    passed = False
+            else:
+                if not dup_ids:
+                    print(f"  [PASS] v3 {vf.relative_to(REPO_ROOT)}: {len(rows)} rows verified (0 dupes).")
+
+    if v3_files_audited == 0:
+        print("  [PENDING] v3 evaluation pending GPU quota reset (outputs/v3/ empty or pending).")
+
     audit_data["check_e_output_integrity"] = {
         "status": "PASS" if passed else "FAIL",
+        "v3_files_audited": v3_files_audited,
     }
     return passed
 
