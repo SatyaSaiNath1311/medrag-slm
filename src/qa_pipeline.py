@@ -118,11 +118,12 @@ def sample_val_subset(val_rows, seed=42):
     return rng.sample(medqa, n_medqa) + rng.sample(pubmedqa, n_pubmedqa)
 
 
-def run_mode(llm, mode, questions, evidence, qcfg, out_path, eta_every_n=None):
+def run_mode(llm, mode, questions, evidence, qcfg, out_path, eta_every_n=None, standard_prompt=False):
     """Run a single QA mode for one model, writing results to out_path (resumable).
 
     eta_every_n: if set, print progress after every this many *questions* processed
                  (not batches). Defaults to every 10 batches.
+    standard_prompt: if True, force standard baseline_prompt (Phase 5 prompt) even for reasoning models.
     """
     done = {json.loads(l)["id"] for l in open(out_path)} if out_path.exists() else set()
     todo = [q for q in questions if q["id"] not in done]
@@ -133,9 +134,11 @@ def run_mode(llm, mode, questions, evidence, qcfg, out_path, eta_every_n=None):
     is_reasoning = getattr(llm, "is_reasoning", False)
 
     if mode == "baseline":
-        if is_reasoning:
+        if is_reasoning and not standard_prompt:
             prompts = {q["id"]: reasoning_baseline_prompt(q) for q in todo}
         else:
+            if is_reasoning and standard_prompt:
+                print("  baseline [standard prompt]: forcing Phase 5 baseline_prompt (no reasoning instruction)", flush=True)
             prompts = {q["id"]: baseline_prompt(q) for q in todo}
         options_map = {q["id"]: q["options"] for q in todo}
         letters_map = {q["id"]: list(q["options"]) for q in todo}
@@ -597,6 +600,8 @@ def main():
                          "are suffixed _shardN.  Must be used together with --num-shards.")
     ap.add_argument("--num-shards", type=int, default=2, metavar="K",
                     help="Total number of shards (default 2).  Used with --shard.")
+    ap.add_argument("--standard-prompt", action="store_true",
+                    help="Force standard Phase 5 baseline_prompt instead of reasoning_baseline_prompt.")
     args = ap.parse_args()
     cfg = load_config(args.config)
     set_seed(cfg["seed"])
@@ -749,7 +754,7 @@ def main():
                         elif mode in ("baseline_idk", "rag_idk"):
                             p_out, q_subset = p12, questions
                             out_file = p_out / f"{m['name']}_{mode}{shard_suffix}.jsonl"
-                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file, eta_every_n=_eta_n)
+                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file, eta_every_n=_eta_n, standard_prompt=args.standard_prompt)
                 status[m["name"]] = "DONE"
             else:
                 check = format_check(llm, val_pool, evidence, qcfg, threshold, seed=cfg["seed"])
@@ -774,7 +779,7 @@ def main():
                         elif mode in ("baseline_idk", "rag_idk"):
                             p_out, q_subset = p12, questions
                             out_file = p_out / f"{m['name']}_{mode}{shard_suffix}.jsonl"
-                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file, eta_every_n=_eta_n)
+                        run_mode(llm, mode, q_subset, evidence, qcfg, out_file, eta_every_n=_eta_n, standard_prompt=args.standard_prompt)
                     status[m["name"]] = "DONE"
             llm.close()
         except Exception as e:  # noqa: BLE001 - one broken model must not stop the others

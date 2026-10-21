@@ -1,4 +1,6 @@
 data/
+!data/unanswerable_v2/
+!data/unanswerable_v2/**
 outputs/*
 !outputs/analysis/
 !outputs/analysis_test/

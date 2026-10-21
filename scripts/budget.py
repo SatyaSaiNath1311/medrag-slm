@@ -212,7 +212,7 @@ def main():
             ("phi4-mini", "Unanswerable v2", 140, "unanswerable"),
             ("qwen3-4b", "Unanswerable v2", 140, "unanswerable"),
             ("gemma3-4b", "Unanswerable v2", 140, "unanswerable"),
-            ("medpsy-4b", "Unanswerable v2 (Baseline)", 140, "unanswerable"),
+            ("medpsy-4b", "Unanswerable v2 (Baseline)", 400, "unanswerable"),
             ("medpsy-4b", "PubMedQA Baseline", 500, "pubmedqa_base"),
             ("medpsy-4b", "PubMedQA Full RAG", 500, "rag"),
         ]

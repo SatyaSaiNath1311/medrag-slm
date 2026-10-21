@@ -20,7 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Canonical list of frozen test input and output files
 CANONICAL_TEST_FILES = [
-    # Master test split definitions
+    # Master test and validation split definitions
+    "data/unanswerable_v2/val.jsonl",
     "data/unanswerable_v2/test.jsonl",
     "outputs/kaggle_build/work/phase1/test.jsonl",
     # MedPsy-4B frozen SC test outputs
@@ -108,7 +109,7 @@ def main():
         }
         print(f"  [OK] {rel_path} -> {file_hash[:12]}... ({file_bytes} bytes, {n_lines} lines)")
 
-    # Cross-reference data/unanswerable_v2/test.sha256 if present
+    # Cross-reference data/unanswerable_v2/test.sha256 and val.sha256 if present
     ref_sha_path = REPO_ROOT / "data" / "unanswerable_v2" / "test.sha256"
     if ref_sha_path.exists():
         expected_unans_sha = ref_sha_path.read_text().strip().split()[0]
@@ -119,6 +120,17 @@ def main():
                 f"test.sha256 ({expected_unans_sha})!"
             )
             print("  [VERIFIED] data/unanswerable_v2/test.sha256 matches test.jsonl hash exactly.")
+
+    ref_val_sha_path = REPO_ROOT / "data" / "unanswerable_v2" / "val.sha256"
+    if ref_val_sha_path.exists():
+        expected_val_sha = ref_val_sha_path.read_text().strip().split()[0]
+        actual_val_sha = records.get("data/unanswerable_v2/val.jsonl", {}).get("sha256")
+        if actual_val_sha:
+            assert actual_val_sha == expected_val_sha, (
+                f"FATAL: data/unanswerable_v2/val.jsonl ({actual_val_sha}) does not match "
+                f"val.sha256 ({expected_val_sha})!"
+            )
+            print("  [VERIFIED] data/unanswerable_v2/val.sha256 matches val.jsonl hash exactly.")
 
     manifest = {
         "created_at": datetime.now(timezone.utc).isoformat(),

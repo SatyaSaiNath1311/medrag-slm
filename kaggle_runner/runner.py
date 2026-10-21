@@ -65,9 +65,9 @@ SC_NUM_SHARDS = 2
 BUILD_UNANS_V2_EVIDENCE = False # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
 UNANS_V2_SLM = False            # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
 UNANS_MODEL = "qwen3-1.7b"       # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
-MEDPSY_UNANS_V2_BASELINE = False # Task 4 MedPsy: run medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
-MEDPSY_PUBMEDQA_BASELINE = False # Task 5A: run medpsy-4b closed-book baseline on PubMedQA test (500), 2-GPU shards
-MEDPSY_PUBMEDQA_RAG = False      # Task 5B: run medpsy-4b RAG on PubMedQA test (500), 2-GPU shards
+MEDPSY_UNANS_V2_BASELINE = True  # Stage A: medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
+MEDPSY_PUBMEDQA_BASELINE = True  # Stage B: medpsy-4b closed-book baseline on PubMedQA test (500), 2-GPU shards
+MEDPSY_PUBMEDQA_RAG = True       # Stage C: medpsy-4b RAG on PubMedQA test (500), 2-GPU shards
 
 # ── V3 Generic-vs-Medical Matched-Pair Experiment ─────────────────────────────
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
@@ -100,6 +100,12 @@ for flag, val in [
     if flag in os.environ:
         locals()[val] = os.environ[flag].lower() in ("1", "true", "yes")
 
+# Check for unified MedPsy 3-stage overnight push
+_is_medpsy_overnight = (
+    MEDPSY_UNANS_V2_BASELINE and MEDPSY_PUBMEDQA_BASELINE and MEDPSY_PUBMEDQA_RAG
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY)
+)
+
 # Mutual exclusivity guard for specialized modes vs base/legacy runner flags
 _active_special_modes = [
     m for m, v in [
@@ -112,7 +118,7 @@ _active_special_modes = [
         ("V3_TRUNC_SENSITIVITY", V3_TRUNC_SENSITIVITY),
     ] if v
 ]
-if len(_active_special_modes) > 1:
+if not _is_medpsy_overnight and len(_active_special_modes) > 1:
     sys.exit(f"ERROR: Mutually exclusive runner modes enabled: {_active_special_modes}. Enable only one before pushing.")
 
 if _active_special_modes:
@@ -252,12 +258,15 @@ if SC_SHARD is None:
         print("BUILD_UNANS_V2_EVIDENCE mode enabled: producing hybrid retrieval (Phase 6) and reranking (Phase 7) on unanswerable_v2")
     if UNANS_V2_SLM:
         print(f"UNANS_V2_SLM mode enabled: model={UNANS_MODEL} baseline+RAG on unanswerable_v2 (val+test)")
-    if MEDPSY_UNANS_V2_BASELINE:
-        print("MEDPSY_UNANS_V2_BASELINE mode enabled: medpsy-4b Phase 5 baseline prompt on unanswerable_v2 (val+test), 2-GPU shards")
-    if MEDPSY_PUBMEDQA_BASELINE:
-        print("MEDPSY_PUBMEDQA_BASELINE mode enabled: medpsy-4b closed-book baseline on PubMedQA test (500), dual-GPU")
-    if MEDPSY_PUBMEDQA_RAG:
-        print("MEDPSY_PUBMEDQA_RAG mode enabled: medpsy-4b RAG on PubMedQA test (500), dual-GPU")
+    if _is_medpsy_overnight:
+        print("MEDPSY_OVERNIGHT mode enabled: medpsy-4b unified 3-stage push (Stage A: unans_v2 baseline, Stage B: PubMedQA baseline, Stage C: PubMedQA RAG)")
+    else:
+        if MEDPSY_UNANS_V2_BASELINE:
+            print("MEDPSY_UNANS_V2_BASELINE mode enabled: medpsy-4b Phase 5 baseline prompt on unanswerable_v2 (val+test), 2-GPU shards")
+        if MEDPSY_PUBMEDQA_BASELINE:
+            print("MEDPSY_PUBMEDQA_BASELINE mode enabled: medpsy-4b closed-book baseline on PubMedQA test (500), dual-GPU")
+        if MEDPSY_PUBMEDQA_RAG:
+            print("MEDPSY_PUBMEDQA_RAG mode enabled: medpsy-4b RAG on PubMedQA test (500), dual-GPU")
     if VAL_MEDPSY:
         print("VAL_MEDPSY mode enabled: medpsy-4b full validation split, 2-shard dual-GPU")
     if PILOT:
@@ -343,7 +352,7 @@ else:
 
 def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=False,
                  profile=False, tiny=False, skip_format_check=False,
-                 shard=None, num_shards=2, datasets=None):
+                 shard=None, num_shards=2, datasets=None, standard_prompt=False):
     cmd = [sys.executable, "-m", "src.qa_pipeline",
            "--config", "configs/base.yaml",
            "--work", work_dir or WORK]
@@ -355,6 +364,8 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
         cmd.append("--tiny")
     if skip_format_check:
         cmd.append("--skip-format-check")
+    if standard_prompt:
+        cmd.append("--standard-prompt")
     if models_list:
         cmd += ["--models", *models_list]
     if modes_list:
@@ -366,6 +377,126 @@ def build_qa_cmd(models_list, modes_list, split=None, work_dir=None, check_only=
     if shard is not None:
         cmd += ["--shard", str(shard), "--num-shards", str(num_shards)]
     return cmd
+
+
+def verify_frozen_hashes_before_run(code_dir, work_dir):
+    """Verify cryptographic SHA-256 integrity of frozen datasets before execution.
+    
+    Checks unanswerable_v2 val.jsonl, unanswerable_v2 test.jsonl, and phase1/test.jsonl (PubMedQA).
+    If any hash does not match the canonical frozen hash, ABORTS the kernel immediately.
+    """
+    import hashlib
+    print("\n" + "=" * 80, flush=True)
+    print("=== PRE-FLIGHT FROZEN DATA INTEGRITY AUDIT ===", flush=True)
+    print("=" * 80, flush=True)
+    
+    def get_sha256(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1024 * 1024):
+                h.update(chunk)
+        return h.hexdigest()
+
+    manifest = {}
+    for mf in [
+        os.path.join(code_dir, "audit", "frozen_hashes.json"),
+        os.path.abspath("audit/frozen_hashes.json"),
+    ]:
+        if os.path.exists(mf):
+            try:
+                with open(mf) as f:
+                    manifest = json.load(f).get("files", {})
+                break
+            except Exception:
+                pass
+
+    EXPECTED_HASHES = {
+        "unans_v2_test": "a0e45676dced360b2ac64e8fc33dbb49782c4fd9022e93190e633c9d66396078",
+        "pubmedqa_test": "fe7fe3fb88c77c4ffc6574c8716ec0b3f4787fbfaf2c22e2eb5741ac040cc34a",
+    }
+    if "data/unanswerable_v2/val.jsonl" in manifest:
+        EXPECTED_HASHES["unans_v2_val"] = manifest["data/unanswerable_v2/val.jsonl"]["sha256"]
+    
+    for val_sha_p in [
+        os.path.join(code_dir, "data", "unanswerable_v2", "val.sha256"),
+        os.path.abspath("data/unanswerable_v2/val.sha256"),
+    ]:
+        if os.path.exists(val_sha_p):
+            try:
+                EXPECTED_HASHES["unans_v2_val"] = open(val_sha_p).read().strip().split()[0]
+                break
+            except Exception:
+                pass
+
+    # 1. Locate unanswerable_v2 val.jsonl
+    val_candidates = [
+        os.path.join(code_dir, "data", "unanswerable_v2", "val.jsonl"),
+        os.path.abspath("data/unanswerable_v2/val.jsonl"),
+    ]
+    val_src = next((p for p in val_candidates if os.path.exists(p)), None)
+    if not val_src:
+        input_hits = glob.glob("/kaggle/input/**/unanswerable_v2/val.jsonl", recursive=True)
+        if input_hits:
+            val_src = input_hits[0]
+    if not val_src or not os.path.exists(val_src):
+        sys.exit("FATAL: unanswerable_v2 val.jsonl not found in code dir or /kaggle/input/**")
+
+    # 2. Locate unanswerable_v2 test.jsonl
+    test_candidates = [
+        os.path.join(code_dir, "data", "unanswerable_v2", "test.jsonl"),
+        os.path.abspath("data/unanswerable_v2/test.jsonl"),
+    ]
+    test_src = next((p for p in test_candidates if os.path.exists(p)), None)
+    if not test_src:
+        input_hits = glob.glob("/kaggle/input/**/unanswerable_v2/test.jsonl", recursive=True)
+        if input_hits:
+            test_src = input_hits[0]
+    if not test_src or not os.path.exists(test_src):
+        sys.exit("FATAL: unanswerable_v2 test.jsonl not found in code dir or /kaggle/input/**")
+
+    # 3. Locate PubMedQA test file (phase1/test.jsonl)
+    p1_candidates = [
+        os.path.join(work_dir, "phase1", "test.jsonl"),
+        os.path.join(code_dir, "outputs", "kaggle_build", "work", "phase1", "test.jsonl"),
+        os.path.abspath("outputs/kaggle_build/work/phase1/test.jsonl"),
+    ]
+    p1_test_src = next((p for p in p1_candidates if os.path.exists(p)), None)
+    if not p1_test_src:
+        input_hits = glob.glob("/kaggle/input/**/phase1/test.jsonl", recursive=True)
+        if input_hits:
+            p1_test_src = input_hits[0]
+    if not p1_test_src or not os.path.exists(p1_test_src):
+        sys.exit("FATAL: PubMedQA phase1/test.jsonl not found in work dir or /kaggle/input/**")
+
+    files_to_check = [
+        ("unanswerable_v2 test", test_src, EXPECTED_HASHES.get("unans_v2_test")),
+        ("unanswerable_v2 val", val_src, EXPECTED_HASHES.get("unans_v2_val")),
+        ("PubMedQA phase1 test", p1_test_src, EXPECTED_HASHES.get("pubmedqa_test")),
+    ]
+
+    for label, path, expected in files_to_check:
+        actual = get_sha256(path)
+        print(f"\nAudit: {label} [{path}]", flush=True)
+        print(f"  SHA-256 Calculated : {actual}", flush=True)
+        if expected:
+            print(f"  SHA-256 Expected   : {expected}", flush=True)
+            if actual != expected:
+                sys.exit(
+                    f"\n{'='*80}\n"
+                    f"FATAL INTEGRITY ERROR: SHA-256 mismatch for {label}!\n"
+                    f"  File path: {path}\n"
+                    f"  Calculated: {actual}\n"
+                    f"  Expected  : {expected}\n"
+                    f"ABORTING KERNEL IMMEDIATELY to prevent benchmark corruption.\n"
+                    f"{'='*80}\n"
+                )
+            print(f"  [PASS] Integrity Verified (Match)", flush=True)
+        else:
+            print(f"  [INFO] Hash recorded (no static expected string provided)", flush=True)
+
+    print("\n=== PRE-FLIGHT FROZEN DATA INTEGRITY AUDIT PASSED ===", flush=True)
+    print("=" * 80 + "\n", flush=True)
+    return val_src, test_src, p1_test_src
 
 
 # ── SC_MODE: Self-Consistency Mode for MedPsy-4B (Validation or Test) ──────────
@@ -1296,255 +1427,357 @@ if UNANS_V2_SLM:
     sys.exit(0)
 
 
-# ── MEDPSY_UNANS_V2_BASELINE mode: MedPsy-4B on unanswerable_v2 (val+test) with Phase 5 baseline prompt ─
-if MEDPSY_UNANS_V2_BASELINE:
-    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or RAG_MEDPSY or UNANS_V2_SLM or BUILD_UNANS_V2_EVIDENCE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG:
-        sys.exit("ERROR: MEDPSY_UNANS_V2_BASELINE must run alone.")
+# ── MEDPSY UNIFIED OVERNIGHT PUSH (Stages A, B, C) ───────────────────────────
+if _is_medpsy_overnight:
     import math
     import shutil
     import threading
 
     NUM_SHARDS = 2
-    print("\n=== MEDPSY_UNANS_V2_BASELINE STARTUP (datasets=unanswerable_v2, split=all_needed, mode=baseline) ===", flush=True)
+    print("\n" + "=" * 80, flush=True)
+    print("=== MEDPSY-4B UNIFIED OVERNIGHT RUNNER: 3 STAGES SEQUENTIAL EXECUTION ===", flush=True)
+    print("  Stage A: unanswerable_v2 baseline (Phase 5 baseline prompt, val+test, N=400)", flush=True)
+    print("  Stage B: PubMedQA closed-book baseline (test, N=500)", flush=True)
+    print("  Stage C: PubMedQA full RAG (test, N=500, top-5 MedCPT evidence)", flush=True)
+    print("=" * 80 + "\n", flush=True)
+
+    # Pre-Flight Frozen Data Audit (Mandatory Check)
+    val_src, test_src, p1_test_src = verify_frozen_hashes_before_run(CODE_DIR, WORK)
+
+    def compute_stage_summary_metrics(rows, is_unans=False):
+        n = len(rows)
+        trunc = sum(1 for r in rows if r.get("truncated"))
+        trunc_rate = (trunc / n * 100) if n else 0.0
+        
+        if is_unans:
+            controls = [r for r in rows if not r.get("should_abstain")]
+            n_eval = len(controls)
+            strict_correct = sum(1 for r in controls if (not r.get("truncated")) and r.get("parsed") and r.get("correct"))
+            fallback_correct = sum(1 for r in controls if r.get("correct"))
+        else:
+            n_eval = n
+            strict_correct = sum(1 for r in rows if (not r.get("truncated")) and r.get("parsed") and r.get("correct"))
+            fallback_correct = sum(1 for r in rows if r.get("correct"))
+        
+        strict_acc = (strict_correct / n_eval) if n_eval else 0.0
+        fallback_acc = (fallback_correct / n_eval) if n_eval else 0.0
+        
+        secs = [r["seconds"] for r in rows if r.get("seconds") is not None]
+        s_per_q = (sum(secs) / len(secs)) if secs else 0.0
+        
+        return {
+            "rows": n,
+            "n_eval": n_eval,
+            "strict_acc": strict_acc,
+            "fallback_acc": fallback_acc,
+            "trunc_rate": trunc_rate,
+            "trunc_count": trunc,
+            "s_per_q": s_per_q,
+        }
+
+    stage_summaries = {}
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE A: unanswerable_v2 baseline (Phase 5 prompt, val+test, N=400)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING STAGE A: unanswerable_v2 baseline (Phase 5 baseline prompt, N=400)", flush=True)
+    print("=" * 80, flush=True)
+
+    stage_a_dir = "/kaggle/working/outputs/kaggle_qa/unans_v2/medpsy-4b" if os.path.exists("/kaggle/working") else "outputs/kaggle_qa/unans_v2/medpsy-4b"
+    os.makedirs(stage_a_dir, exist_ok=True)
+    stage_a_final = os.path.join(stage_a_dir, "baseline_medpsy-4b.jsonl")
 
     v2_work = os.path.join(WORK, "work_unans_v2")
     os.makedirs(v2_work, exist_ok=True)
     v2_p1 = os.path.join(v2_work, "phase1")
     os.makedirs(v2_p1, exist_ok=True)
-
-    val_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "val.jsonl")
-    test_src = os.path.join(CODE_DIR, "data", "unanswerable_v2", "test.jsonl")
-    if not os.path.exists(val_src) or not os.path.exists(test_src):
-        val_src = os.path.abspath("data/unanswerable_v2/val.jsonl")
-        test_src = os.path.abspath("data/unanswerable_v2/test.jsonl")
-    if not os.path.exists(val_src) or not os.path.exists(test_src):
-        sys.exit(f"ERROR: unanswerable_v2 files not found at {val_src} / {test_src}")
-
     shutil.copyfile(val_src, os.path.join(v2_p1, "validation.jsonl"))
     shutil.copyfile(test_src, os.path.join(v2_p1, "test.jsonl"))
 
-    un_errors = {}
-
-    def run_un_base_shard(shard_idx):
-        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+    stage_a_done = False
+    if os.path.exists(stage_a_final):
         try:
-            cmd = build_qa_cmd(
-                models_list=["medpsy-4b"],
-                modes_list=["baseline"],
-                split="all_needed",
-                work_dir=v2_work,
-                skip_format_check=True,
-                shard=shard_idx,
-                num_shards=NUM_SHARDS,
-            )
-            print(f"\n[shard {shard_idx}] Starting MedPsy unanswerable_v2 baseline on GPU {shard_idx}...", flush=True)
-            run(cmd, extra_env=env)
-        except Exception as exc:
-            un_errors[shard_idx] = str(exc)
+            with open(stage_a_final) as fh:
+                existing_a = [json.loads(l) for l in fh if l.strip()]
+            if len(existing_a) == 400:
+                print(f"[RESUME] Stage A already completed ({len(existing_a)} rows in {stage_a_final}). Skipping.", flush=True)
+                stage_a_rows = existing_a
+                stage_a_done = True
+        except Exception:
+            pass
 
-    threads = [threading.Thread(target=run_un_base_shard, args=(i,), name=f"unans-base-shard-{i}") for i in range(NUM_SHARDS)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    if un_errors:
-        print("\nERROR: one or more shards failed:", un_errors, flush=True)
-        sys.exit(1)
-
-    print("\n=== MERGING UNANSWERABLE_V2 BASELINE SHARDS ===", flush=True)
-    p5_dir = os.path.join(v2_work, "phase5")
-    rows = []
-    for sid in range(NUM_SHARDS):
-        sp = os.path.join(p5_dir, f"medpsy-4b_shard{sid}.jsonl")
-        with open(sp) as fh:
-            part = [json.loads(l) for l in fh if l.strip()]
-        rows.extend(part)
-    out_path = os.path.join(p5_dir, "baseline_medpsy-4b.jsonl")
-    with open(out_path, "w") as fh:
-        for r in rows:
-            fh.write(json.dumps(r) + "\n")
-    print(f"  merged baseline: {len(rows)} rows -> {out_path}", flush=True)
-
-    out_dir = f"/kaggle/working/outputs/kaggle_qa/unans_v2/medpsy-4b" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/unans_v2/medpsy-4b"
-    os.makedirs(out_dir, exist_ok=True)
-    shutil.copyfile(out_path, os.path.join(out_dir, "baseline_medpsy-4b.jsonl"))
-
-    n = len(rows)
-    val_rows = [r for r in rows if r.get("split") == "validation"]
-    test_rows = [r for r in rows if r.get("split") == "test"]
-    trunc = sum(1 for r in rows if r.get("truncated"))
-    print("\n=== MEDPSY UNANSWERABLE_V2 BASELINE SUMMARY ===", flush=True)
-    print(f"  Total questions : {n} (validation={len(val_rows)}, test={len(test_rows)})", flush=True)
-    print(f"  Truncated       : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
-    print(f"  Saved output to : {os.path.join(out_dir, 'baseline_medpsy-4b.jsonl')}", flush=True)
-    print("=== END MEDPSY UNANSWERABLE_V2 BASELINE SUMMARY ===\n", flush=True)
-
-    # Diagnostic disk usage before cleanup
-    if os.path.exists("/kaggle/working"):
-        print("\n--- Disk usage of /kaggle/working before cleanup ---", flush=True)
-        subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
-        subprocess.run(["du", "-shL", "/kaggle/working"], check=False)
-
-    # Remove every symlink under /kaggle/working (do not follow links) and purge caches
-    if os.path.exists("/kaggle/working"):
-        symlinks_to_remove = []
-        for root, dirs, files in os.walk("/kaggle/working", followlinks=False):
-            for name in dirs + files:
-                p = os.path.join(root, name)
-                if os.path.islink(p):
-                    symlinks_to_remove.append(p)
-        for p in symlinks_to_remove:
+    if not stage_a_done:
+        un_errors = {}
+        def run_un_base_shard(shard_idx):
+            env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
             try:
-                os.unlink(p)
-            except OSError:
-                pass
-        for phase in ("phase2", "phase3"):
-            for base in ("/kaggle/working/work_unans_v2", "/kaggle/working/work/work_unans_v2"):
-                p = os.path.join(base, phase)
-                if os.path.islink(p):
-                    try:
-                        os.unlink(p)
-                    except OSError:
-                        pass
+                cmd = build_qa_cmd(
+                    models_list=["medpsy-4b"],
+                    modes_list=["baseline"],
+                    split="all_needed",
+                    work_dir=v2_work,
+                    skip_format_check=True,
+                    shard=shard_idx,
+                    num_shards=NUM_SHARDS,
+                    standard_prompt=True,
+                )
+                print(f"\n[Stage A - Shard {shard_idx}] Starting MedPsy unans_v2 baseline on GPU {shard_idx}...", flush=True)
+                run(cmd, extra_env=env)
+            except Exception as exc:
+                un_errors[shard_idx] = str(exc)
 
-    shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
-    shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
+        threads = [threading.Thread(target=run_un_base_shard, args=(i,), name=f"stage-a-shard-{i}") for i in range(NUM_SHARDS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if un_errors:
+            print("\nFATAL ERROR in Stage A shard execution:", un_errors, flush=True)
+            sys.exit(1)
 
-    if os.path.exists("/kaggle/working"):
-        print("\n--- Disk usage of /kaggle/working after cleanup ---", flush=True)
-        subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
+        print("\n=== MERGING STAGE A SHARDS ===", flush=True)
+        p5_dir = os.path.join(v2_work, "phase5")
+        stage_a_rows = []
+        seen_ids = set()
+        for sid in range(NUM_SHARDS):
+            sp = os.path.join(p5_dir, f"medpsy-4b_shard{sid}.jsonl")
+            if os.path.exists(sp):
+                with open(sp) as fh:
+                    for l in fh:
+                        if l.strip():
+                            r = json.loads(l)
+                            if r["id"] not in seen_ids:
+                                stage_a_rows.append(r)
+                                seen_ids.add(r["id"])
 
-    sys.exit(0)
+        # Write ONLY ONE file under outputs/kaggle_qa/
+        with open(stage_a_final, "w", encoding="utf-8") as fh:
+            for r in stage_a_rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        print(f"  Stage A output saved ({len(stage_a_rows)} rows) -> {stage_a_final}", flush=True)
+
+    val_cnt = sum(1 for r in stage_a_rows if r.get("split") == "validation")
+    test_cnt = sum(1 for r in stage_a_rows if r.get("split") == "test")
+    m_a = compute_stage_summary_metrics(stage_a_rows, is_unans=True)
+    summary_a_line = f"rows={m_a['rows']} (val={val_cnt}, test={test_cnt}) | strict_acc={m_a['strict_acc']:.4f} (ctrl) | fallback_acc={m_a['fallback_acc']:.4f} (ctrl) | trunc_rate={m_a['trunc_rate']:.1f}% ({m_a['trunc_count']}/{m_a['rows']}) | {m_a['s_per_q']:.2f} s/q"
+    stage_summaries["Stage A (unanswerable_v2 baseline)"] = summary_a_line
+    print(f"\n[STAGE A SUMMARY] {summary_a_line}", flush=True)
 
 
-# ── MEDPSY_PUBMEDQA_BASELINE mode: MedPsy-4B closed-book baseline on PubMedQA test ─
-if MEDPSY_PUBMEDQA_BASELINE:
-    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or RAG_MEDPSY or UNANS_V2_SLM or BUILD_UNANS_V2_EVIDENCE or MEDPSY_UNANS_V2_BASELINE:
-        sys.exit("ERROR: MEDPSY_PUBMEDQA_BASELINE must run alone.")
-    import math
-    import threading
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE B: PubMedQA Closed-Book Baseline (test, N=500)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING STAGE B: PubMedQA closed-book baseline (test, N=500)", flush=True)
+    print("=" * 80, flush=True)
 
-    NUM_SHARDS = 2
-    EXPECTED_Q = 500   # PubMedQA test questions
-    print("\n=== MEDPSY_PUBMEDQA_BASELINE STARTUP (split=test, datasets=pubmedqa, mode=baseline) ===", flush=True)
+    stage_b_dir = "/kaggle/working/outputs/kaggle_qa/medpsy_pubmedqa_baseline" if os.path.exists("/kaggle/working") else "outputs/kaggle_qa/medpsy_pubmedqa_baseline"
+    os.makedirs(stage_b_dir, exist_ok=True)
+    stage_b_final = os.path.join(stage_b_dir, "medpsy-4b_pubmedqa_baseline.jsonl")
 
-    pm_errors = {}
+    pm_base_work = os.path.join(WORK, "work_pubmedqa_baseline")
+    os.makedirs(pm_base_work, exist_ok=True)
+    pm_base_p1 = os.path.join(pm_base_work, "phase1")
+    os.makedirs(pm_base_p1, exist_ok=True)
+    shutil.copyfile(p1_test_src, os.path.join(pm_base_p1, "test.jsonl"))
 
-    def run_pm_base_shard(shard_idx):
-        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+    stage_b_done = False
+    if os.path.exists(stage_b_final):
         try:
-            cmd = build_qa_cmd(models_list=["medpsy-4b"], modes_list=["baseline"], datasets="pubmedqa",
-                               split="test", work_dir=WORK, skip_format_check=True,
-                               shard=shard_idx, num_shards=NUM_SHARDS)
-            print(f"\n[shard {shard_idx}] Starting PubMedQA baseline on GPU {shard_idx}...", flush=True)
-            run(cmd, extra_env=env)
-        except Exception as exc:
-            pm_errors[shard_idx] = str(exc)
+            with open(stage_b_final) as fh:
+                existing_b = [json.loads(l) for l in fh if l.strip()]
+            if len(existing_b) == 500:
+                print(f"[RESUME] Stage B already completed ({len(existing_b)} rows in {stage_b_final}). Skipping.", flush=True)
+                stage_b_rows = existing_b
+                stage_b_done = True
+        except Exception:
+            pass
 
-    threads = [threading.Thread(target=run_pm_base_shard, args=(i,), name=f"pm-base-shard-{i}") for i in range(NUM_SHARDS)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    if pm_errors:
-        print("\nERROR: one or more shards failed:", pm_errors, flush=True)
-        sys.exit(1)
+    if not stage_b_done:
+        pm_errors = {}
+        def run_pm_base_shard(shard_idx):
+            env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+            try:
+                cmd = build_qa_cmd(
+                    models_list=["medpsy-4b"],
+                    modes_list=["baseline"],
+                    datasets="pubmedqa",
+                    split="test",
+                    work_dir=pm_base_work,
+                    skip_format_check=True,
+                    shard=shard_idx,
+                    num_shards=NUM_SHARDS,
+                )
+                print(f"\n[Stage B - Shard {shard_idx}] Starting PubMedQA baseline on GPU {shard_idx}...", flush=True)
+                run(cmd, extra_env=env)
+            except Exception as exc:
+                pm_errors[shard_idx] = str(exc)
 
-    print("\n=== MERGING PUBMEDQA BASELINE SHARDS ===", flush=True)
-    p5_dir = os.path.join(WORK, "phase5")
-    rows = []
-    for sid in range(NUM_SHARDS):
-        sp = os.path.join(p5_dir, f"medpsy-4b_shard{sid}.jsonl")
-        with open(sp) as fh:
-            part = [json.loads(l) for l in fh if l.strip()]
-        rows.extend(part)
-    out_path = os.path.join(p5_dir, "medpsy-4b_pubmedqa_baseline.jsonl")
-    with open(out_path, "w") as fh:
-        for r in rows:
-            fh.write(json.dumps(r) + "\n")
-    print(f"  merged baseline: {len(rows)} rows -> {out_path}", flush=True)
+        threads = [threading.Thread(target=run_pm_base_shard, args=(i,), name=f"stage-b-shard-{i}") for i in range(NUM_SHARDS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if pm_errors:
+            print("\nFATAL ERROR in Stage B shard execution:", pm_errors, flush=True)
+            sys.exit(1)
 
-    final_dir = f"/kaggle/working/outputs/kaggle_qa/medpsy_pubmedqa_baseline" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/medpsy_pubmedqa_baseline"
-    os.makedirs(final_dir, exist_ok=True)
-    import shutil
-    shutil.copyfile(out_path, os.path.join(final_dir, "medpsy-4b_pubmedqa_baseline.jsonl"))
+        print("\n=== MERGING STAGE B SHARDS ===", flush=True)
+        p5_dir = os.path.join(pm_base_work, "phase5")
+        stage_b_rows = []
+        seen_ids = set()
+        for sid in range(NUM_SHARDS):
+            sp = os.path.join(p5_dir, f"medpsy-4b_shard{sid}.jsonl")
+            if os.path.exists(sp):
+                with open(sp) as fh:
+                    for l in fh:
+                        if l.strip():
+                            r = json.loads(l)
+                            if r["id"] not in seen_ids and r.get("dataset") == "pubmedqa":
+                                stage_b_rows.append(r)
+                                seen_ids.add(r["id"])
 
-    n = len(rows)
-    n_c = sum(1 for r in rows if r.get("correct"))
-    p = n_c / n if n else 0.0
-    m = 1.96 * math.sqrt(p * (1 - p) / n) if n else 0.0
-    trunc = sum(1 for r in rows if r.get("truncated"))
-    print("\n=== MEDPSY PUBMEDQA BASELINE SUMMARY ===", flush=True)
-    print(f"  Accuracy  : {p:.4f}  95%CI=({max(0, p - m):.4f}, {min(1, p + m):.4f})  {n_c}/{n} correct", flush=True)
-    print(f"  Truncated : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
-    print("=== END MEDPSY PUBMEDQA BASELINE SUMMARY ===\n", flush=True)
-    sys.exit(0)
+        with open(stage_b_final, "w", encoding="utf-8") as fh:
+            for r in stage_b_rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        print(f"  Stage B output saved ({len(stage_b_rows)} rows) -> {stage_b_final}", flush=True)
+
+    m_b = compute_stage_summary_metrics(stage_b_rows, is_unans=False)
+    summary_b_line = f"rows={m_b['rows']} (test) | strict_acc={m_b['strict_acc']:.4f} | fallback_acc={m_b['fallback_acc']:.4f} | trunc_rate={m_b['trunc_rate']:.1f}% ({m_b['trunc_count']}/{m_b['rows']}) | {m_b['s_per_q']:.2f} s/q"
+    stage_summaries["Stage B (PubMedQA baseline)"] = summary_b_line
+    print(f"\n[STAGE B SUMMARY] {summary_b_line}", flush=True)
 
 
-# ── MEDPSY_PUBMEDQA_RAG mode: MedPsy-4B RAG on PubMedQA test ─────────────────
-if MEDPSY_PUBMEDQA_RAG:
-    if FINAL_MEDPSY or VAL_MEDPSY or PILOT or PARALLEL_GPUS or PROFILE or SC_MODE or RAG_MEDPSY or UNANS_V2_SLM or BUILD_UNANS_V2_EVIDENCE or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE:
-        sys.exit("ERROR: MEDPSY_PUBMEDQA_RAG must run alone.")
-    import math
-    import threading
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE C: PubMedQA Full RAG (test, N=500, top-5 MedCPT evidence)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING STAGE C: PubMedQA full RAG (test, N=500)", flush=True)
+    print("=" * 80, flush=True)
 
-    NUM_SHARDS = 2
-    EXPECTED_Q = 500   # PubMedQA test questions
     ev_path = os.path.join(WORK, "phase7", "evidence.jsonl")
     if not os.path.exists(ev_path):
-        sys.exit(f"ERROR: Phase 7 evidence not found at {ev_path}; attach the medrag-build output.")
-    print("\n=== MEDPSY_PUBMEDQA_RAG STARTUP (split=test, datasets=pubmedqa, mode=rag) ===", flush=True)
+        ev_hits = glob.glob("/kaggle/input/**/phase7/evidence.jsonl", recursive=True)
+        if ev_hits:
+            ev_path = ev_hits[0]
+    if not os.path.exists(ev_path):
+        sys.exit(f"FATAL ERROR: Phase 7 evidence not found at {ev_path}. Attach medrag-build output.")
 
-    pm_errors = {}
+    stage_c_dir = "/kaggle/working/outputs/kaggle_qa/medpsy_pubmedqa_rag" if os.path.exists("/kaggle/working") else "outputs/kaggle_qa/medpsy_pubmedqa_rag"
+    os.makedirs(stage_c_dir, exist_ok=True)
+    stage_c_final = os.path.join(stage_c_dir, "medpsy-4b_pubmedqa_rag.jsonl")
 
-    def run_pm_rag_shard(shard_idx):
-        env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+    pm_rag_work = os.path.join(WORK, "work_pubmedqa_rag")
+    os.makedirs(pm_rag_work, exist_ok=True)
+    pm_rag_p1 = os.path.join(pm_rag_work, "phase1")
+    pm_rag_p7 = os.path.join(pm_rag_work, "phase7")
+    os.makedirs(pm_rag_p1, exist_ok=True)
+    os.makedirs(pm_rag_p7, exist_ok=True)
+    shutil.copyfile(p1_test_src, os.path.join(pm_rag_p1, "test.jsonl"))
+    shutil.copyfile(ev_path, os.path.join(pm_rag_p7, "evidence.jsonl"))
+
+    stage_c_done = False
+    if os.path.exists(stage_c_final):
         try:
-            cmd = build_qa_cmd(models_list=["medpsy-4b"], modes_list=["rag"], datasets="pubmedqa",
-                               split="test", work_dir=WORK, skip_format_check=True,
-                               shard=shard_idx, num_shards=NUM_SHARDS)
-            print(f"\n[shard {shard_idx}] Starting PubMedQA RAG on GPU {shard_idx}...", flush=True)
-            run(cmd, extra_env=env)
-        except Exception as exc:
-            pm_errors[shard_idx] = str(exc)
+            with open(stage_c_final) as fh:
+                existing_c = [json.loads(l) for l in fh if l.strip()]
+            if len(existing_c) == 500:
+                print(f"[RESUME] Stage C already completed ({len(existing_c)} rows in {stage_c_final}). Skipping.", flush=True)
+                stage_c_rows = existing_c
+                stage_c_done = True
+        except Exception:
+            pass
 
-    threads = [threading.Thread(target=run_pm_rag_shard, args=(i,), name=f"pm-rag-shard-{i}") for i in range(NUM_SHARDS)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    if pm_errors:
-        print("\nERROR: one or more shards failed:", pm_errors, flush=True)
-        sys.exit(1)
+    if not stage_c_done:
+        rag_errors = {}
+        def run_pm_rag_shard(shard_idx):
+            env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+            try:
+                cmd = build_qa_cmd(
+                    models_list=["medpsy-4b"],
+                    modes_list=["rag"],
+                    datasets="pubmedqa",
+                    split="test",
+                    work_dir=pm_rag_work,
+                    skip_format_check=True,
+                    shard=shard_idx,
+                    num_shards=NUM_SHARDS,
+                )
+                print(f"\n[Stage C - Shard {shard_idx}] Starting PubMedQA RAG on GPU {shard_idx}...", flush=True)
+                run(cmd, extra_env=env)
+            except Exception as exc:
+                rag_errors[shard_idx] = str(exc)
 
-    print("\n=== MERGING PUBMEDQA RAG SHARDS ===", flush=True)
-    p8_dir = os.path.join(WORK, "phase8")
-    rows = []
-    for sid in range(NUM_SHARDS):
-        sp = os.path.join(p8_dir, f"medpsy-4b_shard{sid}.jsonl")
-        with open(sp) as fh:
-            part = [json.loads(l) for l in fh if l.strip()]
-        rows.extend(part)
-    out_path = os.path.join(p8_dir, "medpsy-4b_pubmedqa_rag.jsonl")
-    with open(out_path, "w") as fh:
-        for r in rows:
-            fh.write(json.dumps(r) + "\n")
-    print(f"  merged rag: {len(rows)} rows -> {out_path}", flush=True)
+        threads = [threading.Thread(target=run_pm_rag_shard, args=(i,), name=f"stage-c-shard-{i}") for i in range(NUM_SHARDS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if rag_errors:
+            print("\nFATAL ERROR in Stage C shard execution:", rag_errors, flush=True)
+            sys.exit(1)
 
-    final_dir = f"/kaggle/working/outputs/kaggle_qa/medpsy_pubmedqa_rag" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/medpsy_pubmedqa_rag"
-    os.makedirs(final_dir, exist_ok=True)
-    import shutil
-    shutil.copyfile(out_path, os.path.join(final_dir, "medpsy-4b_pubmedqa_rag.jsonl"))
+        print("\n=== MERGING STAGE C SHARDS ===", flush=True)
+        p8_dir = os.path.join(pm_rag_work, "phase8")
+        stage_c_rows = []
+        seen_ids = set()
+        for sid in range(NUM_SHARDS):
+            sp = os.path.join(p8_dir, f"medpsy-4b_shard{sid}.jsonl")
+            if os.path.exists(sp):
+                with open(sp) as fh:
+                    for l in fh:
+                        if l.strip():
+                            r = json.loads(l)
+                            if r["id"] not in seen_ids and r.get("dataset") == "pubmedqa":
+                                stage_c_rows.append(r)
+                                seen_ids.add(r["id"])
 
-    n = len(rows)
-    n_c = sum(1 for r in rows if r.get("correct"))
-    p = n_c / n if n else 0.0
-    m = 1.96 * math.sqrt(p * (1 - p) / n) if n else 0.0
-    trunc = sum(1 for r in rows if r.get("truncated"))
-    print("\n=== MEDPSY PUBMEDQA RAG SUMMARY ===", flush=True)
-    print(f"  Accuracy  : {p:.4f}  95%CI=({max(0, p - m):.4f}, {min(1, p + m):.4f})  {n_c}/{n} correct", flush=True)
-    print(f"  Truncated : {trunc}/{n} ({100 * trunc / max(n, 1):.1f}%)", flush=True)
-    print("=== END MEDPSY PUBMEDQA RAG SUMMARY ===\n", flush=True)
+        with open(stage_c_final, "w", encoding="utf-8") as fh:
+            for r in stage_c_rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        print(f"  Stage C output saved ({len(stage_c_rows)} rows) -> {stage_c_final}", flush=True)
+
+    m_c = compute_stage_summary_metrics(stage_c_rows, is_unans=False)
+    summary_c_line = f"rows={m_c['rows']} (test) | strict_acc={m_c['strict_acc']:.4f} | fallback_acc={m_c['fallback_acc']:.4f} | trunc_rate={m_c['trunc_rate']:.1f}% ({m_c['trunc_count']}/{m_c['rows']}) | {m_c['s_per_q']:.2f} s/q"
+    stage_summaries["Stage C (PubMedQA RAG)"] = summary_c_line
+    print(f"\n[STAGE C SUMMARY] {summary_c_line}", flush=True)
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FINAL COMBINED SUMMARY ACROSS ALL 3 STAGES
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 90, flush=True)
+    print("=== MEDPSY-4B UNIFIED OVERNIGHT PUSH: FINAL COMBINED SUMMARY ===", flush=True)
+    print("=" * 90, flush=True)
+    print(f"{'Stage':<38} {'Rows':<8} {'Strict Acc':<12} {'Fallback Acc':<14} {'Trunc Rate':<12} {'Speed':<10}", flush=True)
+    print("-" * 90, flush=True)
+    for stg_label, metrics_obj in [
+        ("Stage A: unanswerable_v2 baseline", m_a),
+        ("Stage B: PubMedQA baseline", m_b),
+        ("Stage C: PubMedQA RAG", m_c),
+    ]:
+        strict_str = f"{metrics_obj['strict_acc']:.4f}"
+        if "unanswerable" in stg_label:
+            strict_str += " (c)"
+        fb_str = f"{metrics_obj['fallback_acc']:.4f}"
+        if "unanswerable" in stg_label:
+            fb_str += " (c)"
+        trunc_str = f"{metrics_obj['trunc_rate']:.1f}%"
+        sq_str = f"{metrics_obj['s_per_q']:.2f} s/q"
+        print(f"{stg_label:<38} {metrics_obj['rows']:<8} {strict_str:<12} {fb_str:<14} {trunc_str:<12} {sq_str:<10}", flush=True)
+    print("=" * 90, flush=True)
+    total_q = m_a['rows'] + m_b['rows'] + m_c['rows']
+    print(f"Total Questions Evaluated : {total_q} across 3 stages", flush=True)
+    print("All outputs safely committed to outputs/kaggle_qa/.", flush=True)
+    print("=" * 90 + "\n", flush=True)
+
+    # Post-run cleanup (caches only, after all stages finish successfully)
+    shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
+    shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
     sys.exit(0)
 
 

@@ -225,12 +225,14 @@ def resolve_model_rows(model_name, condition, root_dir="."):
         candidates.extend([
             os.path.join(root_dir, "outputs", "kaggle_qa", "full", model_name, "work", "phase5", f"{model_name}.jsonl"),
             os.path.join(root_dir, "outputs", "kaggle_qa", "medpsy_final", "work", "phase5", f"{model_name}.jsonl"),
+            os.path.join(root_dir, "outputs", "kaggle_qa", "medpsy_pubmedqa_baseline", f"{model_name}_pubmedqa_baseline.jsonl"),
         ])
     elif condition == "C2":
         candidates.extend([
             os.path.join(root_dir, "outputs", "kaggle_qa", "full", model_name, "work", "phase8", f"{model_name}.jsonl"),
             os.path.join(root_dir, "outputs", "kaggle_qa", "full", f"{model_name}_rag", "work", "phase8", f"{model_name}.jsonl"),
             os.path.join(root_dir, "outputs", "kaggle_qa", "medpsy_rag", "work", "phase8", f"{model_name}.jsonl"),
+            os.path.join(root_dir, "outputs", "kaggle_qa", "medpsy_pubmedqa_rag", f"{model_name}_pubmedqa_rag.jsonl"),
         ])
     elif condition == "C3":
         candidates.extend([
@@ -240,7 +242,7 @@ def resolve_model_rows(model_name, condition, root_dir="."):
     elif condition == "C4":
         candidates.extend([
             os.path.join(root_dir, "outputs", "sc_test_s3_unanswerable", "outputs", "sc_test", model_name, "unanswerable_v2.jsonl"),
-            os.path.join(root_dir, "outputs", "kaggle_qa", "unans_v2", model_name, f"{model_name}_baseline.jsonl"),
+            os.path.join(root_dir, "outputs", "kaggle_qa", "unans_v2", model_name, f"baseline_{model_name}.jsonl"),
         ])
         
     for p in candidates:
