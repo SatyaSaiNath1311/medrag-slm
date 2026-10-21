@@ -290,9 +290,37 @@ def verify_pubmedqa_baseline(target_file: Path, target_model: str = "medpsy-4b")
     passed = True
 
     # 1. Frozen Hash Check
-    ref_phase1_path = REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase1" / "test.jsonl"
-    if not check_frozen_hash(ref_phase1_path, FROZEN_HASHES["phase1_test"], "phase1/test.jsonl"):
+    expected_p1_sha = FROZEN_HASHES.get("phase1_test")
+    manifest_path = REPO_ROOT / "audit" / "frozen_hashes.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text()).get("files", {})
+            if "outputs/kaggle_build/work/phase1/test.jsonl" in manifest:
+                expected_p1_sha = manifest["outputs/kaggle_build/work/phase1/test.jsonl"]["sha256"]
+        except Exception:
+            pass
+
+    ref_phase1_candidates = [
+        REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase1" / "test.jsonl",
+        Path("outputs/kaggle_build/work/phase1/test.jsonl").resolve(),
+    ]
+    ref_phase1_path = next((p for p in ref_phase1_candidates if p.exists()), ref_phase1_candidates[0])
+
+    if not check_frozen_hash(ref_phase1_path, expected_p1_sha, "phase1/test.jsonl (frozen reference)"):
         passed = False
+
+    # Also confirm hash of execution phase1/test.jsonl if present in run directory
+    exec_p1_candidates = [
+        REPO_ROOT / "work" / "work_pubmedqa_baseline" / "phase1" / "test.jsonl",
+        REPO_ROOT / "work" / "phase1" / "test.jsonl",
+        Path("/kaggle/working/work/work_pubmedqa_baseline/phase1/test.jsonl"),
+        Path("/kaggle/working/work/phase1/test.jsonl"),
+    ]
+    for ep in exec_p1_candidates:
+        if ep.exists():
+            if not check_frozen_hash(ep, expected_p1_sha, f"phase1/test.jsonl (execution file at {ep})"):
+                passed = False
+            break
 
     # 2. Reference PubMedQA Data
     p1_rows = load_jsonl(ref_phase1_path)
@@ -413,9 +441,37 @@ def verify_pubmedqa_rag(target_file: Path, target_model: str = "medpsy-4b") -> b
     passed = True
 
     # 1. Frozen Hash Check
-    ref_phase1_path = REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase1" / "test.jsonl"
-    if not check_frozen_hash(ref_phase1_path, FROZEN_HASHES["phase1_test"], "phase1/test.jsonl"):
+    expected_p1_sha = FROZEN_HASHES.get("phase1_test")
+    manifest_path = REPO_ROOT / "audit" / "frozen_hashes.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text()).get("files", {})
+            if "outputs/kaggle_build/work/phase1/test.jsonl" in manifest:
+                expected_p1_sha = manifest["outputs/kaggle_build/work/phase1/test.jsonl"]["sha256"]
+        except Exception:
+            pass
+
+    ref_phase1_candidates = [
+        REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase1" / "test.jsonl",
+        Path("outputs/kaggle_build/work/phase1/test.jsonl").resolve(),
+    ]
+    ref_phase1_path = next((p for p in ref_phase1_candidates if p.exists()), ref_phase1_candidates[0])
+
+    if not check_frozen_hash(ref_phase1_path, expected_p1_sha, "phase1/test.jsonl (frozen reference)"):
         passed = False
+
+    # Also confirm hash of execution phase1/test.jsonl if present in run directory
+    exec_p1_candidates = [
+        REPO_ROOT / "work" / "work_pubmedqa_rag" / "phase1" / "test.jsonl",
+        REPO_ROOT / "work" / "phase1" / "test.jsonl",
+        Path("/kaggle/working/work/work_pubmedqa_rag/phase1/test.jsonl"),
+        Path("/kaggle/working/work/phase1/test.jsonl"),
+    ]
+    for ep in exec_p1_candidates:
+        if ep.exists():
+            if not check_frozen_hash(ep, expected_p1_sha, f"phase1/test.jsonl (execution file at {ep})"):
+                passed = False
+            break
 
     # 2. Reference PubMedQA Data
     p1_rows = load_jsonl(ref_phase1_path)

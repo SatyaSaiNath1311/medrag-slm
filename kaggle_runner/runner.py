@@ -456,9 +456,9 @@ def verify_frozen_hashes_before_run(code_dir, work_dir):
 
     # 3. Locate PubMedQA test file (phase1/test.jsonl)
     p1_candidates = [
-        os.path.join(work_dir, "phase1", "test.jsonl"),
         os.path.join(code_dir, "outputs", "kaggle_build", "work", "phase1", "test.jsonl"),
         os.path.abspath("outputs/kaggle_build/work/phase1/test.jsonl"),
+        os.path.join(work_dir, "phase1", "test.jsonl"),
     ]
     p1_test_src = next((p for p in p1_candidates if os.path.exists(p)), None)
     if not p1_test_src:
@@ -466,7 +466,7 @@ def verify_frozen_hashes_before_run(code_dir, work_dir):
         if input_hits:
             p1_test_src = input_hits[0]
     if not p1_test_src or not os.path.exists(p1_test_src):
-        sys.exit("FATAL: PubMedQA phase1/test.jsonl not found in work dir or /kaggle/input/**")
+        sys.exit("FATAL: PubMedQA phase1/test.jsonl not found in code dir, work dir or /kaggle/input/**")
 
     files_to_check = [
         ("unanswerable_v2 test", test_src, EXPECTED_HASHES.get("unans_v2_test")),
@@ -797,10 +797,11 @@ if SC_MODE:
     if any(ds in active_sc_datasets for ds in ("medqa", "pubmedqa")):
         split_p1_file = "test.jsonl" if SC_SPLIT == "test" else "validation.jsonl"
         candidates = [
-            os.path.join(WORK, "phase1", split_p1_file),
-            f"/kaggle/working/work/phase1/{split_p1_file}",
             os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase1", split_p1_file),
             f"outputs/kaggle_build/work/phase1/{split_p1_file}",
+            os.path.abspath(f"outputs/kaggle_build/work/phase1/{split_p1_file}"),
+            os.path.join(WORK, "phase1", split_p1_file),
+            f"/kaggle/working/work/phase1/{split_p1_file}",
         ]
         p1_file = next((p for p in candidates if os.path.exists(p)), None)
         if not p1_file:
@@ -1444,6 +1445,90 @@ if _is_medpsy_overnight:
     # Pre-Flight Frozen Data Audit (Mandatory Check)
     val_src, test_src, p1_test_src = verify_frozen_hashes_before_run(CODE_DIR, WORK)
 
+    # ── Ensure WORK/phase1/test.jsonl uses the frozen repo bytes ───────────────
+    # WORK/phase1 may be a symlink to /kaggle/input/**/phase1 (read-only filesystem).
+    # Replace symlink with a real directory so test.jsonl can be safely overwritten.
+    work_p1 = os.path.join(WORK, "phase1")
+    if os.path.islink(work_p1):
+        target_p1 = os.readlink(work_p1)
+        os.unlink(work_p1)
+        os.makedirs(work_p1, exist_ok=True)
+        if os.path.isdir(target_p1):
+            for item in os.listdir(target_p1):
+                if item != "test.jsonl":
+                    src_item = os.path.join(target_p1, item)
+                    dst_item = os.path.join(work_p1, item)
+                    try:
+                        os.symlink(src_item, dst_item)
+                    except OSError:
+                        shutil.copy2(src_item, dst_item)
+    elif not os.path.exists(work_p1):
+        os.makedirs(work_p1, exist_ok=True)
+
+    target_work_test = os.path.join(work_p1, "test.jsonl")
+    if os.path.islink(target_work_test) or os.path.exists(target_work_test):
+        try:
+            os.unlink(target_work_test)
+        except OSError:
+            pass
+    shutil.copyfile(p1_test_src, target_work_test)
+
+    import hashlib
+    h_setup = hashlib.sha256()
+    with open(target_work_test, "rb") as fh:
+        while chunk := fh.read(1024 * 1024):
+            h_setup.update(chunk)
+    copied_sha = h_setup.hexdigest()
+    print(f"\n[FROZEN DATA SETUP] Copied frozen test.jsonl over {target_work_test}:", flush=True)
+    print(f"  Source path : {p1_test_src}", flush=True)
+    print(f"  SHA-256     : {copied_sha}\n", flush=True)
+
+    # ── Resolve and audit PubMedQA phase1 validation file context integrity ────
+    val_p1_candidates = [
+        os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase1", "validation.jsonl"),
+        os.path.abspath("outputs/kaggle_build/work/phase1/validation.jsonl"),
+        os.path.join(work_p1, "validation.jsonl"),
+    ]
+    val_p1_src = next((p for p in val_p1_candidates if os.path.exists(p)), None)
+    if not val_p1_src:
+        input_hits = glob.glob("/kaggle/input/**/phase1/validation.jsonl", recursive=True)
+        if input_hits:
+            val_p1_src = input_hits[0]
+    if not val_p1_src or not os.path.exists(val_p1_src):
+        sys.exit("FATAL: PubMedQA phase1/validation.jsonl not found in code dir, work dir or /kaggle/input/**")
+
+    # Overwrite WORK/phase1/validation.jsonl with frozen repo copy as well
+    target_work_val = os.path.join(work_p1, "validation.jsonl")
+    if os.path.islink(target_work_val) or os.path.exists(target_work_val):
+        try:
+            os.unlink(target_work_val)
+        except OSError:
+            pass
+    shutil.copyfile(val_p1_src, target_work_val)
+
+    with open(val_p1_src, "r", encoding="utf-8") as fh:
+        val_p1_rows = [json.loads(line) for line in fh if line.strip()]
+
+    pm_val_rows = [r for r in val_p1_rows if r.get("id", "").startswith("pubmedqa")]
+    missing_ctx = [r for r in pm_val_rows if not r.get("context")]
+    if missing_ctx:
+        sys.exit(
+            f"FATAL: {len(missing_ctx)}/{len(pm_val_rows)} PubMedQA validation rows in {val_p1_src} "
+            f"lack a non-empty 'context' field! Example ID: {missing_ctx[0].get('id')}"
+        )
+
+    h_val = hashlib.sha256()
+    with open(val_p1_src, "rb") as fh:
+        while chunk := fh.read(1024 * 1024):
+            h_val.update(chunk)
+    val_p1_sha = h_val.hexdigest()
+
+    print(f"Pre-flight Validation Context Audit [{val_p1_src}]:", flush=True)
+    print(f"  Path used   : {val_p1_src}", flush=True)
+    print(f"  SHA-256     : {val_p1_sha}", flush=True)
+    print(f"  PubMedQA Rows Checked: {len(pm_val_rows)} (expect 200)", flush=True)
+    print(f"  [PASS] all have context\n", flush=True)
+
     def compute_stage_summary_metrics(rows, is_unans=False):
         n = len(rows)
         trunc = sum(1 for r in rows if r.get("truncated"))
@@ -1582,6 +1667,7 @@ if _is_medpsy_overnight:
     pm_base_p1 = os.path.join(pm_base_work, "phase1")
     os.makedirs(pm_base_p1, exist_ok=True)
     shutil.copyfile(p1_test_src, os.path.join(pm_base_p1, "test.jsonl"))
+    shutil.copyfile(val_p1_src, os.path.join(pm_base_p1, "validation.jsonl"))
 
     stage_b_done = False
     if os.path.exists(stage_b_final):
@@ -1678,6 +1764,7 @@ if _is_medpsy_overnight:
     os.makedirs(pm_rag_p7, exist_ok=True)
     shutil.copyfile(p1_test_src, os.path.join(pm_rag_p1, "test.jsonl"))
     shutil.copyfile(ev_path, os.path.join(pm_rag_p7, "evidence.jsonl"))
+    shutil.copyfile(val_p1_src, os.path.join(pm_rag_p1, "validation.jsonl"))
 
     stage_c_done = False
     if os.path.exists(stage_c_final):
