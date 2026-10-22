@@ -70,8 +70,11 @@ MEDPSY_PUBMEDQA_BASELINE = False # Stage B: medpsy-4b closed-book baseline on Pu
 MEDPSY_PUBMEDQA_RAG = False      # Stage C: medpsy-4b RAG on PubMedQA test (COMPLETED & COMMITTED)
 
 # Unified 2-Stage Push: Stage A2 (MedPsy-4B reasoning prompt) + Stage D (Qwen3-4B baseline + RAG)
-MEDPSY_UNANS_V2_REASONING = True # Stage A2: medpsy-4b unans_v2 baseline with native reasoning prompt (standard_prompt=False, 2-GPU shards)
-QWEN3_4B_UNANS_V2 = True         # Stage D: qwen3-4b on unanswerable_v2 baseline + RAG (val + test)
+MEDPSY_UNANS_V2_REASONING = False # Stage A2: medpsy-4b unans_v2 baseline with native reasoning prompt (COMPLETED & COMMITTED)
+QWEN3_4B_UNANS_V2 = False         # Stage D: qwen3-4b on unanswerable_v2 baseline + RAG (COMPLETED & COMMITTED)
+
+# ── Pair B Thinking-Mode Control: Qwen3-4B-Thinking-2507 MedQA Baseline + RAG ──
+QWEN3_4B_THINKING_MEDQA = True    # Run qwen3-4b-thinking-2507 on MedQA test (N=500) baseline and RAG sequentially
 
 # ── V3 Generic-vs-Medical Matched-Pair Experiment ─────────────────────────────
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
@@ -107,13 +110,13 @@ for flag, val in [
 # Check for unified MedPsy 3-stage overnight push (historical completed run)
 _is_medpsy_overnight = (
     MEDPSY_UNANS_V2_BASELINE and MEDPSY_PUBMEDQA_BASELINE and MEDPSY_PUBMEDQA_RAG
-    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY or MEDPSY_UNANS_V2_REASONING or QWEN3_4B_UNANS_V2)
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY or MEDPSY_UNANS_V2_REASONING or QWEN3_4B_UNANS_V2 or QWEN3_4B_THINKING_MEDQA)
 )
 
 # Check for unified 2-stage push: Stage A2 (MedPsy-4B reasoning baseline) + Stage D (Qwen3-4B base+RAG)
 _is_two_stage_push = (
     MEDPSY_UNANS_V2_REASONING and QWEN3_4B_UNANS_V2
-    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or V3_RUN or V3_TRUNC_SENSITIVITY)
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or V3_RUN or V3_TRUNC_SENSITIVITY or QWEN3_4B_THINKING_MEDQA)
 )
 
 # Mutual exclusivity guard for specialized modes vs base/legacy runner flags
@@ -126,6 +129,7 @@ _active_special_modes = [
         ("MEDPSY_PUBMEDQA_RAG", MEDPSY_PUBMEDQA_RAG),
         ("MEDPSY_UNANS_V2_REASONING", MEDPSY_UNANS_V2_REASONING),
         ("QWEN3_4B_UNANS_V2", QWEN3_4B_UNANS_V2),
+        ("QWEN3_4B_THINKING_MEDQA", QWEN3_4B_THINKING_MEDQA),
         ("V3_RUN", V3_RUN),
         ("V3_TRUNC_SENSITIVITY", V3_TRUNC_SENSITIVITY),
     ] if v
@@ -272,6 +276,8 @@ if SC_SHARD is None:
         print(f"UNANS_V2_SLM mode enabled: model={UNANS_MODEL} baseline+RAG on unanswerable_v2 (val+test)")
     if _is_two_stage_push:
         print("TWO_STAGE_UNANS_PUSH mode enabled: Stage A2 (medpsy-4b reasoning baseline) + Stage D (qwen3-4b baseline+RAG)")
+    if QWEN3_4B_THINKING_MEDQA:
+        print("QWEN3_4B_THINKING_MEDQA mode enabled: qwen3-4b-thinking-2507 on MedQA test (N=500) baseline + RAG (Pair B thinking control, 2-GPU shards)")
     if _is_medpsy_overnight:
         print("MEDPSY_OVERNIGHT mode enabled: medpsy-4b unified 3-stage push (Stage A: unans_v2 baseline, Stage B: PubMedQA baseline, Stage C: PubMedQA RAG)")
     else:
@@ -1758,6 +1764,291 @@ if _is_two_stage_push:
     print("=" * 96 + "\n", flush=True)
 
     # Post-run cleanup (caches only, after all stages finish successfully)
+    shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
+    shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
+    sys.exit(0)
+
+
+# ── PAIR B THINKING CONTROL: QWEN3-4B-THINKING-2507 MEDQA BASELINE + RAG ───────
+if QWEN3_4B_THINKING_MEDQA:
+    import glob
+    import json
+    import math
+    import shutil
+    import subprocess
+    import threading
+
+    NUM_SHARDS = 2
+    print("\n" + "=" * 80, flush=True)
+    print("=== QWEN3-4B-THINKING-2507 MEDQA EVALUATION (Pair B Thinking Control) ===", flush=True)
+    print("  Condition 1: MedQA test (N=500) baseline, reasoning_baseline_prompt [est. 5.22 h]", flush=True)
+    print("  Condition 2: MedQA test (N=500) RAG, reasoning_rag_prompt            [est. 8.88 h]", flush=True)
+    print("  Total estimated: 14.10 h (2-shard dual-GPU wall-clock ~7.05 h, fits in weekly quota)", flush=True)
+    print("  PubMedQA and unanswerable_v2 conditions deferred to next quota window.", flush=True)
+    print("=" * 80 + "\n", flush=True)
+
+    print("MATCHING REQUIREMENTS AUDIT:", flush=True)
+    print("  - Target Model       : Qwen/Qwen3-4B-Thinking-2507 (reasoning=True, float16)", flush=True)
+    print("  - Prompt Functions   : Condition 1: reasoning_baseline_prompt | Condition 2: reasoning_rag_prompt", flush=True)
+    print("  - Thinking Budget    : 1024 tokens thinking cap (max_new_tokens_reasoning=1024)", flush=True)
+    print("  - Decoding Settings  : Greedy (temperature=0.0, do_sample=False)", flush=True)
+    print("  - Benchmark Split    : Frozen MedQA test split (N=500 in phase1/test.jsonl)", flush=True)
+    print("  - Evidence File      : Frozen Phase 7 MedCPT top-5 evidence (phase7/evidence.jsonl)", flush=True)
+    print("  - Answer Parser      : extract_final_answer_from_reasoning (native think tags)", flush=True)
+    print("  - Primary Rule       : Strict accuracy: (not truncated) and parsed and correct", flush=True)
+    print("  - Secondary Rule     : With-fallback accuracy (raw correct field)", flush=True)
+    print("\nDIFFERENCES BETWEEN ARMS (qwen3-4b-thinking-2507 vs medpsy-4b):", flush=True)
+    print("  - Domain Training    : medpsy-4b received domain-specific medical instruction post-training; qwen3-4b-thinking-2507 is generic base thinking.", flush=True)
+    print("  - Chat Template      : Both utilize Qwen chat template (<think>...</think> thinking tokens).", flush=True)
+    print("  - Tokenizer          : Identical vocabulary, special tokens, and thinking tags.", flush=True)
+    print("  - Logprob Re-feed    : Identical logprob re-feed mechanism after closed thinking blocks.", flush=True)
+    print("=" * 80 + "\n", flush=True)
+
+    # 1. Pre-Flight Frozen Data Audit (Mandatory Check)
+    val_src, test_src, p1_test_src = verify_frozen_hashes_before_run(CODE_DIR, WORK)
+
+    # Canonical v3 destination directories
+    out_base = (
+        "/kaggle/working/outputs/v3/qwen3-4b-thinking-2507"
+        if os.path.exists("/kaggle/working")
+        else "outputs/v3/qwen3-4b-thinking-2507"
+    )
+    c1_dir = os.path.join(out_base, "C1")
+    os.makedirs(c1_dir, exist_ok=True)
+    c1_final = os.path.join(c1_dir, "qwen3-4b-thinking-2507.jsonl")
+
+    c2_dir = os.path.join(out_base, "C2")
+    os.makedirs(c2_dir, exist_ok=True)
+    c2_final = os.path.join(c2_dir, "qwen3-4b-thinking-2507.jsonl")
+
+    qa_mirror_dir = (
+        "/kaggle/working/outputs/kaggle_qa/qwen3_4b_thinking/work"
+        if os.path.exists("/kaggle/working")
+        else "outputs/kaggle_qa/qwen3_4b_thinking/work"
+    )
+    os.makedirs(os.path.join(qa_mirror_dir, "phase5"), exist_ok=True)
+    os.makedirs(os.path.join(qa_mirror_dir, "phase8"), exist_ok=True)
+
+    condition_summaries = {}
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CONDITION 1: MedQA test (N=500) baseline, reasoning_baseline_prompt
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING CONDITION 1: MedQA test (N=500) baseline (reasoning_baseline_prompt)", flush=True)
+    print("=" * 80, flush=True)
+
+    c1_done = False
+    if os.path.exists(c1_final):
+        try:
+            with open(c1_final) as fh:
+                existing_c1 = [json.loads(l) for l in fh if l.strip()]
+            if len(existing_c1) == 500:
+                print(f"[RESUME] Condition 1 already completed ({len(existing_c1)} rows in {c1_final}). Skipping.", flush=True)
+                c1_rows = existing_c1
+                c1_done = True
+        except Exception:
+            pass
+
+    if not c1_done:
+        c1_errors = {}
+        def run_c1_shard(shard_idx):
+            env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+            try:
+                cmd = build_qa_cmd(
+                    models_list=["qwen3-4b-thinking-2507"],
+                    modes_list=["baseline"],
+                    datasets="medqa",
+                    split="test",
+                    work_dir=WORK,
+                    skip_format_check=True,
+                    shard=shard_idx,
+                    num_shards=NUM_SHARDS,
+                    standard_prompt=False,
+                )
+                print(f"\n[Condition 1 - Shard {shard_idx}] Starting MedQA baseline on GPU {shard_idx}...", flush=True)
+                run(cmd, extra_env=env)
+            except Exception as exc:
+                c1_errors[shard_idx] = str(exc)
+
+        threads = [threading.Thread(target=run_c1_shard, args=(i,), name=f"c1-shard-{i}") for i in range(NUM_SHARDS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if c1_errors:
+            print("\nFATAL ERROR in Condition 1 shard execution:", c1_errors, flush=True)
+            sys.exit(1)
+
+        print("\n=== MERGING CONDITION 1 SHARDS ===", flush=True)
+        p5_dir = os.path.join(WORK, "phase5")
+        c1_rows = []
+        seen_ids_c1 = set()
+        for sid in range(NUM_SHARDS):
+            sp = os.path.join(p5_dir, f"qwen3-4b-thinking-2507_shard{sid}.jsonl")
+            if os.path.exists(sp):
+                with open(sp) as fh:
+                    for l in fh:
+                        if l.strip():
+                            r = json.loads(l)
+                            if r["id"] not in seen_ids_c1:
+                                c1_rows.append(r)
+                                seen_ids_c1.add(r["id"])
+
+        if len(c1_rows) != 500:
+            print(f"WARNING: Expected 500 rows for Condition 1, got {len(c1_rows)}!", flush=True)
+
+        with open(c1_final, "w", encoding="utf-8") as fh:
+            for r in c1_rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        print(f"  Condition 1 canonical output saved ({len(c1_rows)} rows) -> {c1_final}", flush=True)
+        shutil.copyfile(c1_final, os.path.join(qa_mirror_dir, "phase5", "qwen3-4b-thinking-2507.jsonl"))
+
+    m_c1 = compute_stage_summary_metrics(c1_rows, is_unans=False)
+    summary_c1_line = (
+        f"rows={m_c1['rows']} | "
+        f"strict_acc={m_c1['strict_acc']:.4f} | "
+        f"fallback_acc={m_c1['fallback_acc']:.4f} | "
+        f"trunc_rate={m_c1['trunc_rate']:.1f}% ({m_c1['trunc_count']}/{m_c1['rows']}) | "
+        f"parse_rate={m_c1['parse_rate']:.1f}% ({m_c1['parsed_count']}/{m_c1['rows']}) | "
+        f"{m_c1['s_per_q']:.2f} s/q"
+    )
+    condition_summaries["Condition 1 (MedQA Baseline)"] = summary_c1_line
+    print(f"\n[CONDITION 1 SUMMARY] {summary_c1_line}", flush=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CONDITION 2: MedQA test (N=500) RAG, reasoning_rag_prompt
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING CONDITION 2: MedQA test (N=500) RAG (reasoning_rag_prompt)", flush=True)
+    print("=" * 80, flush=True)
+
+    # Verify Phase 7 evidence file resolution
+    ev_path = os.path.join(WORK, "phase7", "evidence.jsonl")
+    if not os.path.exists(ev_path):
+        ev_hits = glob.glob("/kaggle/input/**/phase7/evidence.jsonl", recursive=True)
+        if ev_hits:
+            ev_path = ev_hits[0]
+            os.makedirs(os.path.join(WORK, "phase7"), exist_ok=True)
+            dst_ev = os.path.join(WORK, "phase7", "evidence.jsonl")
+            if not os.path.exists(dst_ev):
+                shutil.copyfile(ev_path, dst_ev)
+                print(f"  Copied evidence to work dir: {dst_ev}", flush=True)
+        else:
+            for fallback_ev in [
+                "outputs/kaggle_build/work/phase7/evidence.jsonl",
+                os.path.join(CODE_DIR, "outputs", "kaggle_build", "work", "phase7", "evidence.jsonl"),
+            ]:
+                if os.path.exists(fallback_ev):
+                    os.makedirs(os.path.join(WORK, "phase7"), exist_ok=True)
+                    shutil.copyfile(fallback_ev, os.path.join(WORK, "phase7", "evidence.jsonl"))
+                    print(f"  Copied local evidence to work dir from: {fallback_ev}", flush=True)
+                    break
+
+    c2_done = False
+    if os.path.exists(c2_final):
+        try:
+            with open(c2_final) as fh:
+                existing_c2 = [json.loads(l) for l in fh if l.strip()]
+            if len(existing_c2) == 500:
+                print(f"[RESUME] Condition 2 already completed ({len(existing_c2)} rows in {c2_final}). Skipping.", flush=True)
+                c2_rows = existing_c2
+                c2_done = True
+        except Exception:
+            pass
+
+    if not c2_done:
+        c2_errors = {}
+        def run_c2_shard(shard_idx):
+            env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+            try:
+                cmd = build_qa_cmd(
+                    models_list=["qwen3-4b-thinking-2507"],
+                    modes_list=["rag"],
+                    datasets="medqa",
+                    split="test",
+                    work_dir=WORK,
+                    skip_format_check=True,
+                    shard=shard_idx,
+                    num_shards=NUM_SHARDS,
+                    standard_prompt=False,
+                )
+                print(f"\n[Condition 2 - Shard {shard_idx}] Starting MedQA RAG on GPU {shard_idx}...", flush=True)
+                run(cmd, extra_env=env)
+            except Exception as exc:
+                c2_errors[shard_idx] = str(exc)
+
+        threads = [threading.Thread(target=run_c2_shard, args=(i,), name=f"c2-shard-{i}") for i in range(NUM_SHARDS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if c2_errors:
+            print("\nFATAL ERROR in Condition 2 shard execution:", c2_errors, flush=True)
+            sys.exit(1)
+
+        print("\n=== MERGING CONDITION 2 SHARDS ===", flush=True)
+        p8_dir = os.path.join(WORK, "phase8")
+        c2_rows = []
+        seen_ids_c2 = set()
+        for sid in range(NUM_SHARDS):
+            sp = os.path.join(p8_dir, f"qwen3-4b-thinking-2507_shard{sid}.jsonl")
+            if os.path.exists(sp):
+                with open(sp) as fh:
+                    for l in fh:
+                        if l.strip():
+                            r = json.loads(l)
+                            if r["id"] not in seen_ids_c2:
+                                c2_rows.append(r)
+                                seen_ids_c2.add(r["id"])
+
+        if len(c2_rows) != 500:
+            print(f"WARNING: Expected 500 rows for Condition 2, got {len(c2_rows)}!", flush=True)
+
+        with open(c2_final, "w", encoding="utf-8") as fh:
+            for r in c2_rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        print(f"  Condition 2 canonical output saved ({len(c2_rows)} rows) -> {c2_final}", flush=True)
+        shutil.copyfile(c2_final, os.path.join(qa_mirror_dir, "phase8", "qwen3-4b-thinking-2507.jsonl"))
+
+    m_c2 = compute_stage_summary_metrics(c2_rows, is_unans=False)
+    summary_c2_line = (
+        f"rows={m_c2['rows']} | "
+        f"strict_acc={m_c2['strict_acc']:.4f} | "
+        f"fallback_acc={m_c2['fallback_acc']:.4f} | "
+        f"trunc_rate={m_c2['trunc_rate']:.1f}% ({m_c2['trunc_count']}/{m_c2['rows']}) | "
+        f"parse_rate={m_c2['parse_rate']:.1f}% ({m_c2['parsed_count']}/{m_c2['rows']}) | "
+        f"{m_c2['s_per_q']:.2f} s/q"
+    )
+    condition_summaries["Condition 2 (MedQA Full RAG)"] = summary_c2_line
+    print(f"\n[CONDITION 2 SUMMARY] {summary_c2_line}", flush=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FINAL COMBINED SUMMARY
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 96, flush=True)
+    print("=== QWEN3-4B-THINKING-2507 MEDQA EVALUATION FINAL SUMMARY ===", flush=True)
+    print("=" * 96, flush=True)
+    print(f"{'Condition':<36} {'N':<6} {'Strict Acc':<12} {'Fallback Acc':<14} {'Trunc Rate':<12} {'Parse Rate':<12} {'Latency':<10}", flush=True)
+    print("-" * 96, flush=True)
+    for cond_title, metrics_obj in [
+        ("Condition 1: MedQA Baseline", m_c1),
+        ("Condition 2: MedQA Full RAG", m_c2),
+    ]:
+        strict_str = f"{metrics_obj['strict_acc']:.4f}"
+        fb_str = f"{metrics_obj['fallback_acc']:.4f}"
+        trunc_str = f"{metrics_obj['trunc_rate']:.1f}%"
+        parse_str = f"{metrics_obj['parse_rate']:.1f}%"
+        sq_str = f"{metrics_obj['s_per_q']:.2f} s/q"
+        print(f"{cond_title:<36} {metrics_obj['rows']:<6} {strict_str:<12} {fb_str:<14} {trunc_str:<12} {parse_str:<12} {sq_str:<10}", flush=True)
+    print("=" * 96, flush=True)
+    print(f"Total MedQA Questions Evaluated: {m_c1['rows'] + m_c2['rows']} (500 Baseline + 500 RAG)", flush=True)
+    print(f"Canonical Outputs Saved: {c1_final} and {c2_final}", flush=True)
+    print("=" * 96 + "\n", flush=True)
+
+    # Post-run cleanup (caches only, after all conditions finish successfully)
     shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
     shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
     sys.exit(0)

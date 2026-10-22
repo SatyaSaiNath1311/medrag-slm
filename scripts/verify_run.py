@@ -566,8 +566,169 @@ def verify_pubmedqa_rag(target_file: Path, target_model: str = "medpsy-4b") -> b
         print("STAGE C RESULT: [PASS] All integrity gates passed. Output verified.")
     else:
         print("STAGE C RESULT: [FAIL] One or more integrity gates failed.")
-    print("=" * 80 + "\n")
     return passed
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MEDQA CONDITIONS: Qwen3-4B-Thinking-2507 Baseline & Full RAG
+# ══════════════════════════════════════════════════════════════════════════════
+
+def verify_medqa_condition(
+    target_file: Path,
+    mode: str = "baseline",
+    target_model: str = "qwen3-4b-thinking-2507",
+    stage_label: str = "MedQA Condition",
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    print("\n" + "=" * 80)
+    print(f"VERIFIER: {stage_label} ({target_model})")
+    print("=" * 80)
+
+    if not target_file.exists():
+        print(f"[FAIL] Target output file does not exist: {target_file}")
+        return False, None
+
+    file_size_kb = target_file.stat().st_size / 1024.0
+    print(f"File Path        : {target_file.relative_to(REPO_ROOT) if target_file.is_relative_to(REPO_ROOT) else target_file}")
+    print(f"File Size        : {file_size_kb:.1f} KB")
+
+    rows = load_jsonl(target_file)
+    n_total = len(rows)
+    print(f"Total Rows Loaded: {n_total}")
+
+    models_found = sorted(set(r.get("model") for r in rows if "model" in r))
+    modes_found = sorted(set(r.get("mode") for r in rows if "mode" in r))
+    splits_found = sorted(set(r.get("split") for r in rows if "split" in r))
+    print(f"Config Echo      : model={models_found}, mode={modes_found}, splits={splits_found}")
+
+    passed = True
+
+    # 1. Frozen Hash Check
+    expected_p1_sha = FROZEN_HASHES.get("phase1_test")
+    manifest_path = REPO_ROOT / "audit" / "frozen_hashes.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text()).get("files", {})
+            if "outputs/kaggle_build/work/phase1/test.jsonl" in manifest:
+                expected_p1_sha = manifest["outputs/kaggle_build/work/phase1/test.jsonl"]["sha256"]
+        except Exception:
+            pass
+
+    ref_phase1_candidates = [
+        REPO_ROOT / "outputs" / "kaggle_build" / "work" / "phase1" / "test.jsonl",
+        Path("outputs/kaggle_build/work/phase1/test.jsonl").resolve(),
+        REPO_ROOT / "work" / "phase1" / "test.jsonl",
+    ]
+    ref_file = next((p for p in ref_phase1_candidates if p.exists()), None)
+    if not ref_file:
+        print("  [FAIL] Master Phase 1 test.jsonl not found!")
+        return False, None
+
+    if not check_frozen_hash(ref_file, expected_p1_sha, "Frozen MedQA Master Test"):
+        passed = False
+
+    # Load master MedQA test split
+    p1_rows = load_jsonl(ref_file)
+    medqa_ref = {r["id"]: r for r in p1_rows if r.get("dataset") == "medqa"}
+    n_expected = len(medqa_ref)
+    print(f"  Reference MedQA questions: {n_expected} (expected: 500)")
+
+    # Gate 1: Row Counts
+    print("\n--- Gate 1: Output Row Count Verification ---")
+    if n_total == 500:
+        print(f"  [PASS] Exact expected row count: 500 rows.")
+    else:
+        print(f"  [FAIL] Expected 500 rows, got {n_total} rows!")
+        passed = False
+
+    # Gate 2: Duplicate IDs Verification
+    print("\n--- Gate 2: Duplicate IDs Verification ---")
+    row_ids = [r.get("id") for r in rows]
+    id_counts = Counter(row_ids)
+    duplicates = [qid for qid, count in id_counts.items() if count > 1]
+    if not duplicates:
+        print(f"  [PASS] 0 duplicate IDs found across {len(row_ids)} records.")
+    else:
+        print(f"  [FAIL] Found {len(duplicates)} duplicate IDs: {duplicates[:5]}")
+        passed = False
+
+    # Gate 3: Missing & Unexpected IDs Verification
+    print("\n--- Gate 3: Missing & Unexpected IDs against Master Benchmark ---")
+    output_id_set = set(row_ids)
+    gold_id_set = set(medqa_ref.keys())
+    missing_from_output = gold_id_set - output_id_set
+    unexpected_in_output = output_id_set - gold_id_set
+
+    if not missing_from_output and not unexpected_in_output:
+        print(f"  [PASS] 0 missing IDs, 0 unexpected IDs. Exact 1-to-1 match with canonical MedQA test.")
+    else:
+        if missing_from_output:
+            print(f"  [FAIL] Missing {len(missing_from_output)} IDs from output: {list(missing_from_output)[:5]}")
+        if unexpected_in_output:
+            print(f"  [FAIL] Unexpected {len(unexpected_in_output)} IDs in output: {list(unexpected_in_output)[:5]}")
+        passed = False
+
+    # Gate 4: Gold Alignment Verification
+    print("\n--- Gate 4: Gold Mismatches & Metadata Alignment ---")
+    gold_mismatches = 0
+    for r in rows:
+        qid = r.get("id")
+        if qid not in medqa_ref:
+            continue
+        g = medqa_ref[qid]
+        g_ans = g.get("answer")
+        r_gold = r.get("gold") if "gold" in r else r.get("answer")
+        if g_ans is not None and r_gold is not None and r_gold != g_ans:
+            gold_mismatches += 1
+            if gold_mismatches <= 3:
+                print(f"    Mismatch in gold answer for {qid}: output={r_gold}, gold={g_ans}")
+
+    if gold_mismatches == 0:
+        print(f"  [PASS] 0 gold mismatches across all {n_total} rows.")
+    else:
+        print(f"  [FAIL] Found {gold_mismatches} gold alignment mismatches!")
+        passed = False
+
+    # Reported Metrics (REPORT ONLY — NOT GATED)
+    print("\n--- REPORTED METRICS (Informational Only — Not Gated) ---")
+    trunc_cnt = sum(1 for r in rows if is_truncated(r))
+    parsed_cnt = sum(1 for r in rows if is_parsed(r))
+    trunc_pct = (trunc_cnt / n_total) * 100 if n_total else 0.0
+    parsed_pct = (parsed_cnt / n_total) * 100 if n_total else 0.0
+
+    s_acc = strict_accuracy(rows)
+    f_acc = fallback_accuracy(rows)
+    cites_cnt = sum(1 for r in rows if r.get("citations") and len(r.get("citations")) > 0)
+
+    secs = [r["seconds"] for r in rows if r.get("seconds") is not None]
+    avg_s = sum(secs) / len(secs) if secs else 0.0
+
+    print(f"  Parse Rate                      : {parsed_cnt}/{n_total} ({parsed_pct:.1f}%) [Reported]")
+    print(f"  Truncation Rate                 : {trunc_cnt}/{n_total} ({trunc_pct:.1f}%) [Reported]")
+    print(f"  Strict Accuracy (PRIMARY)       : {s_acc:.4f} ({sum(1 for r in rows if is_strict_correct(r))}/{n_total})")
+    print(f"  With-Fallback Accuracy (SECOND) : {f_acc:.4f} ({sum(1 for r in rows if is_fallback_correct(r))}/{n_total})")
+    if mode == "rag":
+        print(f"  Citations Present Rate          : {cites_cnt}/{n_total} ({100.0 * cites_cnt / max(n_total, 1):.1f}%)")
+    if secs:
+        print(f"  Inference Speed                 : {avg_s:.2f} s/question (total {sum(secs)/3600.0:.2f} GPU-hours)")
+
+    print("\n" + "=" * 80)
+    if passed:
+        print(f"{stage_label} RESULT: [PASS] All integrity gates passed. Output verified.")
+    else:
+        print(f"{stage_label} RESULT: [FAIL] One or more integrity gates failed.")
+    print("=" * 80 + "\n")
+
+    summary_info = {
+        "label": stage_label,
+        "rows": n_total,
+        "strict_acc": s_acc,
+        "fallback_acc": f_acc,
+        "trunc_rate": trunc_pct,
+        "parse_rate": parsed_pct,
+        "s_per_q": avg_s,
+        "passed": passed,
+    }
+    return passed, summary_info
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -590,6 +751,9 @@ def main():
             "medpsy_pubmedqa_baseline",
             "medpsy_pubmedqa_rag",
             "all_stages",
+            "qwen3_4b_thinking_medqa_baseline",
+            "qwen3_4b_thinking_medqa_rag",
+            "qwen3_4b_thinking_medqa",
         ],
         help="Target run to verify (default: medpsy_unans_v2_baseline)",
     )
@@ -608,6 +772,8 @@ def main():
         "qwen3_4b_unans_v2_rag": REPO_ROOT / "outputs" / "kaggle_qa" / "unans_v2" / "qwen3-4b" / "rag_qwen3-4b.jsonl",
         "medpsy_pubmedqa_baseline": REPO_ROOT / "outputs" / "kaggle_qa" / "medpsy_pubmedqa_baseline" / "medpsy-4b_pubmedqa_baseline.jsonl",
         "medpsy_pubmedqa_rag": REPO_ROOT / "outputs" / "kaggle_qa" / "medpsy_pubmedqa_rag" / "medpsy-4b_pubmedqa_rag.jsonl",
+        "qwen3_4b_thinking_medqa_baseline": REPO_ROOT / "outputs" / "v3" / "qwen3-4b-thinking-2507" / "C1" / "qwen3-4b-thinking-2507.jsonl",
+        "qwen3_4b_thinking_medqa_rag": REPO_ROOT / "outputs" / "v3" / "qwen3-4b-thinking-2507" / "C2" / "qwen3-4b-thinking-2507.jsonl",
     }
 
     if args.run == "medpsy_unans_v2_baseline":
@@ -714,6 +880,93 @@ def main():
             print("OVERALL RESULT: [FAIL] One or more stages failed integrity gates!\n")
             sys.exit(1)
 
+    elif args.run == "qwen3_4b_thinking_medqa_baseline":
+        target = Path(args.file) if args.file else default_paths["qwen3_4b_thinking_medqa_baseline"]
+        if not target.exists():
+            alt = REPO_ROOT / "outputs" / "kaggle_qa" / "qwen3_4b_thinking" / "work" / "phase5" / "qwen3-4b-thinking-2507.jsonl"
+            if alt.exists():
+                target = alt
+        ok, summary = verify_medqa_condition(
+            target,
+            mode="baseline",
+            target_model="qwen3-4b-thinking-2507",
+            stage_label="Condition 1 (Qwen3-4B-Thinking MedQA Baseline)",
+        )
+        if summary:
+            print(f"[SUMMARY] rows={summary['rows']} | strict_acc={summary['strict_acc']:.4f} | fallback_acc={summary['fallback_acc']:.4f} | trunc_rate={summary['trunc_rate']:.1f}% | parse_rate={summary['parse_rate']:.1f}% | {summary['s_per_q']:.2f} s/q")
+        sys.exit(0 if ok else 1)
+
+    elif args.run == "qwen3_4b_thinking_medqa_rag":
+        target = Path(args.file) if args.file else default_paths["qwen3_4b_thinking_medqa_rag"]
+        if not target.exists():
+            alt = REPO_ROOT / "outputs" / "kaggle_qa" / "qwen3_4b_thinking" / "work" / "phase8" / "qwen3-4b-thinking-2507.jsonl"
+            if alt.exists():
+                target = alt
+        ok, summary = verify_medqa_condition(
+            target,
+            mode="rag",
+            target_model="qwen3-4b-thinking-2507",
+            stage_label="Condition 2 (Qwen3-4B-Thinking MedQA Full RAG)",
+        )
+        if summary:
+            print(f"[SUMMARY] rows={summary['rows']} | strict_acc={summary['strict_acc']:.4f} | fallback_acc={summary['fallback_acc']:.4f} | trunc_rate={summary['trunc_rate']:.1f}% | parse_rate={summary['parse_rate']:.1f}% | {summary['s_per_q']:.2f} s/q")
+        sys.exit(0 if ok else 1)
+
+    elif args.run == "qwen3_4b_thinking_medqa":
+        results = {}
+        summaries = {}
+        target_c1 = Path(args.file) if args.file else default_paths["qwen3_4b_thinking_medqa_baseline"]
+        if not target_c1.exists():
+            alt_c1 = REPO_ROOT / "outputs" / "kaggle_qa" / "qwen3_4b_thinking" / "work" / "phase5" / "qwen3-4b-thinking-2507.jsonl"
+            if alt_c1.exists():
+                target_c1 = alt_c1
+
+        target_c2 = default_paths["qwen3_4b_thinking_medqa_rag"]
+        if not target_c2.exists():
+            alt_c2 = REPO_ROOT / "outputs" / "kaggle_qa" / "qwen3_4b_thinking" / "work" / "phase8" / "qwen3-4b-thinking-2507.jsonl"
+            if alt_c2.exists():
+                target_c2 = alt_c2
+
+        ok_c1, sum_c1 = verify_medqa_condition(
+            target_c1,
+            mode="baseline",
+            target_model="qwen3-4b-thinking-2507",
+            stage_label="Condition 1 (Qwen3-4B-Thinking MedQA Baseline)",
+        )
+        results["Condition 1 (MedQA Baseline)"] = ok_c1
+        summaries["Condition 1 (MedQA Baseline)"] = sum_c1
+
+        ok_c2, sum_c2 = verify_medqa_condition(
+            target_c2,
+            mode="rag",
+            target_model="qwen3-4b-thinking-2507",
+            stage_label="Condition 2 (Qwen3-4B-Thinking MedQA Full RAG)",
+        )
+        results["Condition 2 (MedQA Full RAG)"] = ok_c2
+        summaries["Condition 2 (MedQA Full RAG)"] = sum_c2
+
+        print("\n" + "=" * 80)
+        print("=== QWEN3-4B-THINKING MEDQA VERIFICATION SUMMARY ===")
+        print("=" * 80)
+        for cond_name, sm in summaries.items():
+            if sm:
+                print(f"  {cond_name}: rows={sm['rows']} | strict_acc={sm['strict_acc']:.4f} | fallback_acc={sm['fallback_acc']:.4f} | trunc_rate={sm['trunc_rate']:.1f}% | parse_rate={sm['parse_rate']:.1f}% | {sm['s_per_q']:.2f} s/q")
+        print("-" * 80)
+        all_passed = True
+        for cond_name, res in results.items():
+            status_str = "[PASS]" if res else "[FAIL]"
+            if not res:
+                all_passed = False
+            print(f"  {cond_name:<36}: {status_str}")
+        print("=" * 80)
+        if all_passed:
+            print("OVERALL RESULT: [PASS] All integrity gates passed for both conditions!\n")
+            sys.exit(0)
+        else:
+            print("OVERALL RESULT: [FAIL] One or more conditions failed integrity gates!\n")
+            sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
+

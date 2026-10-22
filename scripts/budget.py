@@ -192,6 +192,18 @@ def main():
         default=True,
         help="Include pending v2 runs in the budget calculation (default: True).",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Filter budget calculation to a specific model (e.g. qwen3-4b-thinking-2507).",
+    )
+    parser.add_argument(
+        "--conditions",
+        type=str,
+        default=None,
+        help="Comma-separated conditions to filter (e.g. C1,C2).",
+    )
     args = parser.parse_args()
 
     # Dynamic log rate updates if present
@@ -205,18 +217,16 @@ def main():
 
     plan: List[Dict[str, Any]] = []
 
-    # 1. Pending v2 Runs
+    # 1. Pending v2 Runs (completed runs excluded: medpsy-4b unans_v2 base, medpsy-4b pubmedqa base, medpsy-4b pubmedqa rag, qwen3-4b unans_v2)
     if args.include_v2_pending and not args.pilot_only:
         v2_tasks = [
             ("smollm3-3b", "Unanswerable v2", 140, "unanswerable"),
             ("phi4-mini", "Unanswerable v2", 140, "unanswerable"),
-            ("qwen3-4b", "Unanswerable v2", 140, "unanswerable"),
             ("gemma3-4b", "Unanswerable v2", 140, "unanswerable"),
-            ("medpsy-4b", "Unanswerable v2 (Baseline)", 400, "unanswerable"),
-            ("medpsy-4b", "PubMedQA Baseline", 500, "pubmedqa_base"),
-            ("medpsy-4b", "PubMedQA Full RAG", 500, "rag"),
         ]
         for m, desc, nq, rate_key in v2_tasks:
+            if args.model and m != args.model:
+                continue
             sq = active_rates[m].get(rate_key, 1.0)
             hrs = (nq * sq) / 3600.0
             plan.append({
@@ -235,9 +245,17 @@ def main():
         "qwen3-4b-thinking-2507",
         "medgemma-1.5-4b-it",
     ]
+    if args.model:
+        v3_models = [m for m in v3_models if m == args.model]
+
+    selected_conditions = ["C1", "C2", "C3", "C4", "C5"]
+    if args.conditions:
+        selected_conditions = [c.strip().upper() for c in args.conditions.split(",") if c.strip()]
 
     for m in v3_models:
-        for cond in ["C1", "C2", "C3", "C4", "C5"]:
+        for cond in selected_conditions:
+            if cond not in q_counts:
+                continue
             nq = q_counts[cond]
             hrs = calculate_task_hours(m, cond, nq, active_rates)
             desc_map = {

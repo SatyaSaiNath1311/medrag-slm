@@ -11,17 +11,15 @@
 | Priority Order | Run ID & Description | Model | Split / Conditions | $N$ (Questions) | Est. Wall Hours | Quota Cumulative | Run Status |
 |:---:|---|---|---|:---:|:---:|:---:|:---:|
 | **(1)** | **Run 1: MedPsy-4B Unified Overnight Push (Stages A, B, C)** | `medpsy-4b` | Stage A: unans_v2 base (400)<br>Stage B: pubmedqa base (500)<br>Stage C: pubmedqa RAG (500) | 1,400 | **8.32 h** | 8.32 h / 30.0 h | **COMPLETED** |
-| **(2)** | **Run 2: Unified Two-Stage Push (Stage A2 + Stage D)** | `medpsy-4b`<br>`qwen3-4b` | Stage A2: unans_v2 reasoning (400)<br>Stage D: unans_v2 base+RAG (800) | 1,200 | **1.97 h** | 10.29 h / 30.0 h | **READY TO RUN** |
-| · *(2a)* | *Stage A2: MedPsy-4B unans_v2 reasoning baseline* | `medpsy-4b` | val (260) + test (140), reasoning prompt | 400 | *1.78 h* | *8.32 h + 1.78 h* | Stage 1/2 |
-| · *(2b)* | *Stage D: Qwen3-4B unans_v2 baseline + RAG* | `qwen3-4b` | val (260) + test (140), base (400) + RAG (400) | 800 | *0.19 h* | *8.32 h + 1.97 h* | Stage 2/2 |
-| **(3a)** | **Run 3: MedPsy-1.7B Validation Pilot** | `medpsy-1.7b` | val ($N=50$), C1–C5 | 250 | **1.39 h** | 11.68 h / 30.0 h | QUEUED (Gate) |
-| **(4a)** | **Run 4: MedGemma-1.5-4B-it Pilot** | `medgemma-1.5-4b-it` | val ($N=50$), C1–C5 | 250 | **0.15 h** | 11.83 h / 30.0 h | QUEUED (Gate, Web UI) |
-| **(4b)** | **Run 5: Gemma3-4B unanswerable_v2** | `gemma3-4b` | val (260) + test (140), base + RAG | 400 | **0.20 h** | 12.03 h / 30.0 h | QUEUED |
-| **(4c)** | **Run 6: MedGemma-1.5-4B-it Full Test** | `medgemma-1.5-4b-it` | test ($N=500/140$), C1–C5 | 2,140 | **1.10 h** | 13.13 h / 30.0 h | QUEUED (Web UI) |
-| **(3b)** | **Run 7: MedPsy-1.7B Full Test** | `medpsy-1.7b` | test ($N=500/140$), C1–C5 | 2,140 | **12.20 h** | 25.33 h / 30.0 h | QUEUED |
-| **Buffer** | *Reserved Contingency / Re-runs* | — | — | — | **4.67 h** | 30.00 h / 30.0 h | RESERVED |
-| *(5)* | *Run 8: Qwen3-4B-Thinking-2507* | `qwen3-4b-thinking-2507` | val pilot (2.7h) / full (23.8h) | 2,140 | ~26.5 h | Cycle 2 | Cycle 2 Window |
-| *(6)* | *Optional: Phi-4-mini, SmolLM3-3B, Qwen3-1.7B thinking* | Various | unanswerable_v2 / thinking | — | — | Extra hours | If hours remain |
+| **(2)** | **Run 2: Unified Two-Stage Push (Stage A2 + Stage D)** | `medpsy-4b`<br>`qwen3-4b` | Stage A2: unans_v2 reasoning (400)<br>Stage D: unans_v2 base+RAG (800) | 1,200 | **1.97 h** | 10.29 h / 30.0 h | **COMPLETED** |
+| · *(2a)* | *Stage A2: MedPsy-4B unans_v2 reasoning baseline* | `medpsy-4b` | val (260) + test (140), reasoning prompt | 400 | *1.78 h* | *8.32 h + 1.78 h* | COMPLETED |
+| · *(2b)* | *Stage D: Qwen3-4B unans_v2 baseline + RAG* | `qwen3-4b` | val (260) + test (140), base (400) + RAG (400) | 800 | *0.19 h* | *8.32 h + 1.97 h* | COMPLETED |
+| **(3)** | **Run 3: Qwen3-4B-Thinking-2507 MedQA Control (C1 + C2)** | `qwen3-4b-thinking-2507` | Condition 1: MedQA test base (500)<br>Condition 2: MedQA test RAG (500) | 1,000 | **7.05 h** | 24.39 h / 30.0 h | **READY TO RUN** |
+| · *(3a)* | *Condition 1: MedQA test baseline (reasoning prompt)* | `qwen3-4b-thinking-2507` | test (N=500), reasoning_baseline_prompt | 500 | *2.61 h (5.22 GPU-h)* | *10.29 h + 5.22 h* | Condition 1/2 |
+| · *(3b)* | *Condition 2: MedQA test RAG (reasoning prompt)* | `qwen3-4b-thinking-2507` | test (N=500), reasoning_rag_prompt | 500 | *4.44 h (8.88 GPU-h)* | *10.29 h + 14.10 h* | Condition 2/2 |
+| **Buffer** | *Reserved Contingency / Re-runs* | — | — | — | **5.61 h** | 30.00 h / 30.0 h | RESERVED |
+| *(4)* | *Deferred to Next Quota: Qwen3-4B-Thinking PubMedQA & unans_v2* | `qwen3-4b-thinking-2507` | PubMedQA (C3/C4) + unanswerable_v2 (C5) | 1,140 | ~4.8 h | Next Cycle | Deferred |
+| *(5)* | *MedPsy-1.7B / MedGemma-1.5-4B-it Matched Pairs* | Various | Validation pilots & full evaluations | — | — | Cycle 2 | Cycle 2 Window |
 
 ---
 
@@ -144,3 +142,102 @@ python3 scripts/verify_run.py --run qwen3_4b_unans_v2_rag
   - Unexpected IDs: 0
   - Gold label / answer mismatches: 0
 - [ ] **Overall Pass**: `python3 scripts/verify_run.py --run two_stage_push` exits with code 0.
+
+---
+
+## 4. Run 3 Checklist: Qwen3-4B-Thinking-2507 MedQA Control (Pair B Thinking Control)
+
+### Overview
+- **Objective**: Execute Condition 1 (MedQA test baseline) and Condition 2 (MedQA test full RAG) sequentially for `qwen3-4b-thinking-2507` under identical prompt, decoding, and token budget as `medpsy-4b`.
+  - **Condition 1**: MedQA test ($N=500$) baseline using native reasoning prompt (`reasoning_baseline_prompt`, 1024-token thinking cap, greedy decoding). Writes to `outputs/v3/qwen3-4b-thinking-2507/C1/qwen3-4b-thinking-2507.jsonl`.
+  - **Condition 2**: MedQA test ($N=500$) full RAG using native reasoning prompt (`reasoning_rag_prompt`, top-5 MedCPT evidence from `phase7/evidence.jsonl`, 1024-token thinking cap, greedy decoding). Writes to `outputs/v3/qwen3-4b-thinking-2507/C2/qwen3-4b-thinking-2507.jsonl`.
+- **Compute Budget**:
+  - Condition 1: 5.22 GPU-hours (500 questions @ 37.58 s/q across 2 T4 shards $\approx$ 2.61 wall hours).
+  - Condition 2: 8.88 GPU-hours (500 questions @ 63.93 s/q across 2 T4 shards $\approx$ 4.44 wall hours).
+  - **Total**: **14.10 GPU-hours** ($\approx$ **7.05 wall hours**). Leaves **5.61 h** remaining weekly quota buffer.
+- **Safety**: Incremental flush per shard/question, per-condition resumability, pre-flight frozen data SHA-256 check against `audit/frozen_hashes.json`.
+
+### Step-by-Step Execution Sequence
+
+#### [ ] 1. Check Configuration in `kaggle_runner/runner.py`
+Verify the flags:
+```python
+QWEN3_4B_THINKING_MEDQA = True
+
+# All earlier and conflicting flags must be False:
+MEDPSY_UNANS_V2_REASONING = False
+QWEN3_4B_UNANS_V2 = False
+MEDPSY_UNANS_V2_BASELINE = False
+MEDPSY_PUBMEDQA_BASELINE = False
+MEDPSY_PUBMEDQA_RAG = False
+BUILD_UNANS_V2_EVIDENCE = False
+UNANS_V2_SLM = False
+V3_RUN = False
+```
+
+#### [ ] 2. Pre-Commit Verification & Git Push
+Verify local files compile and push:
+```bash
+python3 -m py_compile kaggle_runner/runner.py scripts/verify_run.py scripts/budget.py
+
+git add kaggle_runner/runner.py scripts/verify_run.py scripts/budget.py scripts/gpu_queue.md
+git commit -m "Configure Run 3: Qwen3-4B-Thinking-2507 MedQA baseline + RAG (Pair B thinking control)"
+git push origin main
+```
+
+#### [ ] 3. Push Kernel to Kaggle
+```bash
+cd kaggle_runner && kaggle kernels push && cd ..
+```
+
+#### [ ] 4. Monitor Kernel Status
+```bash
+kaggle kernels status satyasainath1311/medrag-slm-runner
+```
+*(Wait until status transitions from "running" to "complete" — approximately 7 hr 05 min wall clock).*
+
+#### [ ] 5. Download Kernel Outputs & Audit Directory Structure
+```bash
+mkdir -p /tmp/run3_qwen3_thinking_dl
+kaggle kernels output satyasainath1311/medrag-slm-runner -p /tmp/run3_qwen3_thinking_dl
+
+# Copy canonical single-file outputs to repo destinations:
+mkdir -p outputs/v3/qwen3-4b-thinking-2507/C1
+mkdir -p outputs/v3/qwen3-4b-thinking-2507/C2
+
+cp /tmp/run3_qwen3_thinking_dl/outputs/v3/qwen3-4b-thinking-2507/C1/qwen3-4b-thinking-2507.jsonl \
+   outputs/v3/qwen3-4b-thinking-2507/C1/
+cp /tmp/run3_qwen3_thinking_dl/outputs/v3/qwen3-4b-thinking-2507/C2/qwen3-4b-thinking-2507.jsonl \
+   outputs/v3/qwen3-4b-thinking-2507/C2/
+```
+
+#### [ ] 6. Run Verification Suite
+```bash
+# Verify both conditions combined:
+python3 scripts/verify_run.py --run qwen3_4b_thinking_medqa
+
+# Or verify individually:
+python3 scripts/verify_run.py --run qwen3_4b_thinking_medqa_baseline
+python3 scripts/verify_run.py --run qwen3_4b_thinking_medqa_rag
+```
+
+#### [ ] 7. Verification Gate (Pass/Fail Criteria)
+**The gate is strictly INTEGRITY ONLY.** Truncation rate, parse rate, strict and fallback accuracy are reported in the output summary, not gated.
+
+- [ ] **Condition 1 (`C1/qwen3-4b-thinking-2507.jsonl`)**:
+  - File exists: `outputs/v3/qwen3-4b-thinking-2507/C1/qwen3-4b-thinking-2507.jsonl`
+  - Expected row count: Exactly 500 rows
+  - Duplicate IDs: 0
+  - Missing IDs: 0 against reference `outputs/kaggle_build/work/phase1/test.jsonl` (MedQA)
+  - Unexpected IDs: 0
+  - Gold answer mismatches: 0
+  - Input frozen hash verified: `outputs/kaggle_build/work/phase1/test.jsonl` matches SHA-256 `fe7fe3...`
+- [ ] **Condition 2 (`C2/qwen3-4b-thinking-2507.jsonl`)**:
+  - File exists: `outputs/v3/qwen3-4b-thinking-2507/C2/qwen3-4b-thinking-2507.jsonl`
+  - Expected row count: Exactly 500 rows
+  - Duplicate IDs: 0
+  - Missing IDs: 0 against reference `outputs/kaggle_build/work/phase1/test.jsonl` (MedQA)
+  - Unexpected IDs: 0
+  - Gold answer mismatches: 0
+- [ ] **Overall Pass**: `python3 scripts/verify_run.py --run qwen3_4b_thinking_medqa` exits with code 0.
+
