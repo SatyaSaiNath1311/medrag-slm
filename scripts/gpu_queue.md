@@ -10,17 +10,16 @@
 
 | Priority Order | Run ID & Description | Model | Split / Conditions | $N$ (Questions) | Est. Wall Hours | Quota Cumulative | Run Status |
 |:---:|---|---|---|:---:|:---:|:---:|:---:|
-| **(1)** | **Run 1: MedPsy-4B Unified Overnight Push (Stages A, B, C)** | `medpsy-4b` | Stage A: unans_v2 (400)<br>Stage B: pubmedqa_base (500)<br>Stage C: pubmedqa_rag (500) | 1,400 | **8.32 h** | 8.32 h / 30.0 h | **READY TO RUN** |
-| · *(1a)* | *Stage A: unanswerable_v2 baseline* | `medpsy-4b` | val (260) + test (140), baseline | 400 | *1.78 h* | *1.78 h* | Stage 1/3 |
-| · *(1b)* | *Stage B: PubMedQA closed-book baseline* | `medpsy-4b` | test (500), closed-book baseline | 500 | *2.10 h* | *3.88 h* | Stage 2/3 |
-| · *(1c)* | *Stage C: PubMedQA full RAG* | `medpsy-4b` | test (500), full RAG (top-5 MedCPT) | 500 | *4.44 h* | *8.32 h* | Stage 3/3 |
-| **(2)** | **Run 2: Qwen3-4B unanswerable_v2** | `qwen3-4b` | val (260) + test (140), base + RAG | 400 | **0.19 h** | 8.51 h / 30.0 h | QUEUED |
-| **(3a)** | **Run 3: MedPsy-1.7B Validation Pilot** | `medpsy-1.7b` | val ($N=50$), C1–C5 | 250 | **1.39 h** | 9.90 h / 30.0 h | QUEUED (Gate) |
-| **(4a)** | **Run 4: MedGemma-1.5-4B-it Pilot** | `medgemma-1.5-4b-it` | val ($N=50$), C1–C5 | 250 | **0.15 h** | 10.05 h / 30.0 h | QUEUED (Gate, Web UI) |
-| **(4b)** | **Run 5: Gemma3-4B unanswerable_v2** | `gemma3-4b` | val (260) + test (140), base + RAG | 400 | **0.20 h** | 10.25 h / 30.0 h | QUEUED |
-| **(4c)** | **Run 6: MedGemma-1.5-4B-it Full Test** | `medgemma-1.5-4b-it` | test ($N=500/140$), C1–C5 | 2,140 | **1.10 h** | 11.35 h / 30.0 h | QUEUED (Web UI) |
-| **(3b)** | **Run 7: MedPsy-1.7B Full Test** | `medpsy-1.7b` | test ($N=500/140$), C1–C5 | 2,140 | **12.20 h** | 23.55 h / 30.0 h | QUEUED |
-| **Buffer** | *Reserved Contingency / Re-runs* | — | — | — | **6.45 h** | 30.00 h / 30.0 h | RESERVED |
+| **(1)** | **Run 1: MedPsy-4B Unified Overnight Push (Stages A, B, C)** | `medpsy-4b` | Stage A: unans_v2 base (400)<br>Stage B: pubmedqa base (500)<br>Stage C: pubmedqa RAG (500) | 1,400 | **8.32 h** | 8.32 h / 30.0 h | **COMPLETED** |
+| **(2)** | **Run 2: Unified Two-Stage Push (Stage A2 + Stage D)** | `medpsy-4b`<br>`qwen3-4b` | Stage A2: unans_v2 reasoning (400)<br>Stage D: unans_v2 base+RAG (800) | 1,200 | **1.97 h** | 10.29 h / 30.0 h | **READY TO RUN** |
+| · *(2a)* | *Stage A2: MedPsy-4B unans_v2 reasoning baseline* | `medpsy-4b` | val (260) + test (140), reasoning prompt | 400 | *1.78 h* | *8.32 h + 1.78 h* | Stage 1/2 |
+| · *(2b)* | *Stage D: Qwen3-4B unans_v2 baseline + RAG* | `qwen3-4b` | val (260) + test (140), base (400) + RAG (400) | 800 | *0.19 h* | *8.32 h + 1.97 h* | Stage 2/2 |
+| **(3a)** | **Run 3: MedPsy-1.7B Validation Pilot** | `medpsy-1.7b` | val ($N=50$), C1–C5 | 250 | **1.39 h** | 11.68 h / 30.0 h | QUEUED (Gate) |
+| **(4a)** | **Run 4: MedGemma-1.5-4B-it Pilot** | `medgemma-1.5-4b-it` | val ($N=50$), C1–C5 | 250 | **0.15 h** | 11.83 h / 30.0 h | QUEUED (Gate, Web UI) |
+| **(4b)** | **Run 5: Gemma3-4B unanswerable_v2** | `gemma3-4b` | val (260) + test (140), base + RAG | 400 | **0.20 h** | 12.03 h / 30.0 h | QUEUED |
+| **(4c)** | **Run 6: MedGemma-1.5-4B-it Full Test** | `medgemma-1.5-4b-it` | test ($N=500/140$), C1–C5 | 2,140 | **1.10 h** | 13.13 h / 30.0 h | QUEUED (Web UI) |
+| **(3b)** | **Run 7: MedPsy-1.7B Full Test** | `medpsy-1.7b` | test ($N=500/140$), C1–C5 | 2,140 | **12.20 h** | 25.33 h / 30.0 h | QUEUED |
+| **Buffer** | *Reserved Contingency / Re-runs* | — | — | — | **4.67 h** | 30.00 h / 30.0 h | RESERVED |
 | *(5)* | *Run 8: Qwen3-4B-Thinking-2507* | `qwen3-4b-thinking-2507` | val pilot (2.7h) / full (23.8h) | 2,140 | ~26.5 h | Cycle 2 | Cycle 2 Window |
 | *(6)* | *Optional: Phi-4-mini, SmolLM3-3B, Qwen3-1.7B thinking* | Various | unanswerable_v2 / thinking | — | — | Extra hours | If hours remain |
 
@@ -36,45 +35,43 @@
 
 ---
 
-## 3. Run 1 Checklist: MedPsy-4B Unified Overnight Push (Stages A, B, C)
+## 3. Run 2 Checklist: Unified Two-Stage Push (Stage A2 + Stage D)
 
 ### Overview
-- **Objective**: Execute all three critical MedPsy-4B benchmark stages in a single sequential overnight run:
-  - **Stage A**: `unanswerable_v2` baseline (Phase 5 standard prompt via `src.llm.baseline_prompt`, 400 questions: 260 val + 140 test).
-  - **Stage B**: `pubmedqa` closed-book baseline (test split, 500 questions).
-  - **Stage C**: `pubmedqa` full RAG (test split, top-5 MedCPT evidence, 500 questions).
-- **Model**: `medpsy-4b` (`qvac/MedPsy-4B`, float16, dual-GPU 2-shard execution).
+- **Objective**: Execute Stage A2 (MedPsy-4B unanswerable_v2 reasoning baseline rerun) and Stage D (Qwen3-4B unanswerable_v2 baseline + RAG) sequentially in a single kernel push:
+  - **Stage A2**: `medpsy-4b` on `unanswerable_v2`, baseline (N=400: 260 val + 140 test) using the native **reasoning prompt** (`reasoning_baseline_prompt`, `standard_prompt=False`, `<think>...</think>`, ending with `Answer: <LETTER>`). Writes to `outputs/kaggle_qa/unans_v2/medpsy-4b/baseline_reasoning_medpsy-4b.jsonl`.
+  - **Stage D**: `qwen3-4b` on `unanswerable_v2`, baseline AND full RAG (N=400 each, 800 total evaluations) using `UNANS_V2_SLM` mode (identical configuration and evidence to `qwen3-1.7b`). Writes to `outputs/kaggle_qa/unans_v2/qwen3-4b/baseline_qwen3-4b.jsonl` and `rag_qwen3-4b.jsonl`.
 - **Execution Budget**:
-  - Stage A: 1.78 h
-  - Stage B: 2.10 h
-  - Stage C: 4.44 h
-  - **Total**: 8.32 h (Fits within 10.0 h Kaggle kernel limit and leaves 21.68 h weekly quota).
-- **Safety**: Incremental per-shard flush, per-stage idempotency/resumability, pre-flight frozen data SHA-256 check.
+  - Stage A2: 1.78 h (400 questions @ 32.0 s/q across 2 T4 shards)
+  - Stage D: 0.19 h (baseline 92 s + RAG 588 s = 680 s ~ 11.3 min)
+  - **Total**: **1.97 h** (Leaves ~19.71 h weekly quota).
+- **Safety**: Incremental flush per question/shard, per-stage resumability, pre-flight frozen data SHA-256 check.
 
 ### Step-by-Step Execution Sequence
 
 #### [ ] 1. Check Configuration in `kaggle_runner/runner.py`
 Verify the flags:
 ```python
-MODELS = ["medpsy-4b"]
-TINY = False
-CHECK_ONLY = False
-MEDPSY_UNANS_V2_BASELINE = True
-MEDPSY_PUBMEDQA_BASELINE = True
-MEDPSY_PUBMEDQA_RAG = True
+MEDPSY_UNANS_V2_REASONING = True
+QWEN3_4B_UNANS_V2 = True
+UNANS_MODEL = "qwen3-4b"
+
+# All earlier and conflicting flags must be False:
+MEDPSY_UNANS_V2_BASELINE = False
+MEDPSY_PUBMEDQA_BASELINE = False
+MEDPSY_PUBMEDQA_RAG = False
+BUILD_UNANS_V2_EVIDENCE = False
+UNANS_V2_SLM = False
+V3_RUN = False
 ```
-All other modes (`BUILD_UNANS_V2_EVIDENCE`, `UNANS_V2_SLM`, `V3_RUN`) must be `False`.
 
 #### [ ] 2. Pre-Commit Verification & Git Push
-Verify local frozen hashes and test suites before pushing:
+Verify local files compile and push:
 ```bash
-shasum -a 256 data/unanswerable_v2/val.jsonl > data/unanswerable_v2/val.sha256
-python3 audit/make_frozen_hashes.py
-python3 -m unittest tests/test_unanswerable_v2.py
-python3 audit/final_leakage_audit.py
+python3 -m py_compile kaggle_runner/runner.py scripts/verify_run.py
 
-git add kaggle_runner/runner.py src/ scripts/ audit/ data/unanswerable_v2/val.sha256
-git commit -m "Configure Run 1: MedPsy-4B 3-stage unified overnight push (Stages A, B, C)"
+git add kaggle_runner/runner.py scripts/verify_run.py scripts/gpu_queue.md
+git commit -m "Configure Run 2: Two-stage push (Stage A2 MedPsy-4B reasoning + Stage D Qwen3-4B base+RAG)"
 git push origin main
 ```
 
@@ -87,75 +84,63 @@ cd kaggle_runner && kaggle kernels push && cd ..
 ```bash
 kaggle kernels status satyasainath1311/medrag-slm-runner
 ```
-*(Wait until status transitions from "running" to "complete" — approximately 8 hr 20 min).*
+*(Wait until status transitions from "running" to "complete" — approximately 1 hr 58 min).*
 
 #### [ ] 5. Download Kernel Outputs & Audit Directory Structure
 ```bash
-mkdir -p /tmp/medpsy_overnight_dl
-kaggle kernels output satyasainath1311/medrag-slm-runner -p /tmp/medpsy_overnight_dl
+mkdir -p /tmp/run2_twostage_dl
+kaggle kernels output satyasainath1311/medrag-slm-runner -p /tmp/run2_twostage_dl
 
 # Audit downloaded structure:
-ls -R /tmp/medpsy_overnight_dl/outputs/kaggle_qa/
+ls -R /tmp/run2_twostage_dl/outputs/kaggle_qa/unans_v2/
 
 # Copy canonical single-file outputs to repo destinations:
 mkdir -p outputs/kaggle_qa/unans_v2/medpsy-4b
-mkdir -p outputs/kaggle_qa/medpsy_pubmedqa_baseline
-mkdir -p outputs/kaggle_qa/medpsy_pubmedqa_rag
+mkdir -p outputs/kaggle_qa/unans_v2/qwen3-4b
 
-cp /tmp/medpsy_overnight_dl/outputs/kaggle_qa/unans_v2/medpsy-4b/baseline_medpsy-4b.jsonl \
+cp /tmp/run2_twostage_dl/outputs/kaggle_qa/unans_v2/medpsy-4b/baseline_reasoning_medpsy-4b.jsonl \
    outputs/kaggle_qa/unans_v2/medpsy-4b/
-cp /tmp/medpsy_overnight_dl/outputs/kaggle_qa/medpsy_pubmedqa_baseline/medpsy-4b_pubmedqa_baseline.jsonl \
-   outputs/kaggle_qa/medpsy_pubmedqa_baseline/
-cp /tmp/medpsy_overnight_dl/outputs/kaggle_qa/medpsy_pubmedqa_rag/medpsy-4b_pubmedqa_rag.jsonl \
-   outputs/kaggle_qa/medpsy_pubmedqa_rag/
+cp /tmp/run2_twostage_dl/outputs/kaggle_qa/unans_v2/qwen3-4b/baseline_qwen3-4b.jsonl \
+   outputs/kaggle_qa/unans_v2/qwen3-4b/
+cp /tmp/run2_twostage_dl/outputs/kaggle_qa/unans_v2/qwen3-4b/rag_qwen3-4b.jsonl \
+   outputs/kaggle_qa/unans_v2/qwen3-4b/
 ```
 
 #### [ ] 6. Run Stage Verification Suite
 ```bash
-# Verify individual stages:
-python3 scripts/verify_run.py --run medpsy_unans_v2_baseline
-python3 scripts/verify_run.py --run medpsy_pubmedqa_baseline
-python3 scripts/verify_run.py --run medpsy_pubmedqa_rag
+# Verify all outputs from Run 2 together:
+python3 scripts/verify_run.py --run two_stage_push
 
-# Or run combined suite:
-python3 scripts/verify_run.py --run all_stages
+# Or verify individually:
+python3 scripts/verify_run.py --run medpsy_unans_v2_reasoning
+python3 scripts/verify_run.py --run qwen3_4b_unans_v2_baseline
+python3 scripts/verify_run.py --run qwen3_4b_unans_v2_rag
 ```
 
 #### [ ] 7. Verification Gate (Pass/Fail Criteria)
-**The gate is strictly INTEGRITY ONLY.** Truncation rate, parse rate, strict and fallback accuracy are reported in the output summary, not gated. The parse rate criterion (previously $\ge 90\%$) is completely removed.
+**The gate is strictly INTEGRITY ONLY.** Truncation rate, parse rate, strict and fallback accuracy are reported in the output summary, not gated.
 
-- [ ] **Stage A (`baseline_medpsy-4b.jsonl`)**:
-  - File exists: `outputs/kaggle_qa/unans_v2/medpsy-4b/baseline_medpsy-4b.jsonl`
+- [ ] **Stage A2 (`baseline_reasoning_medpsy-4b.jsonl`)**:
+  - File exists: `outputs/kaggle_qa/unans_v2/medpsy-4b/baseline_reasoning_medpsy-4b.jsonl`
+  - Committed standard-prompt baseline `baseline_medpsy-4b.jsonl` was NOT overwritten
   - Expected row count: Exactly 400 rows (260 validation, 140 test)
   - Duplicate IDs: 0
   - Missing IDs: 0 against reference `data/unanswerable_v2/{val,test}.jsonl`
   - Unexpected IDs: 0
   - Gold label / answer mismatches: 0
   - Input frozen hash verified: `data/unanswerable_v2/test.jsonl` and `val.jsonl` match canonical SHA-256
-- [ ] **Stage B (`medpsy-4b_pubmedqa_baseline.jsonl`)**:
-  - File exists: `outputs/kaggle_qa/medpsy_pubmedqa_baseline/medpsy-4b_pubmedqa_baseline.jsonl`
-  - Expected row count: Exactly 500 rows
+- [ ] **Stage D Baseline (`baseline_qwen3-4b.jsonl`)**:
+  - File exists: `outputs/kaggle_qa/unans_v2/qwen3-4b/baseline_qwen3-4b.jsonl`
+  - Expected row count: Exactly 400 rows (260 validation, 140 test)
   - Duplicate IDs: 0
-  - Missing IDs: 0 against `outputs/kaggle_build/work/phase1/test.jsonl`
+  - Missing IDs: 0 against reference `data/unanswerable_v2/{val,test}.jsonl`
   - Unexpected IDs: 0
   - Gold label / answer mismatches: 0
-  - Input frozen hash verified: PubMedQA test matches `fe7fe3...`
-- [ ] **Stage C (`medpsy-4b_pubmedqa_rag.jsonl`)**:
-  - File exists: `outputs/kaggle_qa/medpsy_pubmedqa_rag/medpsy-4b_pubmedqa_rag.jsonl`
-  - Expected row count: Exactly 500 rows
+- [ ] **Stage D RAG (`rag_qwen3-4b.jsonl`)**:
+  - File exists: `outputs/kaggle_qa/unans_v2/qwen3-4b/rag_qwen3-4b.jsonl`
+  - Expected row count: Exactly 400 rows (260 validation, 140 test)
   - Duplicate IDs: 0
-  - Missing IDs: 0 against `outputs/kaggle_build/work/phase1/test.jsonl`
+  - Missing IDs: 0 against reference `data/unanswerable_v2/{val,test}.jsonl`
   - Unexpected IDs: 0
   - Gold label / answer mismatches: 0
-  - Input frozen hash verified: PubMedQA test matches `fe7fe3...`
-- [ ] **Overall Pass**: `python3 scripts/verify_run.py --run all_stages` exits with code 0.
-
----
-
-## 4. Next Runs in Schedule Override (Cycle 1 Remaining Quota: 21.68 h)
-
-- **Run 2**: `qwen3-4b` unanswerable_v2 (400 questions, ~0.19 h)
-- **Run 3**: `medpsy-1.7b` Validation Pilot ($N=50$, C1–C5, ~1.39 h)
-- **Run 4**: `medgemma-1.5-4b-it` Validation Pilot ($N=50$, C1–C5, ~0.15 h) + Gemma3-4B v2 (~0.20 h)
-- **Run 6**: `medgemma-1.5-4b-it` Full Test (2,140 questions, ~1.10 h)
-- **Run 7**: `medpsy-1.7b` Full Test (2,140 questions, ~12.20 h)
+- [ ] **Overall Pass**: `python3 scripts/verify_run.py --run two_stage_push` exits with code 0.

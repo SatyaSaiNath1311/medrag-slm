@@ -64,10 +64,14 @@ SC_NUM_SHARDS = 2
 # Set EXACTLY ONE of the following modes to True before running/pushing with `kaggle kernels push`:
 BUILD_UNANS_V2_EVIDENCE = False # Task 4 Pre-Pass: produce hybrid retrieval & rerank on unanswerable_v2
 UNANS_V2_SLM = False            # Task 4: run 5 SLMs baseline + RAG on unanswerable_v2 (val + test)
-UNANS_MODEL = "qwen3-1.7b"       # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
-MEDPSY_UNANS_V2_BASELINE = True  # Stage A: medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (2-GPU shards)
-MEDPSY_PUBMEDQA_BASELINE = True  # Stage B: medpsy-4b closed-book baseline on PubMedQA test (500), 2-GPU shards
-MEDPSY_PUBMEDQA_RAG = True       # Stage C: medpsy-4b RAG on PubMedQA test (500), 2-GPU shards
+UNANS_MODEL = "qwen3-4b"         # Target SLM: 'qwen3-1.7b', 'phi4-mini', 'smollm3-3b', 'qwen3-4b', 'gemma3-4b'
+MEDPSY_UNANS_V2_BASELINE = False # Stage A: medpsy-4b on unanswerable_v2 with Phase 5 baseline prompt (COMPLETED & COMMITTED)
+MEDPSY_PUBMEDQA_BASELINE = False # Stage B: medpsy-4b closed-book baseline on PubMedQA test (COMPLETED & COMMITTED)
+MEDPSY_PUBMEDQA_RAG = False      # Stage C: medpsy-4b RAG on PubMedQA test (COMPLETED & COMMITTED)
+
+# Unified 2-Stage Push: Stage A2 (MedPsy-4B reasoning prompt) + Stage D (Qwen3-4B baseline + RAG)
+MEDPSY_UNANS_V2_REASONING = True # Stage A2: medpsy-4b unans_v2 baseline with native reasoning prompt (standard_prompt=False, 2-GPU shards)
+QWEN3_4B_UNANS_V2 = True         # Stage D: qwen3-4b on unanswerable_v2 baseline + RAG (val + test)
 
 # ── V3 Generic-vs-Medical Matched-Pair Experiment ─────────────────────────────
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
@@ -100,10 +104,16 @@ for flag, val in [
     if flag in os.environ:
         locals()[val] = os.environ[flag].lower() in ("1", "true", "yes")
 
-# Check for unified MedPsy 3-stage overnight push
+# Check for unified MedPsy 3-stage overnight push (historical completed run)
 _is_medpsy_overnight = (
     MEDPSY_UNANS_V2_BASELINE and MEDPSY_PUBMEDQA_BASELINE and MEDPSY_PUBMEDQA_RAG
-    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY)
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY or MEDPSY_UNANS_V2_REASONING or QWEN3_4B_UNANS_V2)
+)
+
+# Check for unified 2-stage push: Stage A2 (MedPsy-4B reasoning baseline) + Stage D (Qwen3-4B base+RAG)
+_is_two_stage_push = (
+    MEDPSY_UNANS_V2_REASONING and QWEN3_4B_UNANS_V2
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or V3_RUN or V3_TRUNC_SENSITIVITY)
 )
 
 # Mutual exclusivity guard for specialized modes vs base/legacy runner flags
@@ -114,11 +124,13 @@ _active_special_modes = [
         ("MEDPSY_UNANS_V2_BASELINE", MEDPSY_UNANS_V2_BASELINE),
         ("MEDPSY_PUBMEDQA_BASELINE", MEDPSY_PUBMEDQA_BASELINE),
         ("MEDPSY_PUBMEDQA_RAG", MEDPSY_PUBMEDQA_RAG),
+        ("MEDPSY_UNANS_V2_REASONING", MEDPSY_UNANS_V2_REASONING),
+        ("QWEN3_4B_UNANS_V2", QWEN3_4B_UNANS_V2),
         ("V3_RUN", V3_RUN),
         ("V3_TRUNC_SENSITIVITY", V3_TRUNC_SENSITIVITY),
     ] if v
 ]
-if not _is_medpsy_overnight and len(_active_special_modes) > 1:
+if not (_is_medpsy_overnight or _is_two_stage_push) and len(_active_special_modes) > 1:
     sys.exit(f"ERROR: Mutually exclusive runner modes enabled: {_active_special_modes}. Enable only one before pushing.")
 
 if _active_special_modes:
@@ -258,6 +270,8 @@ if SC_SHARD is None:
         print("BUILD_UNANS_V2_EVIDENCE mode enabled: producing hybrid retrieval (Phase 6) and reranking (Phase 7) on unanswerable_v2")
     if UNANS_V2_SLM:
         print(f"UNANS_V2_SLM mode enabled: model={UNANS_MODEL} baseline+RAG on unanswerable_v2 (val+test)")
+    if _is_two_stage_push:
+        print("TWO_STAGE_UNANS_PUSH mode enabled: Stage A2 (medpsy-4b reasoning baseline) + Stage D (qwen3-4b baseline+RAG)")
     if _is_medpsy_overnight:
         print("MEDPSY_OVERNIGHT mode enabled: medpsy-4b unified 3-stage push (Stage A: unans_v2 baseline, Stage B: PubMedQA baseline, Stage C: PubMedQA RAG)")
     else:
@@ -1425,6 +1439,327 @@ if UNANS_V2_SLM:
         subprocess.run(["du", "-sh", "/kaggle/working"], check=False)
 
     print(f"\n=== UNANS_V2_SLM COMPLETE for {target_model} ===\n", flush=True)
+    sys.exit(0)
+
+
+def compute_stage_summary_metrics(rows, is_unans=False):
+    n = len(rows)
+    trunc = sum(1 for r in rows if r.get("truncated"))
+    trunc_rate = (trunc / n * 100) if n else 0.0
+    parsed = sum(1 for r in rows if r.get("parsed", True))
+    parse_rate = (parsed / n * 100) if n else 0.0
+
+    if is_unans:
+        controls = [r for r in rows if not r.get("should_abstain")]
+        n_eval = len(controls)
+        strict_correct = sum(1 for r in controls if (not r.get("truncated")) and r.get("parsed") and r.get("correct"))
+        fallback_correct = sum(1 for r in controls if r.get("correct"))
+    else:
+        n_eval = n
+        strict_correct = sum(1 for r in rows if (not r.get("truncated")) and r.get("parsed") and r.get("correct"))
+        fallback_correct = sum(1 for r in rows if r.get("correct"))
+
+    strict_acc = (strict_correct / n_eval) if n_eval else 0.0
+    fallback_acc = (fallback_correct / n_eval) if n_eval else 0.0
+
+    secs = [r["seconds"] for r in rows if r.get("seconds") is not None]
+    s_per_q = (sum(secs) / len(secs)) if secs else 0.0
+
+    return {
+        "rows": n,
+        "n_eval": n_eval,
+        "strict_acc": strict_acc,
+        "fallback_acc": fallback_acc,
+        "trunc_rate": trunc_rate,
+        "trunc_count": trunc,
+        "parse_rate": parse_rate,
+        "parsed_count": parsed,
+        "s_per_q": s_per_q,
+    }
+
+
+# ── TWO-STAGE UNIFIED PUSH (Stage A2 + Stage D) ──────────────────────────────
+if _is_two_stage_push:
+    import glob
+    import json
+    import math
+    import shutil
+    import subprocess
+    import threading
+
+    NUM_SHARDS = 2
+    print("\n" + "=" * 80, flush=True)
+    print("=== TWO-STAGE UNIFIED PUSH: SEQUENTIAL EXECUTION ===", flush=True)
+    print("  Stage A2: medpsy-4b on unanswerable_v2 baseline (reasoning prompt, val+test, N=400)", flush=True)
+    print("  Stage D : qwen3-4b on unanswerable_v2 (baseline + RAG, val+test, N=400 each)", flush=True)
+    print("=" * 80 + "\n", flush=True)
+
+    # Pre-Flight Frozen Data Audit (Mandatory Check)
+    val_src, test_src, p1_test_src = verify_frozen_hashes_before_run(CODE_DIR, WORK)
+
+    stage_summaries = {}
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE A2: medpsy-4b on unanswerable_v2 baseline (REASONING prompt, val+test, N=400)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING STAGE A2: medpsy-4b unanswerable_v2 baseline (reasoning prompt, N=400)", flush=True)
+    print("=" * 80, flush=True)
+
+    stage_a2_dir = "/kaggle/working/outputs/kaggle_qa/unans_v2/medpsy-4b" if os.path.exists("/kaggle/working") else "outputs/kaggle_qa/unans_v2/medpsy-4b"
+    os.makedirs(stage_a2_dir, exist_ok=True)
+    stage_a2_final = os.path.join(stage_a2_dir, "baseline_reasoning_medpsy-4b.jsonl")
+
+    v2_work_a2 = os.path.join(WORK, "work_unans_v2_medpsy")
+    os.makedirs(v2_work_a2, exist_ok=True)
+    v2_p1_a2 = os.path.join(v2_work_a2, "phase1")
+    os.makedirs(v2_p1_a2, exist_ok=True)
+    shutil.copyfile(val_src, os.path.join(v2_p1_a2, "validation.jsonl"))
+    shutil.copyfile(test_src, os.path.join(v2_p1_a2, "test.jsonl"))
+
+    stage_a2_done = False
+    if os.path.exists(stage_a2_final):
+        try:
+            with open(stage_a2_final) as fh:
+                existing_a2 = [json.loads(l) for l in fh if l.strip()]
+            if len(existing_a2) == 400:
+                print(f"[RESUME] Stage A2 already completed ({len(existing_a2)} rows in {stage_a2_final}). Skipping.", flush=True)
+                stage_a2_rows = existing_a2
+                stage_a2_done = True
+        except Exception:
+            pass
+
+    if not stage_a2_done:
+        un_errors = {}
+        def run_un_base_shard_a2(shard_idx):
+            env = {"CUDA_VISIBLE_DEVICES": str(shard_idx)}
+            try:
+                cmd = build_qa_cmd(
+                    models_list=["medpsy-4b"],
+                    modes_list=["baseline"],
+                    split="all_needed",
+                    work_dir=v2_work_a2,
+                    skip_format_check=True,
+                    shard=shard_idx,
+                    num_shards=NUM_SHARDS,
+                    standard_prompt=False,  # Native reasoning prompt (<think>...</think> + Answer: <LETTER>)
+                )
+                print(f"\n[Stage A2 - Shard {shard_idx}] Starting MedPsy unans_v2 reasoning baseline on GPU {shard_idx}...", flush=True)
+                run(cmd, extra_env=env)
+            except Exception as exc:
+                un_errors[shard_idx] = str(exc)
+
+        threads = [threading.Thread(target=run_un_base_shard_a2, args=(i,), name=f"stage-a2-shard-{i}") for i in range(NUM_SHARDS)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        if un_errors:
+            print("\nFATAL ERROR in Stage A2 shard execution:", un_errors, flush=True)
+            sys.exit(1)
+
+        print("\n=== MERGING STAGE A2 SHARDS ===", flush=True)
+        p5_dir_a2 = os.path.join(v2_work_a2, "phase5")
+        stage_a2_rows = []
+        seen_ids = set()
+        for sid in range(NUM_SHARDS):
+            sp = os.path.join(p5_dir_a2, f"medpsy-4b_shard{sid}.jsonl")
+            if os.path.exists(sp):
+                with open(sp) as fh:
+                    for l in fh:
+                        if l.strip():
+                            r = json.loads(l)
+                            if r["id"] not in seen_ids:
+                                stage_a2_rows.append(r)
+                                seen_ids.add(r["id"])
+
+        # Write to distinct file without touching baseline_medpsy-4b.jsonl
+        with open(stage_a2_final, "w", encoding="utf-8") as fh:
+            for r in stage_a2_rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+            fh.flush()
+        print(f"  Stage A2 output saved ({len(stage_a2_rows)} rows) -> {stage_a2_final}", flush=True)
+
+    val_cnt_a2 = sum(1 for r in stage_a2_rows if r.get("split") == "validation")
+    test_cnt_a2 = sum(1 for r in stage_a2_rows if r.get("split") == "test")
+    m_a2 = compute_stage_summary_metrics(stage_a2_rows, is_unans=True)
+    summary_a2_line = (
+        f"rows={m_a2['rows']} (val={val_cnt_a2}, test={test_cnt_a2}) | "
+        f"strict_acc={m_a2['strict_acc']:.4f} (ctrl) | "
+        f"fallback_acc={m_a2['fallback_acc']:.4f} (ctrl) | "
+        f"trunc_rate={m_a2['trunc_rate']:.1f}% ({m_a2['trunc_count']}/{m_a2['rows']}) | "
+        f"parse_rate={m_a2['parse_rate']:.1f}% ({m_a2['parsed_count']}/{m_a2['rows']}) | "
+        f"{m_a2['s_per_q']:.2f} s/q"
+    )
+    stage_summaries["Stage A2 (MedPsy-4B reasoning baseline)"] = summary_a2_line
+    print(f"\n[STAGE A2 SUMMARY] {summary_a2_line}", flush=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STAGE D: qwen3-4b on unanswerable_v2 (baseline AND rag, val+test, N=400 each)
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 80, flush=True)
+    print(">>> STARTING STAGE D: qwen3-4b on unanswerable_v2 (baseline + RAG, N=400 each)", flush=True)
+    print("=" * 80, flush=True)
+
+    target_model_d = "qwen3-4b"
+    stage_d_dir = f"/kaggle/working/outputs/kaggle_qa/unans_v2/{target_model_d}" if os.path.exists("/kaggle/working") else f"outputs/kaggle_qa/unans_v2/{target_model_d}"
+    os.makedirs(stage_d_dir, exist_ok=True)
+    stage_d_base_final = os.path.join(stage_d_dir, f"baseline_{target_model_d}.jsonl")
+    stage_d_rag_final = os.path.join(stage_d_dir, f"rag_{target_model_d}.jsonl")
+
+    v2_work_d = os.path.join(WORK, "work_unans_v2_qwen3_4b")
+    os.makedirs(v2_work_d, exist_ok=True)
+    v2_p1_d = os.path.join(v2_work_d, "phase1")
+    os.makedirs(v2_p1_d, exist_ok=True)
+    shutil.copyfile(val_src, os.path.join(v2_p1_d, "validation.jsonl"))
+    shutil.copyfile(test_src, os.path.join(v2_p1_d, "test.jsonl"))
+
+    for n in (2, 3):
+        src_dir = os.path.join(WORK, f"phase{n}")
+        dst = os.path.join(v2_work_d, f"phase{n}")
+        if os.path.isdir(src_dir) and not os.path.exists(dst):
+            os.symlink(src_dir, dst)
+
+    v2_ev_d = os.path.join(v2_work_d, "phase7", "evidence.jsonl")
+    if not os.path.exists(v2_ev_d):
+        _src_ev = None
+        _src_label = None
+        _t1 = "/kaggle/input/medrag-unans-v2-evidence/evidence.jsonl"
+        if os.path.exists(_t1):
+            _src_ev, _src_label = _t1, "canonical"
+        if _src_ev is None:
+            _t2_hits = glob.glob("/kaggle/input/**/medrag-unans-v2-evidence/evidence.jsonl", recursive=True)
+            if _t2_hits:
+                _src_ev, _src_label = _t2_hits[0], "glob-slug"
+        if _src_ev is None:
+            _t3_hits = [p for p in glob.glob("/kaggle/input/**/evidence.jsonl", recursive=True) if "unans-v2" in p]
+            if _t3_hits:
+                _src_ev, _src_label = _t3_hits[0], f"glob-filtered ({_t3_hits[0]})"
+        if _src_ev is None:
+            _local_cands = [
+                "outputs/kaggle_build/unans_v2/evidence.jsonl",
+                os.path.join(WORK, "work_unans_v2", "phase7", "evidence.jsonl"),
+            ]
+            for lc in _local_cands:
+                if os.path.exists(lc):
+                    _src_ev, _src_label = lc, "local-fallback"
+                    break
+        if _src_ev is None:
+            sys.exit(
+                "\n" + "=" * 80 + "\n"
+                "ERROR [STAGE D]: Pre-computed evidence file not found for unanswerable_v2.\n"
+                "Searched /kaggle/input/medrag-unans-v2-evidence/evidence.jsonl and local paths.\n"
+                + "=" * 80 + "\n"
+            )
+
+        os.makedirs(os.path.join(v2_work_d, "phase7"), exist_ok=True)
+        shutil.copyfile(_src_ev, v2_ev_d)
+        print(f"Copied pre-computed evidence [{_src_label}]: {_src_ev} -> {v2_ev_d}", flush=True)
+
+    with open(v2_ev_d, "r", encoding="utf-8") as _ev_fh:
+        _ev_rows = [json.loads(_l) for _l in _ev_fh if _l.strip()]
+    _ev_ids = [r.get("id") for r in _ev_rows]
+    _ev_val = sum(1 for i in _ev_ids if i and "val" in str(i))
+    _ev_test = sum(1 for i in _ev_ids if i and "test" in str(i))
+    assert len(_ev_rows) == 400 and _ev_val == 260 and _ev_test == 140, (
+        f"ERROR: evidence.jsonl row mismatch: total={len(_ev_rows)}, val={_ev_val}, test={_ev_test}"
+    )
+    print(f"Evidence integrity OK: 400 rows (val=260, test=140), 5 passages each.", flush=True)
+
+    stage_d_done = False
+    if os.path.exists(stage_d_base_final) and os.path.exists(stage_d_rag_final):
+        try:
+            with open(stage_d_base_final) as fh_b, open(stage_d_rag_final) as fh_r:
+                existing_d_b = [json.loads(l) for l in fh_b if l.strip()]
+                existing_d_r = [json.loads(l) for l in fh_r if l.strip()]
+            if len(existing_d_b) == 400 and len(existing_d_r) == 400:
+                print(f"[RESUME] Stage D already completed (400 baseline, 400 RAG rows). Skipping.", flush=True)
+                stage_d_base_rows = existing_d_b
+                stage_d_rag_rows = existing_d_r
+                stage_d_done = True
+        except Exception:
+            pass
+
+    if not stage_d_done:
+        qa_cmd_d = build_qa_cmd(
+            models_list=[target_model_d],
+            modes_list=["baseline", "rag"],
+            split="all_needed",
+            work_dir=v2_work_d,
+            skip_format_check=True,
+            standard_prompt=False,
+        )
+        print(f"\n--- Running QA pipeline for {target_model_d} on unanswerable_v2 (baseline + RAG) ---", flush=True)
+        run(qa_cmd_d)
+
+        p5_src_d = os.path.join(v2_work_d, "phase5", f"{target_model_d}.jsonl")
+        p8_src_d = os.path.join(v2_work_d, "phase8", f"{target_model_d}.jsonl")
+        assert os.path.exists(p5_src_d), f"Stage D baseline output missing at {p5_src_d}"
+        assert os.path.exists(p8_src_d), f"Stage D RAG output missing at {p8_src_d}"
+
+        shutil.copyfile(p5_src_d, stage_d_base_final)
+        shutil.copyfile(p8_src_d, stage_d_rag_final)
+        print(f"Saved baseline output -> {stage_d_base_final}", flush=True)
+        print(f"Saved RAG output -> {stage_d_rag_final}", flush=True)
+
+        with open(stage_d_base_final) as fh_b, open(stage_d_rag_final) as fh_r:
+            stage_d_base_rows = [json.loads(l) for l in fh_b if l.strip()]
+            stage_d_rag_rows = [json.loads(l) for l in fh_r if l.strip()]
+
+    m_d_base = compute_stage_summary_metrics(stage_d_base_rows, is_unans=True)
+    m_d_rag = compute_stage_summary_metrics(stage_d_rag_rows, is_unans=True)
+
+    summary_d_base_line = (
+        f"rows={m_d_base['rows']} (val=260, test=140) | "
+        f"strict_acc={m_d_base['strict_acc']:.4f} (ctrl) | "
+        f"fallback_acc={m_d_base['fallback_acc']:.4f} (ctrl) | "
+        f"trunc_rate={m_d_base['trunc_rate']:.1f}% ({m_d_base['trunc_count']}/{m_d_base['rows']}) | "
+        f"parse_rate={m_d_base['parse_rate']:.1f}% ({m_d_base['parsed_count']}/{m_d_base['rows']}) | "
+        f"{m_d_base['s_per_q']:.2f} s/q"
+    )
+    summary_d_rag_line = (
+        f"rows={m_d_rag['rows']} (val=260, test=140) | "
+        f"strict_acc={m_d_rag['strict_acc']:.4f} (ctrl) | "
+        f"fallback_acc={m_d_rag['fallback_acc']:.4f} (ctrl) | "
+        f"trunc_rate={m_d_rag['trunc_rate']:.1f}% ({m_d_rag['trunc_count']}/{m_d_rag['rows']}) | "
+        f"parse_rate={m_d_rag['parse_rate']:.1f}% ({m_d_rag['parsed_count']}/{m_d_rag['rows']}) | "
+        f"{m_d_rag['s_per_q']:.2f} s/q"
+    )
+
+    stage_summaries["Stage D (Qwen3-4B Baseline)"] = summary_d_base_line
+    stage_summaries["Stage D (Qwen3-4B RAG)"] = summary_d_rag_line
+
+    print(f"\n[STAGE D (BASELINE) SUMMARY] {summary_d_base_line}", flush=True)
+    print(f"[STAGE D (RAG) SUMMARY]      {summary_d_rag_line}", flush=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # FINAL COMBINED SUMMARY ACROSS ALL STAGES
+    # ══════════════════════════════════════════════════════════════════════════
+    print("\n" + "=" * 96, flush=True)
+    print("=== TWO-STAGE UNIFIED PUSH (STAGE A2 & STAGE D): FINAL COMBINED SUMMARY ===", flush=True)
+    print("=" * 96, flush=True)
+    print(f"{'Stage':<42} {'Rows':<8} {'Strict Acc (ctrl)':<18} {'Fallback Acc (ctrl)':<20} {'Trunc Rate':<12} {'Parse Rate':<12} {'Speed':<10}", flush=True)
+    print("-" * 96, flush=True)
+    for stg_label, metrics_obj in [
+        ("Stage A2: MedPsy-4B unans_v2 (Reasoning)", m_a2),
+        ("Stage D : Qwen3-4B unans_v2 Baseline", m_d_base),
+        ("Stage D : Qwen3-4B unans_v2 RAG", m_d_rag),
+    ]:
+        strict_str = f"{metrics_obj['strict_acc']:.4f}"
+        fb_str = f"{metrics_obj['fallback_acc']:.4f}"
+        trunc_str = f"{metrics_obj['trunc_rate']:.1f}%"
+        parse_str = f"{metrics_obj['parse_rate']:.1f}%"
+        sq_str = f"{metrics_obj['s_per_q']:.2f} s/q"
+        print(f"{stg_label:<42} {metrics_obj['rows']:<8} {strict_str:<18} {fb_str:<20} {trunc_str:<12} {parse_str:<12} {sq_str:<10}", flush=True)
+    print("=" * 96, flush=True)
+    total_q = m_a2['rows'] + m_d_base['rows'] + m_d_rag['rows']
+    print(f"Total Questions Evaluated : {total_q} (400 Stage A2 + 400 Stage D Base + 400 Stage D RAG)", flush=True)
+    print("All outputs safely committed to outputs/kaggle_qa/unans_v2/.", flush=True)
+    print("=" * 96 + "\n", flush=True)
+
+    # Post-run cleanup (caches only, after all stages finish successfully)
+    shutil.rmtree(os.path.expanduser("~/.cache/huggingface"), ignore_errors=True)
+    shutil.rmtree(os.path.expanduser("~/.cache/pip"), ignore_errors=True)
     sys.exit(0)
 
 

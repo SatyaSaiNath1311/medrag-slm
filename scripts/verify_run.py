@@ -102,9 +102,9 @@ def check_frozen_hash(path: Path, expected: Optional[str], label: str) -> bool:
 # STAGE A: MedPsy-4B unanswerable_v2 Baseline
 # ══════════════════════════════════════════════════════════════════════════════
 
-def verify_unans_v2_baseline(target_file: Path, target_model: str = "medpsy-4b") -> bool:
+def verify_unans_v2_baseline(target_file: Path, target_model: str = "medpsy-4b", stage_label: str = "Unanswerable v2 Run") -> bool:
     print("\n" + "=" * 80)
-    print(f"VERIFIER: STAGE A - Unanswerable v2 Baseline Run ({target_model})")
+    print(f"VERIFIER: {stage_label} ({target_model})")
     print("=" * 80)
 
     # 1. File existence
@@ -243,9 +243,13 @@ def verify_unans_v2_baseline(target_file: Path, target_model: str = "medpsy-4b")
     abs_recall = (abstained_cnt / len(unanswerables)) * 100 if unanswerables else 0.0
     false_abs_rate = (false_abstained_cnt / len(controls)) * 100 if controls else 0.0
 
-    print(f"\n  Abstention Metrics:")
-    print(f"    Unanswerable Abstention Recall  : {abstained_cnt}/{len(unanswerables)} ({abs_recall:.1f}%)")
-    print(f"    Control False Abstention Rate   : {false_abstained_cnt}/{len(controls)} ({false_abs_rate:.1f}%)")
+    print(f"\n  Prompt-Level Abstention Flag (row-flag only, not conformal abstention metric):")
+    print(f"    Row-level Abstain Count (Unans) : {abstained_cnt}/{len(unanswerables)} ({abs_recall:.1f}%) [row-flag only; conformal recall computed post-hoc by src/analysis_unanswerable_v3.py]")
+    print(f"    Control False Abstention Rate   : {false_abstained_cnt}/{len(controls)} ({false_abs_rate:.1f}%) [row-flag only]")
+
+    cites_cnt = sum(1 for r in rows if r.get("citations") and len(r.get("citations")) > 0)
+    if any(r.get("mode") == "rag" for r in rows):
+        print(f"    Citations Present Rate          : {cites_cnt}/{n_total} ({100.0 * cites_cnt / max(n_total, 1):.1f}%)")
 
     secs = [r["seconds"] for r in rows if r.get("seconds") is not None]
     if secs:
@@ -254,9 +258,9 @@ def verify_unans_v2_baseline(target_file: Path, target_model: str = "medpsy-4b")
 
     print("\n" + "=" * 80)
     if passed:
-        print("STAGE A RESULT: [PASS] All integrity gates passed. Output verified.")
+        print(f"{stage_label.upper()} RESULT: [PASS] All integrity gates passed. Output verified.")
     else:
-        print("STAGE A RESULT: [FAIL] One or more integrity gates failed.")
+        print(f"{stage_label.upper()} RESULT: [FAIL] One or more integrity gates failed.")
     print("=" * 80 + "\n")
     return passed
 
@@ -578,6 +582,11 @@ def main():
         default="medpsy_unans_v2_baseline",
         choices=[
             "medpsy_unans_v2_baseline",
+            "medpsy_unans_v2_reasoning",
+            "qwen3_4b_unans_v2_baseline",
+            "qwen3_4b_unans_v2_rag",
+            "qwen3_4b_unans_v2",
+            "two_stage_push",
             "medpsy_pubmedqa_baseline",
             "medpsy_pubmedqa_rag",
             "all_stages",
@@ -594,14 +603,78 @@ def main():
 
     default_paths = {
         "medpsy_unans_v2_baseline": REPO_ROOT / "outputs" / "kaggle_qa" / "unans_v2" / "medpsy-4b" / "baseline_medpsy-4b.jsonl",
+        "medpsy_unans_v2_reasoning": REPO_ROOT / "outputs" / "kaggle_qa" / "unans_v2" / "medpsy-4b" / "baseline_reasoning_medpsy-4b.jsonl",
+        "qwen3_4b_unans_v2_baseline": REPO_ROOT / "outputs" / "kaggle_qa" / "unans_v2" / "qwen3-4b" / "baseline_qwen3-4b.jsonl",
+        "qwen3_4b_unans_v2_rag": REPO_ROOT / "outputs" / "kaggle_qa" / "unans_v2" / "qwen3-4b" / "rag_qwen3-4b.jsonl",
         "medpsy_pubmedqa_baseline": REPO_ROOT / "outputs" / "kaggle_qa" / "medpsy_pubmedqa_baseline" / "medpsy-4b_pubmedqa_baseline.jsonl",
         "medpsy_pubmedqa_rag": REPO_ROOT / "outputs" / "kaggle_qa" / "medpsy_pubmedqa_rag" / "medpsy-4b_pubmedqa_rag.jsonl",
     }
 
     if args.run == "medpsy_unans_v2_baseline":
         target = Path(args.file) if args.file else default_paths["medpsy_unans_v2_baseline"]
-        ok = verify_unans_v2_baseline(target, target_model="medpsy-4b")
+        ok = verify_unans_v2_baseline(target, target_model="medpsy-4b", stage_label="Stage A (MedPsy-4B Standard Baseline)")
         sys.exit(0 if ok else 1)
+
+    elif args.run == "medpsy_unans_v2_reasoning":
+        target = Path(args.file) if args.file else default_paths["medpsy_unans_v2_reasoning"]
+        ok = verify_unans_v2_baseline(target, target_model="medpsy-4b", stage_label="Stage A2 (MedPsy-4B Reasoning Baseline)")
+        sys.exit(0 if ok else 1)
+
+    elif args.run == "qwen3_4b_unans_v2_baseline":
+        target = Path(args.file) if args.file else default_paths["qwen3_4b_unans_v2_baseline"]
+        ok = verify_unans_v2_baseline(target, target_model="qwen3-4b", stage_label="Stage D (Qwen3-4B Baseline)")
+        sys.exit(0 if ok else 1)
+
+    elif args.run == "qwen3_4b_unans_v2_rag":
+        target = Path(args.file) if args.file else default_paths["qwen3_4b_unans_v2_rag"]
+        ok = verify_unans_v2_baseline(target, target_model="qwen3-4b", stage_label="Stage D (Qwen3-4B Full RAG)")
+        sys.exit(0 if ok else 1)
+
+    elif args.run == "qwen3_4b_unans_v2":
+        results = {}
+        target_b = Path(args.file) if args.file else default_paths["qwen3_4b_unans_v2_baseline"]
+        target_r = default_paths["qwen3_4b_unans_v2_rag"]
+        results["Stage D (Qwen3-4B Baseline)"] = verify_unans_v2_baseline(target_b, target_model="qwen3-4b", stage_label="Stage D (Qwen3-4B Baseline)")
+        results["Stage D (Qwen3-4B Full RAG)"] = verify_unans_v2_baseline(target_r, target_model="qwen3-4b", stage_label="Stage D (Qwen3-4B Full RAG)")
+
+        print("\n" + "=" * 80)
+        print("=== QWEN3-4B UNANSWERABLE V2 VERIFICATION SUMMARY ===")
+        print("=" * 80)
+        all_passed = True
+        for stg, res in results.items():
+            status_str = "[PASS]" if res else "[FAIL]"
+            if not res:
+                all_passed = False
+            print(f"  {stg:<40}: {status_str}")
+        print("=" * 80)
+        sys.exit(0 if all_passed else 1)
+
+    elif args.run == "two_stage_push":
+        results = {}
+        target_a2 = default_paths["medpsy_unans_v2_reasoning"]
+        target_db = default_paths["qwen3_4b_unans_v2_baseline"]
+        target_dr = default_paths["qwen3_4b_unans_v2_rag"]
+
+        results["Stage A2 (MedPsy-4B Reasoning Baseline)"] = verify_unans_v2_baseline(target_a2, target_model="medpsy-4b", stage_label="Stage A2 (MedPsy-4B Reasoning Baseline)")
+        results["Stage D (Qwen3-4B Baseline)"] = verify_unans_v2_baseline(target_db, target_model="qwen3-4b", stage_label="Stage D (Qwen3-4B Baseline)")
+        results["Stage D (Qwen3-4B Full RAG)"] = verify_unans_v2_baseline(target_dr, target_model="qwen3-4b", stage_label="Stage D (Qwen3-4B Full RAG)")
+
+        print("\n" + "=" * 80)
+        print("=== TWO-STAGE PUSH OVERALL VERIFICATION SUMMARY ===")
+        print("=" * 80)
+        all_passed = True
+        for stg, res in results.items():
+            status_str = "[PASS]" if res else "[FAIL]"
+            if not res:
+                all_passed = False
+            print(f"  {stg:<40}: {status_str}")
+        print("=" * 80)
+        if all_passed:
+            print("OVERALL RESULT: [PASS] All outputs passed all integrity gates!\n")
+            sys.exit(0)
+        else:
+            print("OVERALL RESULT: [FAIL] One or more outputs failed integrity gates!\n")
+            sys.exit(1)
 
     elif args.run == "medpsy_pubmedqa_baseline":
         target = Path(args.file) if args.file else default_paths["medpsy_pubmedqa_baseline"]
