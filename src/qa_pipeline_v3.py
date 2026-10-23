@@ -38,6 +38,8 @@ from src.llm import (
     LLM,
     baseline_prompt,
     context_prompt,
+    parse_answer,
+    parse_citations,
     rag_prompt,
     reasoning_baseline_prompt,
     reasoning_context_prompt,
@@ -140,7 +142,7 @@ def sample_pilot_questions(questions, condition, n=50, seed=42):
 
 
 def assert_appended_row_valid(file_path, expected_id=None):
-    """Cheap guard: assert the last appended line in file_path parses as a JSON object with an 'id' field."""
+    """Cheap guard: assert the last appended line in file_path parses as a JSON object with valid schema."""
     with open(file_path, "rb") as fh:
         fh.seek(0, os.SEEK_END)
         size = fh.tell()
@@ -169,6 +171,22 @@ def assert_appended_row_valid(file_path, expected_id=None):
     if expected_id is not None and obj["id"] != expected_id:
         raise AssertionError(
             f"Write verification failed on {file_path}: line 'id' ({obj['id']}) does not match expected ({expected_id})"
+        )
+
+    # Schema consistency check: ensure canonical evaluation fields are present
+    required_keys = ["pred", "parsed", "correct", "truncated"]
+    missing = [k for k in required_keys if k not in obj]
+    if missing:
+        raise AssertionError(
+            f"Write verification failed on {file_path}: missing required schema keys {missing}. "
+            f"Keys found: {sorted(obj.keys())}. Line snippet: {last_line[:120]!r}"
+        )
+    # Check for leaked private/generator keys
+    leaked = [k for k in obj if k in ("_pred", "_parsed", "_pred_source")]
+    if leaked:
+        raise AssertionError(
+            f"Write verification failed on {file_path}: unmapped generator keys found: {leaked}. "
+            f"Line snippet: {last_line[:120]!r}"
         )
 
 
@@ -267,24 +285,86 @@ def run_condition(
         if is_reasoning:
             results = llm.generate_reasoning_safe(batch_prompts, batch_letters)
         else:
-            mode_tag = "rag" if condition in ("C2", "C5") else ("context" if condition == "C3" else "baseline")
-            results = llm.generate_safe(batch_prompts, batch_letters, mode_tag)
+            max_new = (
+                qcfg.get("max_new_tokens_rag", 40)
+                if condition in ("C2", "C5")
+                else (qcfg.get("max_new_tokens_context", 40) if condition == "C3" else qcfg.get("max_new_tokens_baseline", 16))
+            )
+            results = llm.generate_safe(batch_prompts, batch_letters, max_new)
         sec_batch = time.time() - t0_batch
         sec_per_q = sec_batch / len(batch) if batch else 0.0
+
+        mode_name = "rag" if condition in ("C2", "C5") else ("context" if condition == "C3" else "baseline")
 
         for q, res in zip(batch, results):
             row = dict(q)
             for k, v in res.items():
                 row[k] = v
+
+            # Map generator underscore keys to canonical names
+            if "_pred" in row:
+                row["pred"] = row.pop("_pred")
+            if "_parsed" in row:
+                row["parsed"] = row.pop("_parsed")
+            if "_pred_source" in row:
+                row["pred_source"] = row.pop("_pred_source")
+
+            # Non-reasoning model parsing fallback
+            if "pred" not in row:
+                opts = options_map.get(q["id"], q.get("options", {}))
+                parsed_pred = parse_answer(row.get("raw_output", ""), opts)
+                parsed = parsed_pred is not None
+                lp = row.get("letter_probs") or {}
+                prob_pred_raw = max(lp, key=lp.get) if lp else None
+                if parsed:
+                    row["pred"] = parsed_pred
+                    row["pred_source"] = "parsed"
+                    row["parsed"] = True
+                elif prob_pred_raw is not None:
+                    row["pred"] = prob_pred_raw
+                    row["pred_source"] = "logprob_fallback"
+                    row["parsed"] = False
+                else:
+                    row["pred"] = None
+                    row["pred_source"] = "none"
+                    row["parsed"] = False
+
+            if "truncated" not in row:
+                row["truncated"] = False
+
             row["seconds"] = round(sec_per_q, 4)
             row["condition"] = condition
+            row["mode"] = mode_name
             row["model"] = model_name
-            # Evaluate correctness if ground-truth answer present
-            if "answer" in row and row.get("pred"):
-                row["correct"] = bool(str(row["pred"]).strip().upper() == str(row["answer"]).strip().upper())
-            elif "answer_idx" in row and row.get("pred"):
-                # PubMedQA sometimes uses answer_idx
-                row["correct"] = bool(str(row["pred"]).strip().upper() == str(row["answer_idx"]).strip().upper())
+            row["load_source"] = getattr(llm, "load_source", None)
+
+            lp = row.get("letter_probs") or {}
+            row["confidence"] = max(lp.values()) if lp else None
+            row["prob_pred"] = max(lp, key=lp.get) if lp else None
+
+            # Canonical gold answer resolution
+            gold = row.get("answer") if "answer" in row and row["answer"] is not None else row.get("answer_idx")
+            row["gold"] = gold
+            row["abstained"] = bool(row.get("pred") == "ABSTAIN")
+            if "should_abstain" not in row:
+                row["should_abstain"] = bool(q.get("should_abstain", False))
+
+            # Evaluate correctness against canonical gold answer
+            if gold is not None and row.get("pred") is not None:
+                row["correct"] = bool(str(row["pred"]).strip().upper() == str(gold).strip().upper())
+            else:
+                row["correct"] = False
+
+            # Citations for RAG and context conditions
+            if condition in ("C2", "C5"):
+                passages = evidence.get(q["id"], {}).get("passages", [])
+                cites = parse_citations(row.get("raw_output", ""), len(passages))
+                row["citations"] = cites
+                row["cited_chunk_ids"] = [passages[c - 1]["chunk_id"] for c in cites if c - 1 < len(passages)]
+                row["evidence_chunk_ids"] = [p["chunk_id"] for p in passages]
+                row["top_rerank_score"] = passages[0]["rerank_score"] if passages else None
+            elif condition == "C3":
+                row["citations"] = parse_citations(row.get("raw_output", ""), 1)
 
             append_jsonl(out_file, [row])
             assert_appended_row_valid(out_file, expected_id=row.get("id"))
