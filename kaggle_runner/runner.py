@@ -74,16 +74,16 @@ MEDPSY_UNANS_V2_REASONING = False # Stage A2: medpsy-4b unans_v2 baseline with n
 QWEN3_4B_UNANS_V2 = False         # Stage D: qwen3-4b on unanswerable_v2 baseline + RAG (COMPLETED & COMMITTED)
 
 # ── Pair B Thinking-Mode Control: Qwen3-4B-Thinking-2507 MedQA Baseline + RAG ──
-QWEN3_4B_THINKING_MEDQA = True    # Run qwen3-4b-thinking-2507 on MedQA test (N=500) baseline and RAG sequentially
+QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=500) baseline and RAG sequentially
 
 # ── V3 Generic-vs-Medical Matched-Pair Experiment ─────────────────────────────
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
 # Pilot (V3_PILOT=True) runs the stratified N=50 val subset first; full run after.
 # Output path: outputs/v3/<model>/<condition>/<model>.jsonl
-V3_RUN = False               # v3 matched-pair run for ONE model across V3_CONDITIONS
+V3_RUN = True                # v3 matched-pair run for ONE model across V3_CONDITIONS
 V3_MODEL = "medpsy-1.7b"     # one of: medpsy-1.7b, qwen3-1.7b-thinking, qwen3-4b-thinking-2507, medgemma-1.5-4b-it
 V3_CONDITIONS = "C1,C2,C3,C4,C5"  # comma-separated subset of {C1,C2,C3,C4,C5}
-V3_PILOT = False             # if True: run stratified N=50 validation pilot first (no test data touched)
+V3_PILOT = True              # if True: run stratified N=50 validation pilot first (no test data touched)
 V3_PILOT_N = 50              # pilot size (validation only)
 V3_CONFIRM_TEST = False      # must be True before any condition touches the test split
 
