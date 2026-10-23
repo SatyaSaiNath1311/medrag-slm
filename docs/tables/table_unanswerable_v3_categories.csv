@@ -11,6 +11,18 @@ Pair A (Generic),qwen3-1.7b,RAG (C5),fabricated_drug,17,94.1% (16/17),35.3% (6/1
 Pair A (Generic),qwen3-1.7b,RAG (C5),false_premise,17,76.5% (13/17),94.1% (16/17)
 Pair A (Generic),qwen3-1.7b,RAG (C5),missing_info,16,87.5% (14/16),62.5% (10/16)
 Pair A (Generic),qwen3-1.7b,RAG (C5),out_of_scope,16,87.5% (14/16),56.2% (9/16)
+Pair A (Medical),medpsy-1.7b,Baseline (C4),ambiguous,17,94.1% (16/17),-
+Pair A (Medical),medpsy-1.7b,Baseline (C4),fabricated_disease,17,100.0% (17/17),-
+Pair A (Medical),medpsy-1.7b,Baseline (C4),fabricated_drug,17,100.0% (17/17),-
+Pair A (Medical),medpsy-1.7b,Baseline (C4),false_premise,17,76.5% (13/17),-
+Pair A (Medical),medpsy-1.7b,Baseline (C4),missing_info,16,100.0% (16/16),-
+Pair A (Medical),medpsy-1.7b,Baseline (C4),out_of_scope,16,93.8% (15/16),-
+Pair A (Medical),medpsy-1.7b,RAG (C5),ambiguous,17,64.7% (11/17),-
+Pair A (Medical),medpsy-1.7b,RAG (C5),fabricated_disease,17,88.2% (15/17),-
+Pair A (Medical),medpsy-1.7b,RAG (C5),fabricated_drug,17,94.1% (16/17),-
+Pair A (Medical),medpsy-1.7b,RAG (C5),false_premise,17,70.6% (12/17),-
+Pair A (Medical),medpsy-1.7b,RAG (C5),missing_info,16,81.2% (13/16),-
+Pair A (Medical),medpsy-1.7b,RAG (C5),out_of_scope,16,100.0% (16/16),-
 Pair B (Generic),qwen3-4b,Baseline (C4),ambiguous,17,70.6% (12/17),70.6% (12/17)
 Pair B (Generic),qwen3-4b,Baseline (C4),fabricated_disease,17,88.2% (15/17),76.5% (13/17)
 Pair B (Generic),qwen3-4b,Baseline (C4),fabricated_drug,17,82.3% (14/17),100.0% (17/17)

@@ -96,7 +96,13 @@ def calibrate_conformal_threshold_v3(
     una_val = [r for r in val_rows if r.get("should_abstain")]
     
     if not ans_val:
-        return {"threshold": 0.5, "val_far": 0.0, "val_recall": 0.0}
+        return {
+            "threshold": None,
+            "val_far": None,
+            "val_recall": None,
+            "calibration_failed": True,
+            "failure_reason": "no validation rows",
+        }
         
     # Non-conformity score: higher score S means model is less confident -> higher risk
     ans_scores = np.array([1.0 - extract_confidence(r) for r in ans_val])
@@ -121,10 +127,32 @@ def calibrate_conformal_threshold_v3(
     if valid_candidates:
         # Choose the threshold that maximizes recall while respecting FAR <= target_far
         best = max(valid_candidates, key=lambda x: (x["val_recall"], -x["val_far"]))
+        best["calibration_failed"] = False
         return best
     else:
         # Fallback to conservative threshold (never abstain)
-        return {"threshold": 1.0, "val_far": 0.0, "val_recall": 0.0}
+        return {"threshold": 1.0, "val_far": 0.0, "val_recall": 0.0, "calibration_failed": False}
+
+
+def format_tau(tau: Optional[float]) -> str:
+    """Format calibrated threshold tau with enough precision to distinguish small values."""
+    if tau is None:
+        return "-"
+    if tau == 0.0:
+        return "0.0"
+    if 0.0 < abs(tau) < 1e-4:
+        s = f"{tau:.4g}"
+        if "e" not in s:
+            s = f"{tau:.2e}"
+        if "e" in s:
+            mantissa, exp = s.split("e")
+            mantissa = mantissa.rstrip("0").rstrip(".")
+            return f"{mantissa}e{exp}"
+        return s
+    s = f"{tau:.4f}".rstrip("0")
+    if s.endswith("."):
+        s += "0"
+    return s
 
 
 def evaluate_unanswerable_dataset(
@@ -144,7 +172,8 @@ def evaluate_unanswerable_dataset(
     """
     # 1. Calibrate threshold on validation split ONLY
     calib = calibrate_conformal_threshold_v3(val_rows, target_far=target_far)
-    tau = calib["threshold"]
+    tau = calib.get("threshold")
+    calib_failed = bool(calib.get("calibration_failed") or tau is None)
 
     # 2. Partition test split
     unans_test = [r for r in test_rows if r.get("should_abstain")]
@@ -162,21 +191,28 @@ def evaluate_unanswerable_dataset(
     cwa_90_ci = wilson_ci(cwa_90_count, n_unans)
     cwa_80_ci = wilson_ci(cwa_80_count, n_unans)
 
-    # 4. False-Abstention-Rate on control questions
-    ctrl_abst_count = sum(1 for r in ctrl_test if (1.0 - extract_confidence(r)) >= tau)
-    test_far = (ctrl_abst_count / n_ctrl) if n_ctrl > 0 else 0.0
-    test_far_ci = wilson_ci(ctrl_abst_count, n_ctrl)
-
     # Control questions accuracy
     ctrl_strict = [1 if is_strict_correct(r) else 0 for r in ctrl_test]
     ctrl_fb = [1 if is_fallback_correct(r) else 0 for r in ctrl_test]
     ctrl_strict_acc = (sum(ctrl_strict) / len(ctrl_strict)) if ctrl_strict else None
     ctrl_fb_acc = (sum(ctrl_fb) / len(ctrl_fb)) if ctrl_fb else None
 
-    # 5. Conformal Recall on unanswerable test questions
-    unans_abst_count = sum(1 for r in unans_test if (1.0 - extract_confidence(r)) >= tau)
-    test_recall = (unans_abst_count / n_unans) if n_unans > 0 else 0.0
-    test_recall_ci = wilson_ci(unans_abst_count, n_unans)
+    # 4. False-Abstention-Rate on control questions & 5. Conformal Recall on unanswerable test questions
+    if not calib_failed and tau is not None:
+        ctrl_abst_count = sum(1 for r in ctrl_test if (1.0 - extract_confidence(r)) >= tau)
+        test_far = (ctrl_abst_count / n_ctrl) if n_ctrl > 0 else 0.0
+        test_far_ci = wilson_ci(ctrl_abst_count, n_ctrl)
+
+        unans_abst_count = sum(1 for r in unans_test if (1.0 - extract_confidence(r)) >= tau)
+        test_recall = (unans_abst_count / n_unans) if n_unans > 0 else 0.0
+        test_recall_ci = wilson_ci(unans_abst_count, n_unans)
+    else:
+        ctrl_abst_count = None
+        test_far = None
+        test_far_ci = (None, None)
+        unans_abst_count = None
+        test_recall = None
+        test_recall_ci = (None, None)
 
     # 6. Category-level breakdowns
     category_metrics = {}
@@ -190,23 +226,32 @@ def evaluate_unanswerable_dataset(
             }
             continue
         cwa_90_c = sum(1 for r in cat_rows if extract_confidence(r) >= 0.90)
-        abst_c = sum(1 for r in cat_rows if (1.0 - extract_confidence(r)) >= tau)
+        if not calib_failed and tau is not None:
+            abst_c = sum(1 for r in cat_rows if (1.0 - extract_confidence(r)) >= tau)
+            cat_rec = round(abst_c / n_cat, 4)
+            cat_ci = wilson_ci(abst_c, n_cat)
+        else:
+            abst_c = None
+            cat_rec = None
+            cat_ci = (None, None)
         category_metrics[cat] = {
             "n": n_cat,
             "cwa_90_count": cwa_90_c,
             "cwa_90_rate": round(cwa_90_c / n_cat, 4),
             "cwa_90_ci": wilson_ci(cwa_90_c, n_cat),
             "conformal_abst_count": abst_c,
-            "conformal_recall": round(abst_c / n_cat, 4),
-            "conformal_recall_ci": wilson_ci(abst_c, n_cat),
+            "conformal_recall": cat_rec,
+            "conformal_recall_ci": cat_ci,
         }
 
     return {
         "model": model_name,
         "mode": mode,
-        "calibrated_tau": round(tau, 4),
-        "val_far": round(calib["val_far"], 4),
-        "val_recall": round(calib["val_recall"], 4),
+        "calibrated_tau": tau,
+        "calibration_failed": calib_failed,
+        "failure_reason": calib.get("failure_reason") if calib_failed else None,
+        "val_far": round(calib["val_far"], 4) if calib.get("val_far") is not None else None,
+        "val_recall": round(calib["val_recall"], 4) if calib.get("val_recall") is not None else None,
         "n_unanswerable": n_unans,
         "n_control": n_ctrl,
         "ctrl_strict_acc": round(ctrl_strict_acc, 4) if ctrl_strict_acc is not None else None,
@@ -218,9 +263,9 @@ def evaluate_unanswerable_dataset(
         "cwa_80_rate": round(cwa_80_rate, 4),
         "cwa_80_ci": cwa_80_ci,
         "test_false_abst_count": ctrl_abst_count,
-        "test_far": round(test_far, 4),
+        "test_far": round(test_far, 4) if test_far is not None else None,
         "test_far_ci": test_far_ci,
-        "test_conformal_recall": round(test_recall, 4),
+        "test_conformal_recall": round(test_recall, 4) if test_recall is not None else None,
         "test_conformal_recall_ci": test_recall_ci,
         "categories": category_metrics,
     }
@@ -319,10 +364,21 @@ def _evaluate_model_unans(m: str, label: str, root_dir: str, ref_meta: Dict[str,
 
         cwa_90_str = f"{eval_res['cwa_90_rate']*100:.1f}% [{eval_res['cwa_90_ci'][0]*100:.1f}%, {eval_res['cwa_90_ci'][1]*100:.1f}%]"
         cwa_80_str = f"{eval_res['cwa_80_rate']*100:.1f}% [{eval_res['cwa_80_ci'][0]*100:.1f}%, {eval_res['cwa_80_ci'][1]*100:.1f}%]"
-        far_str = f"{eval_res['test_far']*100:.1f}% [{eval_res['test_far_ci'][0]*100:.1f}%, {eval_res['test_far_ci'][1]*100:.1f}%]"
-        rec_str = f"{eval_res['test_conformal_recall']*100:.1f}% [{eval_res['test_conformal_recall_ci'][0]*100:.1f}%, {eval_res['test_conformal_recall_ci'][1]*100:.1f}%]"
         ctrl_strict_str = f"{eval_res['ctrl_strict_acc']*100:.1f}%" if eval_res["ctrl_strict_acc"] is not None else "-"
         ctrl_fb_str = f"{eval_res['ctrl_fb_acc']*100:.1f}%" if eval_res["ctrl_fb_acc"] is not None else "-"
+
+        if eval_res.get("calibration_failed"):
+            far_str = "-"
+            rec_str = "-"
+            tau_str = "CALIBRATION FAILED (no validation rows)"
+        else:
+            far_ci = eval_res['test_far_ci']
+            rec_ci = eval_res['test_conformal_recall_ci']
+            far_str = f"{eval_res['test_far']*100:.1f}% [{far_ci[0]*100:.1f}%, {far_ci[1]*100:.1f}%]"
+            rec_str = f"{eval_res['test_conformal_recall']*100:.1f}% [{rec_ci[0]*100:.1f}%, {rec_ci[1]*100:.1f}%]"
+            tau_formatted = format_tau(eval_res['calibrated_tau'])
+            val_far_str = f"{eval_res['val_far']*100:.1f}%" if eval_res.get('val_far') is not None else "-"
+            tau_str = f"tau={tau_formatted} (val FAR={val_far_str})"
 
         summary_entries.append([
             label,
@@ -337,10 +393,14 @@ def _evaluate_model_unans(m: str, label: str, root_dir: str, ref_meta: Dict[str,
             far_str,
             "<=5.0%",
             rec_str,
-            f"tau={eval_res['calibrated_tau']} (val FAR={eval_res['val_far']*100:.1f}%)",
+            tau_str,
         ])
 
         for cat, cat_data in eval_res["categories"].items():
+            if eval_res.get("calibration_failed") or cat_data.get("conformal_recall") is None:
+                cat_rec_str = "-"
+            else:
+                cat_rec_str = f"{cat_data['conformal_recall']*100:.1f}% ({cat_data['conformal_abst_count']}/{cat_data['n']})"
             cat_entries.append([
                 label,
                 m,
@@ -348,7 +408,7 @@ def _evaluate_model_unans(m: str, label: str, root_dir: str, ref_meta: Dict[str,
                 cat,
                 cat_data["n"],
                 f"{cat_data['cwa_90_rate']*100:.1f}% ({cat_data['cwa_90_count']}/{cat_data['n']})",
-                f"{cat_data['conformal_recall']*100:.1f}% ({cat_data['conformal_abst_count']}/{cat_data['n']})",
+                cat_rec_str,
             ])
 
     return summary_entries, cat_entries
