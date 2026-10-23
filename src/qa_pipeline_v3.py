@@ -139,6 +139,39 @@ def sample_pilot_questions(questions, condition, n=50, seed=42):
     return sorted(sample, key=lambda x: str(x["id"]))
 
 
+def assert_appended_row_valid(file_path, expected_id=None):
+    """Cheap guard: assert the last appended line in file_path parses as a JSON object with an 'id' field."""
+    with open(file_path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        # Read the tail of the file (up to 64KB) to inspect the last line
+        fh.seek(max(0, size - 65536))
+        tail = fh.read()
+    lines = [line.strip() for line in tail.split(b"\n") if line.strip()]
+    if not lines:
+        raise AssertionError(f"Write verification failed: {file_path} is empty after append")
+    last_line = lines[-1].decode("utf-8", errors="replace")
+    try:
+        obj = json.loads(last_line)
+    except Exception as exc:
+        raise AssertionError(
+            f"Write verification failed on {file_path}: invalid JSON: {exc}. Line snippet: {last_line[:120]!r}"
+        ) from exc
+    if not isinstance(obj, dict):
+        raise AssertionError(
+            f"Write verification failed on {file_path}: expected JSON object (dict), "
+            f"got {type(obj).__name__}. Line snippet: {last_line[:120]!r}"
+        )
+    if "id" not in obj or not obj["id"]:
+        raise AssertionError(
+            f"Write verification failed on {file_path}: missing or empty 'id' field. Line snippet: {last_line[:120]!r}"
+        )
+    if expected_id is not None and obj["id"] != expected_id:
+        raise AssertionError(
+            f"Write verification failed on {file_path}: line 'id' ({obj['id']}) does not match expected ({expected_id})"
+        )
+
+
 def run_condition(
     llm,
     condition,
@@ -155,14 +188,17 @@ def run_condition(
     os.makedirs(cond_dir, exist_ok=True)
     out_file = Path(cond_dir) / f"{model_name}.jsonl"
 
-    # Resume-skipping: load existing IDs
+    # Resume-skipping: load existing IDs from valid JSON object rows
     done_ids = set()
     if out_file.exists():
         with open(out_file, "r", encoding="utf-8") as fh:
             for line in fh:
-                if line.strip():
+                line_str = line.strip()
+                if line_str:
                     try:
-                        done_ids.add(json.loads(line)["id"])
+                        row_obj = json.loads(line_str)
+                        if isinstance(row_obj, dict) and "id" in row_obj and row_obj["id"]:
+                            done_ids.add(row_obj["id"])
                     except Exception:
                         pass
 
@@ -250,7 +286,8 @@ def run_condition(
                 # PubMedQA sometimes uses answer_idx
                 row["correct"] = bool(str(row["pred"]).strip().upper() == str(row["answer_idx"]).strip().upper())
 
-            append_jsonl(out_file, row)
+            append_jsonl(out_file, [row])
+            assert_appended_row_valid(out_file, expected_id=row.get("id"))
             n_processed += 1
 
         if (i // batch_size + 1) % 5 == 0 or (i + batch_size >= len(todo)):
