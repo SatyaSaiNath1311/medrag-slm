@@ -241,3 +241,23 @@ python3 scripts/verify_run.py --run qwen3_4b_thinking_medqa_rag
   - Gold answer mismatches: 0
 - [ ] **Overall Pass**: `python3 scripts/verify_run.py --run qwen3_4b_thinking_medqa` exits with code 0.
 
+## Cycle: 2026-10-24 (30 h)
+
+Measured rates from MedPsy-1.7B pilot (single GPU, 1024-token cap):
+C1 26 s/q · C2 38 s/q · C3 25 s/q · C4 29 s/q · C5 37 s/q
+
+Rule: any new model/condition combination gets a 10-question pilot
+(V3_PILOT=True, V3_PILOT_N=10, V3_CONFIRM_TEST=False) before a full run.
+Verify output schema, model field, split and row count before the next push.
+
+| # | Run | Flags | N | Est. |
+|---|-----|-------|---|------|
+| 1 | MedPsy-1.7B C4 validation | V3_CONDITIONS="C4", V3_CONFIRM_TEST=False | 260 | 2.4 h |
+| 2 | MedPsy-1.7B C5 validation | V3_CONDITIONS="C5", V3_CONFIRM_TEST=False | 260 | 2.7 h |
+| 3 | MedGemma pilot (web UI, HF_TOKEN) | V3_PILOT=True, N=10 | 50 | 0.5 h |
+| 4 | MedPsy-1.7B C1 | V3_CONDITIONS="C1", V3_CONFIRM_TEST=True | 1000 | 7.2 h |
+| 5 | MedGemma C1 (web UI) | V3_CONDITIONS="C1", V3_CONFIRM_TEST=True | 1000 | ~2 h |
+| 6 | MedPsy-1.7B C2 | V3_CONDITIONS="C2", V3_CONFIRM_TEST=True | 1000 | 10.6 h |
+
+Runs 1–2 unblock the abstention calibration (currently CALIBRATION FAILED).
+Run 6 is the one to drop if the cycle runs short; PubMedQA C3 moves to Oct 31.
