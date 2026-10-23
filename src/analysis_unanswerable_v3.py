@@ -1,14 +1,19 @@
 """src/analysis_unanswerable_v3.py — Unanswerable v2 Benchmark Evaluation.
 
 Implements all pre-registered analyses from docs/DESIGN_GENERIC_VS_MEDICAL.md (Task 4):
-  1. Confident-wrong-answer rate on unanswerable questions (overall and by category).
-  2. False-abstention rate on control questions.
-  3. Recall on unanswerable questions at fixed 5% false-abstention rate using the
+  1. Main comparison restricted to exactly three matched pairs:
+       Pair A: qwen3-1.7b vs medpsy-1.7b
+       Pair B: qwen3-4b vs medpsy-4b
+       Pair C: gemma3-4b vs medgemma-1.5-4b-it
+  2. Separate thinking-mode control table for qwen3-4b-thinking-2507, labeled budget-limited
+     (99.6% truncation at the 1,024-token cap).
+  3. Separate supplementary generic reference table for phi4-mini and smollm3-3b.
+  4. Confident-wrong-answer (CWA) rate on unanswerable questions (overall and by category).
+  5. False-abstention rate (FAR) on control questions.
+  6. Recall on unanswerable questions at fixed 5% false-abstention rate using the
      validation-fitted conformal calibration procedure from src/reliability_score.py
      (STRICT PROTOCOL: calibrated on validation only, evaluated frozen on test without refitting).
-  4. Working example execution on existing qwen3-1.7b v2 outputs, with extensible support
-     for all v3 models (MedPsy, Qwen, Gemma).
-  5. Outputs formatted markdown and CSV tables to docs/tables/.
+  7. Outputs formatted markdown and CSV tables to docs/tables/.
 """
 
 import argparse
@@ -118,80 +123,94 @@ def calibrate_conformal_threshold_v3(
         best = max(valid_candidates, key=lambda x: (x["val_recall"], -x["val_far"]))
         return best
     else:
-        # Fallback to strictest threshold (highest score)
-        return {"threshold": float(all_scores[-1]) if len(all_scores) else 0.5, "val_far": 0.0, "val_recall": 0.0}
+        # Fallback to conservative threshold (never abstain)
+        return {"threshold": 1.0, "val_far": 0.0, "val_recall": 0.0}
 
 
 def evaluate_unanswerable_dataset(
     model_name: str,
-    mode_name: str,
+    mode: str,
     val_rows: List[Dict[str, Any]],
     test_rows: List[Dict[str, Any]],
     target_far: float = 0.05,
 ) -> Dict[str, Any]:
-    """Evaluate confident wrong answers, false abstention, and conformal recall at 5% FAR."""
-    # 1. Validation Calibration
+    """Evaluate unanswerable_v2 metrics using validation-calibrated conformal threshold.
+    
+    Metrics:
+      1. CWA Rate (conf >= 0.90 and conf >= 0.80) on unanswerable test questions.
+      2. Test False Abstention Rate (FAR) on control test questions.
+      3. Test Conformal Recall @ target FAR on unanswerable test questions.
+      4. Category-level breakdowns.
+    """
+    # 1. Calibrate threshold on validation split ONLY
     calib = calibrate_conformal_threshold_v3(val_rows, target_far=target_far)
     tau = calib["threshold"]
 
-    # 2. Test Partition
-    test_ans = [r for r in test_rows if not r.get("should_abstain")]  # controls (N=40)
-    test_una = [r for r in test_rows if r.get("should_abstain")]      # challenge unanswerables (N=100)
+    # 2. Partition test split
+    unans_test = [r for r in test_rows if r.get("should_abstain")]
+    ctrl_test = [r for r in test_rows if not r.get("should_abstain")]
 
-    # 3. Confident-Wrong-Answer Rate on Unanswerable Test Questions
-    # Any prediction on unanswerable test questions with confidence >= 0.90
-    cwa_90_count = sum(1 for r in test_una if extract_confidence(r) >= 0.90)
-    cwa_80_count = sum(1 for r in test_una if extract_confidence(r) >= 0.80)
-    n_una = len(test_una)
-    
-    cwa_90_rate = (cwa_90_count / n_una) if n_una else 0.0
-    cwa_80_rate = (cwa_80_count / n_una) if n_una else 0.0
-    cwa_90_ci = wilson_ci(cwa_90_count, n_una)
-    cwa_80_ci = wilson_ci(cwa_80_count, n_una)
+    n_unans = len(unans_test)
+    n_ctrl = len(ctrl_test)
 
-    # Breakdown by category
-    category_metrics = {}
-    for cat in CATEGORIES:
-        cat_una = [r for r in test_una if r.get("category") == cat]
-        cat_n = len(cat_una)
-        if cat_n > 0:
-            cat_cwa_90 = sum(1 for r in cat_una if extract_confidence(r) >= 0.90)
-            cat_abst = sum(1 for r in cat_una if (1.0 - extract_confidence(r)) >= tau)
-            category_metrics[cat] = {
-                "n": cat_n,
-                "cwa_90_count": cat_cwa_90,
-                "cwa_90_rate": round(cat_cwa_90 / cat_n, 4),
-                "conformal_abst_count": cat_abst,
-                "conformal_recall": round(cat_abst / cat_n, 4),
-            }
+    # 3. Confident-Wrong-Answer (CWA) rate on unanswerables
+    cwa_90_count = sum(1 for r in unans_test if extract_confidence(r) >= 0.90)
+    cwa_80_count = sum(1 for r in unans_test if extract_confidence(r) >= 0.80)
 
-    # 4. Control Questions Accuracy (Strict vs With-Fallback)
-    ctrl_strict_acc = strict_accuracy(test_ans)
-    ctrl_fb_acc = fallback_accuracy(test_ans)
-    ctrl_trunc_rate = truncation_rate(test_ans)
+    cwa_90_rate = (cwa_90_count / n_unans) if n_unans > 0 else 0.0
+    cwa_80_rate = (cwa_80_count / n_unans) if n_unans > 0 else 0.0
+    cwa_90_ci = wilson_ci(cwa_90_count, n_unans)
+    cwa_80_ci = wilson_ci(cwa_80_count, n_unans)
 
-    # 5. False-Abstention Rate on Test Controls at Conformal Threshold
-    n_ctrl = len(test_ans)
-    ctrl_abst_count = sum(1 for r in test_ans if (1.0 - extract_confidence(r)) >= tau)
-    test_far = (ctrl_abst_count / n_ctrl) if n_ctrl else 0.0
+    # 4. False-Abstention-Rate on control questions
+    ctrl_abst_count = sum(1 for r in ctrl_test if (1.0 - extract_confidence(r)) >= tau)
+    test_far = (ctrl_abst_count / n_ctrl) if n_ctrl > 0 else 0.0
     test_far_ci = wilson_ci(ctrl_abst_count, n_ctrl)
 
-    # 6. Recall at Conformal Operating Point on Unanswerables
-    una_abst_count = sum(1 for r in test_una if (1.0 - extract_confidence(r)) >= tau)
-    test_recall = (una_abst_count / n_una) if n_una else 0.0
-    test_recall_ci = wilson_ci(una_abst_count, n_una)
+    # Control questions accuracy
+    ctrl_strict = [1 if is_strict_correct(r) else 0 for r in ctrl_test]
+    ctrl_fb = [1 if is_fallback_correct(r) else 0 for r in ctrl_test]
+    ctrl_strict_acc = (sum(ctrl_strict) / len(ctrl_strict)) if ctrl_strict else None
+    ctrl_fb_acc = (sum(ctrl_fb) / len(ctrl_fb)) if ctrl_fb else None
+
+    # 5. Conformal Recall on unanswerable test questions
+    unans_abst_count = sum(1 for r in unans_test if (1.0 - extract_confidence(r)) >= tau)
+    test_recall = (unans_abst_count / n_unans) if n_unans > 0 else 0.0
+    test_recall_ci = wilson_ci(unans_abst_count, n_unans)
+
+    # 6. Category-level breakdowns
+    category_metrics = {}
+    for cat in CATEGORIES:
+        cat_rows = [r for r in unans_test if r.get("category") == cat]
+        n_cat = len(cat_rows)
+        if n_cat == 0:
+            category_metrics[cat] = {
+                "n": 0, "cwa_90_count": 0, "cwa_90_rate": 0.0, "cwa_90_ci": (0.0, 0.0),
+                "conformal_abst_count": 0, "conformal_recall": 0.0, "conformal_recall_ci": (0.0, 0.0)
+            }
+            continue
+        cwa_90_c = sum(1 for r in cat_rows if extract_confidence(r) >= 0.90)
+        abst_c = sum(1 for r in cat_rows if (1.0 - extract_confidence(r)) >= tau)
+        category_metrics[cat] = {
+            "n": n_cat,
+            "cwa_90_count": cwa_90_c,
+            "cwa_90_rate": round(cwa_90_c / n_cat, 4),
+            "cwa_90_ci": wilson_ci(cwa_90_c, n_cat),
+            "conformal_abst_count": abst_c,
+            "conformal_recall": round(abst_c / n_cat, 4),
+            "conformal_recall_ci": wilson_ci(abst_c, n_cat),
+        }
 
     return {
         "model": model_name,
-        "mode": mode_name,
+        "mode": mode,
         "calibrated_tau": round(tau, 4),
         "val_far": round(calib["val_far"], 4),
         "val_recall": round(calib["val_recall"], 4),
-        "n_unanswerable": n_una,
+        "n_unanswerable": n_unans,
         "n_control": n_ctrl,
-        "ctrl_strict_acc": ctrl_strict_acc,
-        "ctrl_fb_acc": ctrl_fb_acc,
-        "ctrl_trunc_rate": ctrl_trunc_rate,
+        "ctrl_strict_acc": round(ctrl_strict_acc, 4) if ctrl_strict_acc is not None else None,
+        "ctrl_fb_acc": round(ctrl_fb_acc, 4) if ctrl_fb_acc is not None else None,
         "cwa_90_count": cwa_90_count,
         "cwa_90_rate": round(cwa_90_rate, 4),
         "cwa_90_ci": cwa_90_ci,
@@ -220,167 +239,229 @@ def find_model_unans_v2_files(model_name: str, root_dir: str = ".") -> Tuple[Opt
         os.path.join(root_dir, "outputs", "v3", model_name, "C5.jsonl"),
         os.path.join(root_dir, "outputs", "kaggle_qa", "unans_v2", model_name, f"rag_{model_name}.jsonl"),
     ]
+
+    # Handle model aliases like medgemma-4b <-> medgemma-1.5-4b-it
+    if model_name in ("medgemma-4b", "medgemma-1.5-4b-it"):
+        alt = "medgemma-1.5-4b-it" if model_name == "medgemma-4b" else "medgemma-4b"
+        baseline_candidates.extend([
+            os.path.join(root_dir, "outputs", "v3", alt, "C4", f"{alt}.jsonl"),
+            os.path.join(root_dir, "outputs", "v3", alt, "C4.jsonl"),
+        ])
+        rag_candidates.extend([
+            os.path.join(root_dir, "outputs", "v3", alt, "C5", f"{alt}.jsonl"),
+            os.path.join(root_dir, "outputs", "v3", alt, "C5.jsonl"),
+        ])
     
-    b_path = next((p for p in baseline_candidates if os.path.exists(p)), None)
-    r_path = next((p for p in rag_candidates if os.path.exists(p)), None)
+    b_path = next((p for p in baseline_candidates if os.path.exists(p) and os.path.getsize(p) > 0), None)
+    r_path = next((p for p in rag_candidates if os.path.exists(p) and os.path.getsize(p) > 0), None)
     return b_path, r_path
 
 
-def run_unanswerable_analysis(root_dir: str = ".", target_models: Optional[List[str]] = None):
-    """Run analysis across available models and output tables."""
-    if target_models is None:
-        target_models = [
-            "qwen3-1.7b",
-            "medpsy-1.7b",
-            "qwen3-1.7b-thinking",
-            "qwen3-4b",
-            "medpsy-4b",
-            "qwen3-4b-thinking-2507",
-            "gemma3-4b",
-            "medgemma-1.5-4b-it",
-            "phi4-mini",
-            "smollm3-3b",
-        ]
+def write_table_markdown_and_csv(table_name: str, headers: List[str], rows: List[List[Any]], out_dir: str = "docs/tables"):
+    """Write tabular data to both Markdown and CSV files."""
+    os.makedirs(out_dir, exist_ok=True)
+    md_path = os.path.join(out_dir, f"{table_name}.md")
+    csv_path = os.path.join(out_dir, f"{table_name}.csv")
 
-    print("\n" + "=" * 80)
-    print("UNANSWERABLE V2 BENCHMARK EVALUATION (v3 Matched-Pair Protocol)")
-    print("=" * 80)
+    with open(csv_path, "w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(headers)
+        writer.writerows(rows)
 
-    summary_headers = [
-        "Model", "Mode", "N Unans", "CWA (conf>=0.90) %", "CWA (conf>=0.80) %",
-        "N Ctrl", "Control Strict Acc %", "Control With-Fallback Acc %",
-        "Test FAR (tau_val)", "Target FAR", "Test Recall @ 5% FAR", "Calibrated Tau (val)"
-    ]
-    summary_rows = []
+    col_widths = [len(h) for h in headers]
+    str_rows = []
+    for r in rows:
+        row_strs = [str(val) if val is not None else "-" for val in r]
+        str_rows.append(row_strs)
+        for i, val_s in enumerate(row_strs):
+            col_widths[i] = max(col_widths[i], len(val_s))
 
-    cat_headers = [
-        "Model", "Mode", "Category", "N Unans", "CWA (conf>=0.90) %", "Recall @ 5% FAR %"
-    ]
-    cat_rows = []
+    with open(md_path, "w", encoding="utf-8") as fh:
+        fh.write("| " + " | ".join(h.ljust(col_widths[i]) for i, h in enumerate(headers)) + " |\n")
+        fh.write("| " + " | ".join("-" * col_widths[i] for i in range(len(headers))) + " |\n")
+        for r_s in str_rows:
+            fh.write("| " + " | ".join(r_s[i].ljust(col_widths[i]) for i in range(len(headers))) + " |\n")
 
-    evaluated_any = False
-
-    for m in target_models:
-        b_path, r_path = find_model_unans_v2_files(m, root_dir)
-        modes_to_run = []
-        if b_path:
-            modes_to_run.append(("Baseline (C4)", b_path))
-        if r_path:
-            modes_to_run.append(("RAG (C5)", r_path))
-
-        if not modes_to_run:
-            summary_rows.append([m, "Baseline/RAG", "-", "-", "-", "-", "-", "-", "-", "<=5.0%", "-", "PENDING"])
-            continue
-
-        for mode_lbl, path in modes_to_run:
-            rows = read_jsonl(path)
-            val_rows = [r for r in rows if r.get("split") == "validation"]
-            test_rows = [r for r in rows if r.get("split") == "test"]
-
-            # Attach category and control metadata from canonical datasets if missing
-            ref_meta = {}
-            for ref_p in ["data/unanswerable_v2/test.jsonl", "data/unanswerable_v2/val.jsonl"]:
-                if os.path.exists(ref_p):
-                    for ref_r in read_jsonl(ref_p):
-                        ref_meta[ref_r["id"]] = ref_r
-
-            for r in val_rows + test_rows:
-                meta = ref_meta.get(r.get("id"), {})
-                if "category" not in r or r["category"] is None:
-                    r["category"] = meta.get("category")
-                if "should_abstain" not in r or r["should_abstain"] is None:
-                    r["should_abstain"] = meta.get("should_abstain", True)
-                if "control" not in r or r["control"] is None:
-                    r["control"] = meta.get("control", False)
-
-            evaluated_any = True
-            eval_res = evaluate_unanswerable_dataset(m, mode_lbl, val_rows, test_rows, target_far=0.05)
+    print(f"Saved: {md_path} and {csv_path}")
 
 
-            cwa_90_str = f"{eval_res['cwa_90_rate']*100:.1f}% [{eval_res['cwa_90_ci'][0]*100:.1f}%, {eval_res['cwa_90_ci'][1]*100:.1f}%]"
-            cwa_80_str = f"{eval_res['cwa_80_rate']*100:.1f}% [{eval_res['cwa_80_ci'][0]*100:.1f}%, {eval_res['cwa_80_ci'][1]*100:.1f}%]"
-            far_str = f"{eval_res['test_far']*100:.1f}% [{eval_res['test_far_ci'][0]*100:.1f}%, {eval_res['test_far_ci'][1]*100:.1f}%]"
-            rec_str = f"{eval_res['test_conformal_recall']*100:.1f}% [{eval_res['test_conformal_recall_ci'][0]*100:.1f}%, {eval_res['test_conformal_recall_ci'][1]*100:.1f}%]"
-            ctrl_strict_str = f"{eval_res['ctrl_strict_acc']*100:.1f}%" if eval_res["ctrl_strict_acc"] is not None else "-"
-            ctrl_fb_str = f"{eval_res['ctrl_fb_acc']*100:.1f}%" if eval_res["ctrl_fb_acc"] is not None else "-"
+def _evaluate_model_unans(m: str, label: str, root_dir: str, ref_meta: Dict[str, Any]):
+    """Evaluate baseline and RAG unanswerable outputs for a model."""
+    b_path, r_path = find_model_unans_v2_files(m, root_dir)
+    modes_to_run = []
+    if b_path:
+        modes_to_run.append(("Baseline (C4)", b_path))
+    if r_path:
+        modes_to_run.append(("RAG (C5)", r_path))
 
-            summary_rows.append([
+    summary_entries = []
+    cat_entries = []
+
+    if not modes_to_run:
+        summary_entries.append([label, m, "Baseline/RAG", "-", "-", "-", "-", "-", "-", "-", "<=5.0%", "-", "PENDING"])
+        return summary_entries, cat_entries
+
+    for mode_lbl, path in modes_to_run:
+        rows = read_jsonl(path)
+        val_rows = [r for r in rows if r.get("split") == "validation"]
+        test_rows = [r for r in rows if r.get("split") == "test"]
+
+        for r in val_rows + test_rows:
+            meta = ref_meta.get(r.get("id"), {})
+            if "category" not in r or r["category"] is None:
+                r["category"] = meta.get("category")
+            if "should_abstain" not in r or r["should_abstain"] is None:
+                r["should_abstain"] = meta.get("should_abstain", True)
+            if "control" not in r or r["control"] is None:
+                r["control"] = meta.get("control", False)
+
+        eval_res = evaluate_unanswerable_dataset(m, mode_lbl, val_rows, test_rows, target_far=0.05)
+
+        cwa_90_str = f"{eval_res['cwa_90_rate']*100:.1f}% [{eval_res['cwa_90_ci'][0]*100:.1f}%, {eval_res['cwa_90_ci'][1]*100:.1f}%]"
+        cwa_80_str = f"{eval_res['cwa_80_rate']*100:.1f}% [{eval_res['cwa_80_ci'][0]*100:.1f}%, {eval_res['cwa_80_ci'][1]*100:.1f}%]"
+        far_str = f"{eval_res['test_far']*100:.1f}% [{eval_res['test_far_ci'][0]*100:.1f}%, {eval_res['test_far_ci'][1]*100:.1f}%]"
+        rec_str = f"{eval_res['test_conformal_recall']*100:.1f}% [{eval_res['test_conformal_recall_ci'][0]*100:.1f}%, {eval_res['test_conformal_recall_ci'][1]*100:.1f}%]"
+        ctrl_strict_str = f"{eval_res['ctrl_strict_acc']*100:.1f}%" if eval_res["ctrl_strict_acc"] is not None else "-"
+        ctrl_fb_str = f"{eval_res['ctrl_fb_acc']*100:.1f}%" if eval_res["ctrl_fb_acc"] is not None else "-"
+
+        summary_entries.append([
+            label,
+            m,
+            mode_lbl,
+            eval_res["n_unanswerable"],
+            cwa_90_str,
+            cwa_80_str,
+            eval_res["n_control"],
+            ctrl_strict_str,
+            ctrl_fb_str,
+            far_str,
+            "<=5.0%",
+            rec_str,
+            f"tau={eval_res['calibrated_tau']} (val FAR={eval_res['val_far']*100:.1f}%)",
+        ])
+
+        for cat, cat_data in eval_res["categories"].items():
+            cat_entries.append([
+                label,
                 m,
                 mode_lbl,
-                eval_res["n_unanswerable"],
-                cwa_90_str,
-                cwa_80_str,
-                eval_res["n_control"],
-                ctrl_strict_str,
-                ctrl_fb_str,
-                far_str,
-                "<=5.0%",
-                rec_str,
-                f"tau={eval_res['calibrated_tau']} (val FAR={eval_res['val_far']*100:.1f}%)",
+                cat,
+                cat_data["n"],
+                f"{cat_data['cwa_90_rate']*100:.1f}% ({cat_data['cwa_90_count']}/{cat_data['n']})",
+                f"{cat_data['conformal_recall']*100:.1f}% ({cat_data['conformal_abst_count']}/{cat_data['n']})",
             ])
 
-            for cat, cat_data in eval_res["categories"].items():
-                cat_rows.append([
-                    m,
-                    mode_lbl,
-                    cat,
-                    cat_data["n"],
-                    f"{cat_data['cwa_90_rate']*100:.1f}% ({cat_data['cwa_90_count']}/{cat_data['n']})",
-                    f"{cat_data['conformal_recall']*100:.1f}% ({cat_data['conformal_abst_count']}/{cat_data['n']})",
-                ])
+    return summary_entries, cat_entries
 
-    # Save tables
+
+def run_unanswerable_analysis(root_dir: str = ".", target_models: Optional[List[str]] = None):
+    """Run unanswerable_v2 evaluation across matched pairs, thinking control, and supplementary references."""
+    print("\n" + "=" * 80)
+    print("UNANSWERABLE V2 BENCHMARK EVALUATION (v3 Matched-Pair Protocol)")
+    print("Main comparison: Pair A (1.7B), Pair B (4B Qwen), Pair C (4B Gemma)")
+    print("Thinking control: Qwen3-4B-Thinking-2507 (budget-limited control table)")
+    print("Supplementary generic references: Phi-4-mini, SmolLM3-3B (separate reference table)")
+    print("=" * 80 + "\n")
+
+    # Load canonical reference metadata
+    ref_meta = {}
+    for ref_p in ["data/unanswerable_v2/test.jsonl", "data/unanswerable_v2/val.jsonl"]:
+        p_full = os.path.join(root_dir, ref_p)
+        if os.path.exists(p_full):
+            for ref_r in read_jsonl(p_full):
+                ref_meta[ref_r["id"]] = ref_r
+
     out_dir = os.path.join(root_dir, "docs", "tables")
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1. Main summary table
-    md_summary = os.path.join(out_dir, "table_unanswerable_v3_summary.md")
-    csv_summary = os.path.join(out_dir, "table_unanswerable_v3_summary.csv")
-    with open(csv_summary, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(summary_headers)
-        writer.writerows(summary_rows)
+    # 1. Main Matched Pairs (Pair A, Pair B, Pair C)
+    matched_specs = [
+        ("qwen3-1.7b", "Pair A (Generic)"),
+        ("medpsy-1.7b", "Pair A (Medical)"),
+        ("qwen3-4b", "Pair B (Generic)"),
+        ("medpsy-4b", "Pair B (Medical)"),
+        ("gemma3-4b", "Pair C (Generic)"),
+        ("medgemma-1.5-4b-it", "Pair C (Medical)"),
+    ]
+    if target_models is not None:
+        matched_specs = [s for s in matched_specs if s[0] in target_models]
 
-    with open(md_summary, "w", encoding="utf-8") as fh:
-        col_w = [len(h) for h in summary_headers]
-        for r in summary_rows:
-            for i, val in enumerate(r):
-                col_w[i] = max(col_w[i], len(str(val)))
-        fh.write("| " + " | ".join(h.ljust(col_w[i]) for i, h in enumerate(summary_headers)) + " |\n")
-        fh.write("| " + " | ".join("-" * col_w[i] for i in range(len(summary_headers))) + " |\n")
-        for r in summary_rows:
-            fh.write("| " + " | ".join(str(r[i]).ljust(col_w[i]) for i in range(len(summary_headers))) + " |\n")
-    print(f"\nSaved summary table: {md_summary} and {csv_summary}")
+    main_headers = [
+        "Matched Pair / Arm", "Model", "Mode", "N Unans", "CWA (conf>=0.90) %", "CWA (conf>=0.80) %",
+        "N Ctrl", "Control Strict Acc %", "Control With-Fallback Acc %",
+        "Test FAR (tau_val)", "Target FAR", "Test Recall @ 5% FAR", "Calibrated Tau (val)"
+    ]
+    cat_headers = [
+        "Matched Pair / Arm", "Model", "Mode", "Category", "N Unans", "CWA (conf>=0.90) %", "Recall @ 5% FAR %"
+    ]
 
-    # 2. Category breakdown table
+    main_rows = []
+    cat_rows = []
+    for m, lbl in matched_specs:
+        s_entries, c_entries = _evaluate_model_unans(m, lbl, root_dir, ref_meta)
+        main_rows.extend(s_entries)
+        cat_rows.extend(c_entries)
+
+    write_table_markdown_and_csv("table_unanswerable_v3_summary", main_headers, main_rows, out_dir=out_dir)
     if cat_rows:
-        md_cat = os.path.join(out_dir, "table_unanswerable_v3_categories.md")
-        csv_cat = os.path.join(out_dir, "table_unanswerable_v3_categories.csv")
-        with open(csv_cat, "w", newline="", encoding="utf-8") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(cat_headers)
-            writer.writerows(cat_rows)
-        with open(md_cat, "w", encoding="utf-8") as fh:
-            col_w = [len(h) for h in cat_headers]
-            for r in cat_rows:
-                for i, val in enumerate(r):
-                    col_w[i] = max(col_w[i], len(str(val)))
-            fh.write("| " + " | ".join(h.ljust(col_w[i]) for i, h in enumerate(cat_headers)) + " |\n")
-            fh.write("| " + " | ".join("-" * col_w[i] for i in range(len(cat_headers))) + " |\n")
-            for r in cat_rows:
-                fh.write("| " + " | ".join(str(r[i]).ljust(col_w[i]) for i in range(len(cat_headers))) + " |\n")
-        print(f"Saved category breakdown table: {md_cat} and {csv_cat}")
+        write_table_markdown_and_csv("table_unanswerable_v3_categories", cat_headers, cat_rows, out_dir=out_dir)
 
-    print("\nUnanswerable v3 analysis complete.\n")
+    # 2. Thinking-Mode Control (Separate Table)
+    control_specs = [
+        ("qwen3-4b-thinking-2507", "Pair B Thinking Control"),
+    ]
+    if target_models is not None:
+        control_specs = [s for s in control_specs if s[0] in target_models]
+
+    if control_specs:
+        ctrl_headers = [
+            "Role", "Model", "Mode", "N Unans", "CWA (conf>=0.90) %", "CWA (conf>=0.80) %",
+            "N Ctrl", "Control Strict Acc %", "Control With-Fallback Acc %",
+            "Test FAR (tau_val)", "Target FAR", "Test Recall @ 5% FAR", "Calibrated Tau (val)", "Evaluation Note"
+        ]
+        ctrl_rows = []
+        for m, lbl in control_specs:
+            s_entries, _ = _evaluate_model_unans(m, lbl, root_dir, ref_meta)
+            for r in s_entries:
+                ctrl_rows.append(r + ["Budget-limited: 99.6% truncation at 1,024-token cap (abstention influenced by budget cap, not calibrated refusal)"])
+
+        write_table_markdown_and_csv("table_unanswerable_v3_control", ctrl_headers, ctrl_rows, out_dir=out_dir)
+
+    # 3. Supplementary Generic References (Separate Table)
+    supp_specs = [
+        ("phi4-mini", "Supplementary Generic Reference"),
+        ("smollm3-3b", "Supplementary Generic Reference"),
+    ]
+    if target_models is not None:
+        supp_specs = [s for s in supp_specs if s[0] in target_models]
+
+    if supp_specs:
+        supp_headers = [
+            "Reference Role", "Model", "Mode", "N Unans", "CWA (conf>=0.90) %", "CWA (conf>=0.80) %",
+            "N Ctrl", "Control Strict Acc %", "Control With-Fallback Acc %",
+            "Test FAR (tau_val)", "Target FAR", "Test Recall @ 5% FAR", "Calibrated Tau (val)"
+        ]
+        supp_rows = []
+        supp_cat_rows = []
+        for m, lbl in supp_specs:
+            s_entries, c_entries = _evaluate_model_unans(m, lbl, root_dir, ref_meta)
+            supp_rows.extend(s_entries)
+            supp_cat_rows.extend(c_entries)
+
+        write_table_markdown_and_csv("table_unanswerable_v3_supplementary", supp_headers, supp_rows, out_dir=out_dir)
+        if supp_cat_rows:
+            write_table_markdown_and_csv("table_unanswerable_v3_supplementary_categories", cat_headers, supp_cat_rows, out_dir=out_dir)
+
+    print("\nUnanswerable v3 analysis complete. All tables written to docs/tables/.\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate unanswerable_v2 benchmark metrics (v3)")
     parser.add_argument("--root", default=".", help="Root directory")
-    parser.add_argument("--models", default="qwen3-1.7b", help="Comma-separated model names")
+    parser.add_argument("--models", default=None, help="Optional comma-separated model names (defaults to all matched pairs + controls)")
     args = parser.parse_args()
 
-    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    models = [m.strip() for m in args.models.split(",") if m.strip()] if args.models else None
     run_unanswerable_analysis(root_dir=args.root, target_models=models)
 
 

@@ -1,9 +1,13 @@
-Model,Group,N Common,Baseline Strict Acc (95% CI),Baseline With-Fallback Acc,RAG Strict Acc (95% CI),RAG With-Fallback Acc,Delta Strict Acc,b (Base+ / RAG-),c (Base- / RAG+),Discordant OR,McNemar p (exact)
-gemma3-4b,Generic,1400,"0.4857 [0.4593, 0.5114]",0.4857,"0.5029 [0.4764, 0.5279]",0.5029,+0.0171,200,224,1.120,0.26398
-medgemma-1.5-4b-it,Medical,-,-,-,-,-,-,-,-,-,PENDING
-medpsy-1.7b,Medical,-,-,-,-,-,-,-,-,-,PENDING
-medpsy-4b,Medical,500,"0.8320 [0.8, 0.864]",0.8760,"0.7260 [0.684, 0.764]",0.8900,-0.1060,78,25,0.321,0.00000
-qwen3-1.7b,Generic,1400,"0.4657 [0.4407, 0.4907]",0.4657,"0.4914 [0.465, 0.5172]",0.4914,+0.0257,162,198,1.222,0.06494
-qwen3-1.7b-thinking,Generic,-,-,-,-,-,-,-,-,-,PENDING
-qwen3-4b,Generic,1400,"0.5514 [0.5243, 0.5757]",0.5514,"0.5471 [0.5229, 0.5729]",0.5471,-0.0043,189,183,0.968,0.79549
-qwen3-4b-thinking-2507,Generic,-,-,-,-,-,-,-,-,-,PENDING
+Model,Matched Pair,Group,Dataset,N Common,Baseline Strict Acc (95% CI),Baseline With-Fallback Acc,RAG Strict Acc (95% CI),RAG With-Fallback Acc,Delta Strict Acc,b (Base+ / RAG-),c (Base- / RAG+),Discordant OR,McNemar p (exact)
+gemma3-4b,Pair C,Generic,medqa,500,"0.4860 [0.442, 0.53]",0.4860,"0.5300 [0.484, 0.572]",0.5300,+0.0440,65,87,1.338,0.08817
+gemma3-4b,Pair C,Generic,pubmedqa,500,"0.4920 [0.45, 0.532]",0.4920,"0.5020 [0.456, 0.546]",0.5020,+0.0100,69,74,1.072,0.73814
+medgemma-1.5-4b-it,Pair C,Medical,medqa,-,-,-,-,-,-,-,-,-,PENDING (medgemma-1.5-4b-it medqa C1/C2 missing)
+medgemma-1.5-4b-it,Pair C,Medical,pubmedqa,-,-,-,-,-,-,-,-,-,PENDING (medgemma-1.5-4b-it pubmedqa C1/C2 missing)
+medpsy-1.7b,Pair A,Medical,medqa,-,-,-,-,-,-,-,-,-,PENDING (medpsy-1.7b medqa C1/C2 missing)
+medpsy-1.7b,Pair A,Medical,pubmedqa,-,-,-,-,-,-,-,-,-,PENDING (medpsy-1.7b pubmedqa C1/C2 missing)
+medpsy-4b,Pair B,Medical,medqa,500,"0.8320 [0.8, 0.864]",0.8760,"0.7260 [0.684, 0.764]",0.8900,-0.1060,78,25,0.321,0.00000
+medpsy-4b,Pair B,Medical,pubmedqa,500,"0.5340 [0.492, 0.574]",0.5340,"0.3980 [0.352, 0.442]",0.4620,-0.1360,108,40,0.370,0.00000
+qwen3-1.7b,Pair A,Generic,medqa,500,"0.4460 [0.402, 0.49]",0.4460,"0.5060 [0.462, 0.548]",0.5060,+0.0600,54,84,1.556,0.01327
+qwen3-1.7b,Pair A,Generic,pubmedqa,500,"0.4780 [0.436, 0.522]",0.4780,"0.4520 [0.406, 0.496]",0.4520,-0.0260,64,51,0.797,0.26305
+qwen3-4b,Pair B,Generic,medqa,500,"0.5840 [0.54, 0.628]",0.5840,"0.6040 [0.558, 0.646]",0.6040,+0.0200,54,64,1.185,0.40749
+qwen3-4b,Pair B,Generic,pubmedqa,500,"0.5240 [0.478, 0.566]",0.5240,"0.4840 [0.44, 0.528]",0.4840,-0.0400,85,65,0.765,0.12053

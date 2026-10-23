@@ -1,0 +1,6 @@
+Control Arm,Arm Comparison,Condition,Dataset,N Common,Thinking Control Strict Acc (95% CI),Thinking Control With-Fallback Acc,Medical Strict Acc (95% CI),Medical With-Fallback Acc,Delta Strict Acc,b/c Discordant (Strict),McNemar p (exact),Evaluation Note
+Pair B Control,qwen3-4b-thinking-2507 vs medpsy-4b,C1,medqa,500,"0.0040 [0.0, 0.01]",0.6680,"0.8320 [0.8, 0.864]",0.8760,+0.8280,0/414,0.00000,"Budget-limited: 99.6% truncation at 1,024-token cap (not a knowledge deficit)"
+Pair B Control,qwen3-4b-thinking-2507 vs medpsy-4b,C1,pubmedqa,-,-,-,-,-,-,-,-,PENDING (qwen3-4b-thinking-2507 pubmedqa missing)
+Pair B Control,qwen3-4b-thinking-2507 vs medpsy-4b,C2,medqa,500,"0.0000 [0.0, 0.0]",0.6040,"0.7260 [0.684, 0.764]",0.8900,+0.7260,0/363,0.00000,"Budget-limited: 99.6% truncation at 1,024-token cap (not a knowledge deficit)"
+Pair B Control,qwen3-4b-thinking-2507 vs medpsy-4b,C2,pubmedqa,-,-,-,-,-,-,-,-,PENDING (qwen3-4b-thinking-2507 pubmedqa missing)
+Pair B Control,qwen3-4b-thinking-2507 vs medpsy-4b,C3,pubmedqa,-,-,-,-,-,-,-,-,PENDING (qwen3-4b-thinking-2507 pubmedqa missing)

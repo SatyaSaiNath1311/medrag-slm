@@ -1,4 +1,7 @@
-Analysis Layer,Stratification / Group,Common Odds Ratio,CMH / Stat,p-value,Interpretation
-Pooled CMH Test,"Generic Group (Qwen, Gemma, etc.)",1.053,Chi2=1.3424,0.246617,Not significant / pending
-Pooled CMH Test,"Medical Group (MedPsy, MedGemma)",0.535,Chi2=15.6907,7.5e-05,Significant RAG benefit
-Logistic Interaction (Model_Type x RAG),Generic vs Medical Differential RAG Gain,Beta_int=-0.6769,LR Chi2=17.8323,"Wald p=3e-05, LR p=2.4e-05",Differential RAG gain confirmed
+Analysis Layer,Dataset,Stratification / Group,N Generic,N Medical,Common Odds Ratio,CMH / Stat,p-value,Interpretation
+Pooled CMH Test,medqa,Matched Generic Group (Pair B (qwen3-4b vs medpsy-4b)),500,500,1.0865,Chi2=0.3355,0.562418,No significant RAG effect
+Pooled CMH Test,medqa,Matched Medical Group (Pair B (qwen3-4b vs medpsy-4b)),500,500,0.535,Chi2=15.6907,7.5e-05,Significant RAG degradation
+Logistic Interaction (Model_Type x RAG),medqa,Generic vs Medical Differential RAG Gain (Pair B (qwen3-4b vs medpsy-4b)),500,500,Beta_int=-0.7084,LR Chi2=12.3821,"Wald p=0.000465, LR p=0.000433",Differential RAG gain confirmed
+Pooled CMH Test,pubmedqa,Matched Generic Group (Pair B (qwen3-4b vs medpsy-4b)),500,500,0.8521,Chi2=1.4426,0.229711,No significant RAG effect
+Pooled CMH Test,pubmedqa,Matched Medical Group (Pair B (qwen3-4b vs medpsy-4b)),500,500,0.5769,Chi2=18.0214,2.2e-05,Significant RAG degradation
+Logistic Interaction (Model_Type x RAG),pubmedqa,Generic vs Medical Differential RAG Gain (Pair B (qwen3-4b vs medpsy-4b)),500,500,Beta_int=-0.3899,LR Chi2=4.6968,"Wald p=0.030323, LR p=0.030219",Differential RAG gain confirmed
