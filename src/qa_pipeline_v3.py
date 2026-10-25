@@ -543,6 +543,15 @@ def main():
             check_only=args.check_only,
         )
 
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            gpu_mems = [
+                f"GPU {i}: {torch.cuda.max_memory_allocated(i) / (1024**3):.2f} GiB"
+                for i in range(torch.cuda.device_count())
+            ]
+            print(f"[{cond}] Peak VRAM: {', '.join(gpu_mems)}", flush=True)
+            for i in range(torch.cuda.device_count()):
+                torch.cuda.reset_peak_memory_stats(i)
+
     print(f"\n=== QA PIPELINE V3 COMPLETE for {args.model} (conditions: {conditions}) ===\n", flush=True)
 
 
