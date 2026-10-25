@@ -38,16 +38,13 @@ WORK = "/kaggle/working/work"
 MODE = "qa"                     # "qa" or "smoke"
 CHECK_ONLY = False
 PROFILE = False
-PILOT = True                    # run medgemma-1.5-4b-it validation pilot (N=50 stratified val subset)
+PILOT = False                   # run medpsy-4b pilot (80 val-subset questions, single GPU)
 PARALLEL_GPUS = False           # split model list across 2 GPUs in parallel subprocesses
 TINY = False                    # set to True for tiny check on Kaggle
-MODELS = ["medgemma-1.5-4b-it"]
+MODELS = ["medpsy-4b"]
 MODES = ["baseline", "rag"]
 
-# Legacy runner reference (tests check for string presence):
-# RAG_MEDPSY = True
-# PILOT = False
-# MODELS = ["medpsy-4b"]
+# Prior completed run: RAG_MEDPSY = True
 
 # ── Prior / Completed Modes ───────────────────────────────────────────────────
 FINAL_MEDPSY = False            # medpsy-4b full test split, dual-GPU shards (DONE)
@@ -85,12 +82,12 @@ QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
 # Pilot (V3_PILOT=True) runs the stratified N=50 val subset first; full run after.
 # Output path: outputs/v3/<model>/<condition>/<model>.jsonl
-V3_RUN = False               # v3 matched-pair run for ONE model across V3_CONDITIONS
-V3_MODEL = "medgemma-1.5-4b-it" # one of: medpsy-1.7b, qwen3-1.7b-thinking, qwen3-4b-thinking-2507, medgemma-1.5-4b-it
-V3_CONDITIONS = "C1,C2,C3,C4,C5" # comma-separated subset of {C1,C2,C3,C4,C5}
-V3_PILOT = True              # if True: run stratified N=50 validation pilot first (no test data touched)
-V3_PILOT_N = 10              # pilot size (validation only)
-V3_CONFIRM_TEST = False      # must be True before any condition touches the test split
+V3_RUN = True
+V3_MODEL = "medgemma-1.5-4b-it"
+V3_CONDITIONS = "C1,C2,C3,C4,C5"
+V3_PILOT = True
+V3_PILOT_N = 10
+V3_CONFIRM_TEST = False
 
 # Truncation sensitivity check (Task 6, validation only, no model inference at full scale)
 V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models
@@ -2808,36 +2805,6 @@ if PILOT:
     if PARALLEL_GPUS or PROFILE:
         sys.exit("ERROR: PILOT is not compatible with PARALLEL_GPUS or PROFILE modes.")
 
-    if MODELS == ["medgemma-1.5-4b-it"] or "medgemma-1.5-4b-it" in MODELS:
-        pilot_out = (
-            "/kaggle/working/outputs/pilots/medgemma-1.5-4b-it"
-            if os.path.exists("/kaggle/working")
-            else "outputs/pilots/medgemma-1.5-4b-it"
-        )
-        os.makedirs(pilot_out, exist_ok=True)
-        # N=50 stratified from VALIDATION only across C1 (MedQA+PubMedQA baseline: 10),
-        # C2 (MedQA+PubMedQA RAG: 10), C3 (PubMedQA+abstract: 10),
-        # C4 (unanswerable_v2 val baseline: 10), C5 (unanswerable_v2 val RAG: 10). Total = 50.
-        cmd_pilot = [
-            sys.executable, "-m", "src.qa_pipeline_v3",
-            "--config", "configs/base.yaml",
-            "--work", WORK,
-            "--model", "medgemma-1.5-4b-it",
-            "--split", "validation",
-            "--conditions", "C1,C2,C3,C4,C5",
-            "--pilot",
-            "--pilot-n", "10",
-            "--out", pilot_out,
-        ]
-        if CHECK_ONLY:
-            cmd_pilot += ["--check-only"]
-        if TINY:
-            cmd_pilot += ["--tiny"]
-        print("\n=== PILOT RUN: medgemma-1.5-4b-it, N=50 stratified validation, baseline & RAG ===", flush=True)
-        run(cmd_pilot)
-        print(f"\nPILOT COMPLETE: output written to {pilot_out}", flush=True)
-        sys.exit(0)
-
     pilot_work = os.path.join(WORK, "pilot")
     os.makedirs(pilot_work, exist_ok=True)
 
@@ -2896,11 +2863,18 @@ if V3_RUN:
     _v3_conditions = [c.strip() for c in V3_CONDITIONS.split(",") if c.strip()]
     _v3_split = "validation" if V3_PILOT else "test"
 
-    _v3_out_base = (
-        f"/kaggle/working/outputs/v3/{V3_MODEL}"
-        if os.path.exists("/kaggle/working")
-        else f"outputs/v3/{V3_MODEL}"
-    )
+    if V3_PILOT:
+        _v3_out_base = (
+            f"/kaggle/working/outputs/pilots/{V3_MODEL}"
+            if os.path.exists("/kaggle/working")
+            else f"outputs/pilots/{V3_MODEL}"
+        )
+    else:
+        _v3_out_base = (
+            f"/kaggle/working/outputs/v3/{V3_MODEL}"
+            if os.path.exists("/kaggle/working")
+            else f"outputs/v3/{V3_MODEL}"
+        )
     os.makedirs(_v3_out_base, exist_ok=True)
 
     cmd_v3 = [
