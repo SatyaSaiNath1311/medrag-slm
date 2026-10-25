@@ -289,7 +289,8 @@ class LLM:
         print(f"  source: {load_source}", flush=True)
         self.load_source = load_source
 
-        self.tok = AutoTokenizer.from_pretrained(load_path)
+        hf_token = os.environ.get("HF_TOKEN")
+        self.tok = AutoTokenizer.from_pretrained(load_path, token=hf_token)
         self.tok.padding_side = "left"
         if self.tok.pad_token is None:
             self.tok.pad_token = self.tok.eos_token
@@ -300,6 +301,8 @@ class LLM:
         dtypes = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
         key = "dtype" if version.parse(transformers.__version__) >= version.parse("4.56") else "torch_dtype"
         kwargs = {key: dtypes[mcfg["dtype"]]}
+        if hf_token and "token" not in kwargs:
+            kwargs["token"] = hf_token
         if device == "cuda":
             many = torch.cuda.device_count() > 1 and mcfg["dtype"] == "float32"
             kwargs["device_map"] = "auto" if many else {"": 0}
@@ -326,8 +329,11 @@ class LLM:
     def wrap(self, user_text):
         """Standard (non-reasoning) wrap: thinking disabled, answer prefix pre-filled."""
         msgs = [{"role": "user", "content": user_text}]
-        text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True,
-                                            enable_thinking=False)
+        try:
+            text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True,
+                                                enable_thinking=False)
+        except TypeError:
+            text = self.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
         return text + ANSWER_PREFIX
 
     def wrap_reasoning(self, user_text):
