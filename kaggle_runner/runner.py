@@ -17,6 +17,7 @@ PARALLEL_GPUS mode (PARALLEL_GPUS=True):
   JSONL files so there is no collision).
   Not compatible with PILOT or PROFILE modes.
 """
+import atexit
 import glob
 import json
 import os
@@ -238,6 +239,23 @@ def run_bg(cmd, extra_env=None):
     return subprocess.Popen(cmd, env=env)
 
 
+def _guard_no_token_leak():
+    """Ensure hf_token.txt is never copied or symlinked into /kaggle/working or any outputs folder."""
+    for base_dir in ("/kaggle/working", "outputs"):
+        if os.path.exists(base_dir):
+            for root, _, files in os.walk(base_dir, followlinks=False):
+                if "hf_token.txt" in files:
+                    leak = os.path.join(root, "hf_token.txt")
+                    try:
+                        os.remove(leak)
+                    except Exception:
+                        pass
+                    raise RuntimeError(f"SECURITY ALERT: {leak} detected in output/working directory and purged.")
+
+
+atexit.register(_guard_no_token_leak)
+
+
 if SC_SHARD is None:
     print_kaggle_input_configs()
 
@@ -248,6 +266,22 @@ if SC_SHARD is None:
         print("HF_TOKEN loaded from Kaggle Secrets")
     except Exception as e:  # noqa: BLE001
         print("WARNING: HF_TOKEN secret not available:", e)
+
+    # Fallback: load HF_TOKEN from private dataset if not in secrets
+    if "HF_TOKEN" not in os.environ:
+        token_matches = glob.glob("/kaggle/input/**/hf_token.txt", recursive=True)
+        if token_matches:
+            try:
+                with open(token_matches[0], "r", encoding="utf-8") as f_tok:
+                    tok_val = f_tok.read().strip()
+                if tok_val:
+                    os.environ["HF_TOKEN"] = tok_val
+                    print("HF_TOKEN loaded from private dataset", flush=True)
+            except Exception as e_tok:  # noqa: BLE001
+                print("WARNING: Failed to read hf_token.txt from private dataset:", e_tok)
+
+    # Verify token file was not copied into working directory or outputs
+    _guard_no_token_leak()
 
     # 2. Fresh copy of the code
     run(["rm", "-rf", CODE_DIR])

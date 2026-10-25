@@ -8,7 +8,8 @@
   "enable_gpu": true,
   "enable_internet": true,
   "dataset_sources": [
-    "satyasainath1311/medrag-unans-v2-evidence"
+    "satyasainath1311/medrag-unans-v2-evidence",
+    "satyasainath1311/hf-token-private"
   ],
   "competition_sources": [],
   "kernel_sources": [
