@@ -1,0 +1,21 @@
+{
+  "v3_model": "medgemma-1.5-4b-it",
+  "hf_repo_id": "google/medgemma-1.5-4b-it",
+  "model_type": "gemma3",
+  "dtype": "float32",
+  "chat_template": "tokenizer_default",
+  "reasoning": false,
+  "thinking_cap": null,
+  "seed": 42,
+  "split": "validation",
+  "pilot": true,
+  "pilot_n": 10,
+  "conditions": [
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5"
+  ],
+  "timestamp": "2026-10-25T09:16:09Z"
+}
