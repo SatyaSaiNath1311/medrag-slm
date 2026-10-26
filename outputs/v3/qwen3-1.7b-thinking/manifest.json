@@ -1,0 +1,18 @@
+{
+  "v3_model": "qwen3-1.7b-thinking",
+  "hf_repo_id": "Qwen/Qwen3-1.7B",
+  "model_type": "causal_lm",
+  "dtype": "float16",
+  "chat_template": "tokenizer_default",
+  "reasoning": true,
+  "thinking_cap": 1024,
+  "seed": 42,
+  "split": "test",
+  "pilot": false,
+  "pilot_n": null,
+  "conditions": [
+    "C4",
+    "C5"
+  ],
+  "timestamp": "2026-10-26T11:10:02Z"
+}
