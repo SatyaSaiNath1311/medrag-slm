@@ -120,10 +120,17 @@ def sample_pilot_questions(questions, condition, n=50, seed=42):
     if condition in ("C1", "C2"):
         medqa = [q for q in questions if q.get("dataset") == "medqa"]
         pubmedqa = [q for q in questions if q.get("dataset") == "pubmedqa"]
-        n_each = n // 2
-        s_medqa = rng.sample(medqa, min(n_each, len(medqa)))
-        s_pubmedqa = rng.sample(pubmedqa, min(n - len(s_medqa), len(pubmedqa)))
-        sample = s_medqa + s_pubmedqa
+        if medqa and pubmedqa:
+            n_each = n // 2
+            s_medqa = rng.sample(medqa, min(n_each, len(medqa)))
+            s_pubmedqa = rng.sample(pubmedqa, min(n - len(s_medqa), len(pubmedqa)))
+            sample = s_medqa + s_pubmedqa
+        elif medqa:
+            sample = rng.sample(medqa, min(n, len(medqa)))
+        elif pubmedqa:
+            sample = rng.sample(pubmedqa, min(n, len(pubmedqa)))
+        else:
+            sample = []
     elif condition == "C3":
         pubmedqa = [q for q in questions if q.get("dataset") == "pubmedqa"]
         sample = rng.sample(pubmedqa, min(n, len(pubmedqa)))
@@ -139,6 +146,36 @@ def sample_pilot_questions(questions, condition, n=50, seed=42):
     else:
         sample = rng.sample(questions, min(n, len(questions)))
     return sorted(sample, key=lambda x: str(x["id"]))
+
+
+def parse_and_validate_datasets(datasets_arg: str, conditions: list) -> list:
+    """Parse and validate --datasets argument against requested conditions."""
+    if not datasets_arg or not datasets_arg.strip():
+        raise ValueError("ERROR: --datasets cannot be empty.")
+    datasets = [d.strip().lower() for d in datasets_arg.split(",") if d.strip()]
+    valid_datasets = {"medqa", "pubmedqa"}
+    bad_datasets = [d for d in datasets if d not in valid_datasets]
+    if bad_datasets:
+        raise ValueError(f"ERROR: Unknown datasets: {bad_datasets}. Allowed: {sorted(valid_datasets)}")
+    if "C3" in conditions and "pubmedqa" not in datasets:
+        raise ValueError("ERROR: Condition C3 requires 'pubmedqa' dataset in --datasets.")
+    return datasets
+
+
+def get_condition_questions(cond: str, datasets: list, medqa_all: list, pubmedqa_all: list, u2_questions: list) -> list:
+    """Resolve question list for a condition respecting dataset filter."""
+    if cond in ("C1", "C2"):
+        q_list = []
+        if "medqa" in datasets:
+            q_list += medqa_all
+        if "pubmedqa" in datasets:
+            q_list += pubmedqa_all
+        return q_list
+    elif cond == "C3":
+        return list(pubmedqa_all)
+    elif cond in ("C4", "C5"):
+        return list(u2_questions)
+    return []
 
 
 def assert_appended_row_valid(file_path, expected_id=None):
@@ -390,6 +427,7 @@ def main():
     parser.add_argument("--model", required=True, help="Model name from configs/base.yaml")
     parser.add_argument("--split", choices=["validation", "test"], default="test", help="Dataset split")
     parser.add_argument("--conditions", default="C1,C2,C3,C4,C5", help="Comma-separated conditions to run")
+    parser.add_argument("--datasets", default="medqa,pubmedqa", help="Comma-separated subset of medqa,pubmedqa (default: medqa,pubmedqa)")
     parser.add_argument("--out", default=None, help="Output directory (defaults to outputs/v3/<model>)")
     parser.add_argument("--pilot", action="store_true", help="Run stratified N=50 validation pilot")
     parser.add_argument("--pilot-n", type=int, default=50, help="Pilot question count (default: 50)")
@@ -408,6 +446,8 @@ def main():
     bad_conds = [c for c in conditions if c not in valid_conditions]
     if bad_conds:
         sys.exit(f"ERROR: Unknown conditions: {bad_conds}. Allowed: {sorted(valid_conditions)}")
+
+    datasets = parse_and_validate_datasets(args.datasets, conditions)
 
     # Resolve model config
     if args.tiny:
@@ -456,6 +496,7 @@ def main():
         "pilot": args.pilot,
         "pilot_n": args.pilot_n if args.pilot else None,
         "conditions": conditions,
+        "datasets": datasets,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     manifest_path = os.path.join(out_base, "manifest.json")
@@ -515,18 +556,19 @@ def main():
 
     # Execute conditions
     for cond in conditions:
-        if cond in ("C1", "C2"):
-            q_list = medqa_all + pubmedqa_all
-            ev_list = evidence_c2 if cond == "C2" else {}
-            bs = batch_size_rag if cond == "C2" else batch_size
+        q_list = get_condition_questions(cond, datasets, medqa_all, pubmedqa_all, u2_questions)
+        if cond == "C2":
+            ev_list = evidence_c2
+            bs = batch_size_rag
         elif cond == "C3":
-            q_list = pubmedqa_all
             ev_list = {}
             bs = batch_size_rag
-        elif cond in ("C4", "C5"):
-            q_list = u2_questions
-            ev_list = evidence_c5 if cond == "C5" else {}
-            bs = batch_size_rag if cond == "C5" else batch_size
+        elif cond == "C5":
+            ev_list = evidence_c5
+            bs = batch_size_rag
+        else:
+            ev_list = {}
+            bs = batch_size
 
         if args.pilot:
             q_list = sample_pilot_questions(q_list, cond, n=args.pilot_n, seed=v3_cfg.get("seed", 42))

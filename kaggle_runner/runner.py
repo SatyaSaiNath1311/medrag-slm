@@ -89,6 +89,8 @@ V3_CONDITIONS = "C4,C5"
 V3_PILOT = False
 V3_PILOT_N = 10
 V3_CONFIRM_TEST = True
+V3_DATASETS = "all"
+V3_PARALLEL_MODELS = ""
 
 # Truncation sensitivity check (Task 6, validation only, no model inference at full scale)
 V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models
@@ -330,7 +332,10 @@ if SC_SHARD is None:
     if V3_RUN:
         _v3_conditions = [c.strip() for c in V3_CONDITIONS.split(",") if c.strip()]
         _v3_pilot_str = f" [PILOT N={V3_PILOT_N}]" if V3_PILOT else ""
-        print(f"V3_RUN mode enabled: model={V3_MODEL}, conditions={_v3_conditions}{_v3_pilot_str}")
+        if V3_PARALLEL_MODELS:
+            print(f"V3_RUN mode enabled (PARALLEL): models={V3_PARALLEL_MODELS}, conditions={_v3_conditions}{_v3_pilot_str}")
+        else:
+            print(f"V3_RUN mode enabled: model={V3_MODEL}, conditions={_v3_conditions}{_v3_pilot_str}")
         if not V3_PILOT and not V3_CONFIRM_TEST:
             sys.exit(
                 "\n" + "=" * 80 + "\n"
@@ -342,12 +347,25 @@ if SC_SHARD is None:
             "medpsy-1.7b", "qwen3-1.7b-thinking", "qwen3-4b-thinking-2507", "medgemma-1.5-4b-it",
             "qwen3-1.7b", "qwen3-4b", "gemma3-4b", "medpsy-4b", "phi4-mini", "smollm3-3b",
         ]
-        if V3_MODEL not in _v3_valid_models:
-            sys.exit(f"ERROR: V3_MODEL='{V3_MODEL}' is not a valid v3 model. Choose one of: {_v3_valid_models}")
+        if V3_PARALLEL_MODELS:
+            _parallel_models = [m.strip() for m in V3_PARALLEL_MODELS.split(",") if m.strip()]
+            if len(_parallel_models) != 2:
+                sys.exit(f"ERROR: V3_PARALLEL_MODELS must specify exactly two comma-separated models, got: {V3_PARALLEL_MODELS}")
+            _bad_pmodels = [m for m in _parallel_models if m not in _v3_valid_models]
+            if _bad_pmodels:
+                sys.exit(f"ERROR: V3_PARALLEL_MODELS contains unknown models: {_bad_pmodels}. Valid: {_v3_valid_models}")
+        else:
+            if V3_MODEL not in _v3_valid_models:
+                sys.exit(f"ERROR: V3_MODEL='{V3_MODEL}' is not a valid v3 model. Choose one of: {_v3_valid_models}")
         _v3_valid_conditions = {"C1", "C2", "C3", "C4", "C5"}
         _bad_conds = [c for c in _v3_conditions if c not in _v3_valid_conditions]
         if _bad_conds:
             sys.exit(f"ERROR: V3_CONDITIONS contains unknown conditions: {_bad_conds}. Valid: {_v3_valid_conditions}")
+        _v3_valid_datasets = {"all", "medqa", "pubmedqa"}
+        if V3_DATASETS not in _v3_valid_datasets:
+            sys.exit(f"ERROR: V3_DATASETS='{V3_DATASETS}' is not valid. Choose one of: {sorted(_v3_valid_datasets)}")
+        if "C3" in _v3_conditions and V3_DATASETS == "medqa":
+            sys.exit("ERROR: Condition C3 requires pubmedqa dataset, but V3_DATASETS='medqa'")
     if V3_TRUNC_SENSITIVITY:
         print("V3_TRUNC_SENSITIVITY mode enabled: cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models")
 
@@ -2900,6 +2918,63 @@ if V3_RUN:
     if not V3_PILOT:
         verify_frozen_hashes_before_run(CODE_DIR, WORK)
 
+    if V3_PARALLEL_MODELS:
+        _parallel_models = [m.strip() for m in V3_PARALLEL_MODELS.split(",") if m.strip()]
+        if len(_parallel_models) != 2:
+            sys.exit(f"ERROR: V3_PARALLEL_MODELS must specify exactly two comma-separated models, got: {V3_PARALLEL_MODELS}")
+
+        procs = []
+        for i, pmodel in enumerate(_parallel_models):
+            if V3_PILOT:
+                _p_out_base = (
+                    f"/kaggle/working/outputs/pilots/{pmodel}"
+                    if os.path.exists("/kaggle/working")
+                    else f"outputs/pilots/{pmodel}"
+                )
+            else:
+                _p_out_base = (
+                    f"/kaggle/working/outputs/v3/{pmodel}"
+                    if os.path.exists("/kaggle/working")
+                    else f"outputs/v3/{pmodel}"
+                )
+            os.makedirs(_p_out_base, exist_ok=True)
+
+            cmd_p = [
+                sys.executable, "-m", "src.qa_pipeline_v3",
+                "--config", "configs/base.yaml",
+                "--work", WORK,
+                "--model", pmodel,
+                "--split", _v3_split,
+                "--conditions", ",".join(_v3_conditions),
+                "--out", _p_out_base,
+            ]
+            if V3_DATASETS != "all":
+                cmd_p += ["--datasets", V3_DATASETS]
+            if V3_PILOT:
+                cmd_p += ["--pilot", "--pilot-n", str(V3_PILOT_N)]
+            if CHECK_ONLY:
+                cmd_p += ["--check-only"]
+            if TINY:
+                cmd_p += ["--tiny"]
+
+            extra_env = {"CUDA_VISIBLE_DEVICES": str(i)}
+            if "HF_TOKEN" in os.environ:
+                extra_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+            procs.append((f"{pmodel} (GPU {i})", run_bg(cmd_p, extra_env=extra_env)))
+
+        print(f"\nWaiting for {len(procs)} parallel v3 subprocess(es)...", flush=True)
+        exit_codes = {}
+        for label, proc in procs:
+            rc = proc.wait()
+            exit_codes[label] = rc
+            print(f"  {label} finished with exit code {rc}", flush=True)
+
+        any_failed = any(rc != 0 for rc in exit_codes.values())
+        print("\nV3_RUN PARALLEL COMPLETE:", exit_codes, flush=True)
+        if any_failed:
+            sys.exit(1)
+        sys.exit(0)
+
     if V3_PILOT:
         _v3_out_base = (
             f"/kaggle/working/outputs/pilots/{V3_MODEL}"
@@ -2923,6 +2998,8 @@ if V3_RUN:
         "--conditions", ",".join(_v3_conditions),
         "--out", _v3_out_base,
     ]
+    if V3_DATASETS != "all":
+        cmd_v3 += ["--datasets", V3_DATASETS]
     if V3_PILOT:
         cmd_v3 += ["--pilot", "--pilot-n", str(V3_PILOT_N)]
     if CHECK_ONLY:
