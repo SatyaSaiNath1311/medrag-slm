@@ -1,0 +1,19 @@
+{
+  "v3_model": "medpsy-1.7b",
+  "hf_repo_id": "qvac/MedPsy-1.7B",
+  "model_type": "causal_lm",
+  "dtype": "float16",
+  "chat_template": "tokenizer_default",
+  "reasoning": true,
+  "thinking_cap": 1024,
+  "seed": 42,
+  "split": "validation",
+  "pilot": true,
+  "pilot_n": 10,
+  "conditions": [
+    "C1",
+    "C2",
+    "C3"
+  ],
+  "timestamp": "2026-10-26T10:09:44Z"
+}
