@@ -84,11 +84,11 @@ QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=
 # Pilot (V3_PILOT=True) runs the stratified N=50 val subset first; full run after.
 # Output path: outputs/v3/<model>/<condition>/<model>.jsonl
 V3_RUN = True
-V3_MODEL = "gemma3-4b"
-V3_CONDITIONS = "C1,C2,C3,C4,C5"
-V3_PILOT = False
+V3_MODEL = "medpsy-1.7b"
+V3_CONDITIONS = "C1,C2,C3"
+V3_PILOT = True
 V3_PILOT_N = 10
-V3_CONFIRM_TEST = True
+V3_CONFIRM_TEST = False
 
 # Truncation sensitivity check (Task 6, validation only, no model inference at full scale)
 V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models
