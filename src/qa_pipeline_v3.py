@@ -19,11 +19,13 @@ Features:
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import random
 import sys
 import time
+import zlib
 from pathlib import Path
 
 # Add repo root to sys.path
@@ -38,6 +40,7 @@ from src.llm import (
     LLM,
     baseline_prompt,
     context_prompt,
+    extract_final_answer_from_reasoning,
     parse_answer,
     parse_citations,
     rag_prompt,
@@ -420,6 +423,198 @@ def run_condition(
     print(f"Condition {condition} completed: {n_processed} new rows appended to {out_file}.", flush=True)
 
 
+def compute_loop_suspect(text: str) -> bool:
+    """Descriptive heuristic: zlib compression ratio of last 2000 chars of output < 0.2."""
+    if not text:
+        return False
+    tail = text[-2000:]
+    if len(tail) < 200:
+        return False
+    compressed = zlib.compress(tail.encode("utf-8"))
+    ratio = len(compressed) / len(tail)
+    return ratio < 0.2
+
+
+def run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base):
+    """Run token-budget sweep for Pair B (greedy cap=4096 on validation split)."""
+    if args.split != "validation":
+        raise ValueError(f"ERROR: Budget sweep requires split='validation', got split='{args.split}'")
+
+    if not os.path.exists(p1_val):
+        sys.exit(f"ERROR: Validation questions not found at {p1_val}")
+    p1_questions = read_jsonl(p1_val)
+
+    # Hard assertion: Every single loaded row MUST have split == 'validation'
+    for q in p1_questions:
+        if q.get("split") != "validation":
+            raise AssertionError(f"FATAL: Non-validation split detected! id={q.get('id')} split={q.get('split')}")
+
+    # First N MedQA questions in file order
+    medqa_val = [q for q in p1_questions if q.get("dataset") == "medqa"]
+    sweep_n = args.sweep_n
+    sweep_questions = medqa_val[:sweep_n]
+    if len(sweep_questions) < sweep_n:
+        raise ValueError(f"Requested sweep_n={sweep_n}, but only {len(sweep_questions)} MedQA val questions available.")
+    assert all(q.get("split") == "validation" for q in sweep_questions), "FATAL: Question without split=='validation' in sweep subset"
+
+    os.makedirs(out_base, exist_ok=True)
+    out_file = os.path.join(out_base, f"{args.model}.jsonl")
+
+    # Resume pattern: load existing IDs
+    existing_rows = read_jsonl(out_file) if os.path.exists(out_file) else []
+    existing_ids = {r["id"] for r in existing_rows}
+    todo = [q for q in sweep_questions if q["id"] not in existing_ids]
+
+    print(
+        f"\n[{args.model}] BUDGET SWEEP START: N={len(sweep_questions)}, "
+        f"already_done={len(existing_ids)}, remaining={len(todo)}, cap={args.sweep_cap}",
+        flush=True,
+    )
+
+    device = args.device or get_device()
+    if args.tiny:
+        device = "cpu"
+
+    llm = None
+    if not (args.check_only or args.tiny):
+        banner(f"LOADING MODEL FOR BUDGET SWEEP: {args.model} ({mcfg.get('id')}) on {device}")
+        t0_load = time.time()
+        llm = LLM(mcfg, device=device)
+        print(f"Model loaded in {time.time() - t0_load:.1f}s (load_source={getattr(llm, 'load_source', 'default')})", flush=True)
+
+    t0_sweep = time.time()
+    max_sec = args.sweep_max_hours * 3600.0
+    completed_all = True
+    n_processed = 0
+
+    for i, q in enumerate(todo):
+        if (time.time() - t0_sweep) >= max_sec:
+            print(f"[{args.model}] Reached max sweep hours ({args.sweep_max_hours}h). Stopping gracefully.", flush=True)
+            completed_all = False
+            break
+
+        prompt = reasoning_baseline_prompt(q)
+        letters = list(q.get("options", {}).keys())
+
+        if args.check_only or args.tiny:
+            # Synthetic / fast CPU mock
+            raw_output = f"<think>\nReasoning trace for {q['id']}...\n</think>\nAnswer: {q.get('answer', 'A')}"
+            finished_naturally = True
+            n_gen_tokens = 250
+            sec_q = 0.01
+        else:
+            wrapped = llm.wrap_reasoning(prompt)
+            enc = llm.tok([wrapped], return_tensors="pt", padding=True, add_special_tokens=False)
+            first_dev = next(llm.model.parameters()).device
+            enc = {k: v.to(first_dev) for k, v in enc.items()}
+
+            from transformers import GenerationConfig
+            gcfg = GenerationConfig(
+                max_new_tokens=args.sweep_cap,
+                do_sample=False,
+                eos_token_id=sorted(list(llm.eos)),
+                pad_token_id=llm.pad_id,
+                return_dict_in_generate=True,
+            )
+            if llm.device == "cuda" or (isinstance(llm.device, str) and llm.device.startswith("cuda")):
+                torch.cuda.synchronize()
+            t0_gen = time.perf_counter()
+            with torch.inference_mode():
+                out = llm.model.generate(**enc, generation_config=gcfg)
+            if llm.device == "cuda" or (isinstance(llm.device, str) and llm.device.startswith("cuda")):
+                torch.cuda.synchronize()
+            sec_q = round(time.perf_counter() - t0_gen, 4)
+
+            seqs = out.sequences if hasattr(out, "sequences") else out
+            prompt_ids_len = enc["input_ids"].shape[1]
+            all_gen_ids = seqs[0, prompt_ids_len:].tolist()
+
+            eos_idx = next((idx for idx, t in enumerate(all_gen_ids) if t in llm.eos), None)
+            if eos_idx is not None:
+                finished_naturally = True
+                n_gen_tokens = eos_idx + 1  # EOS counted
+                gen_ids = all_gen_ids[:eos_idx]
+                raw_output = llm.tok.decode(gen_ids, skip_special_tokens=True)
+            else:
+                finished_naturally = False
+                n_gen_tokens = len(all_gen_ids)
+                raw_output = llm.tok.decode(all_gen_ids, skip_special_tokens=True)
+
+        parsed_pred = extract_final_answer_from_reasoning(raw_output, letters)
+        if parsed_pred is None:
+            parsed_pred = parse_answer(raw_output, q.get("options", {}))
+        parsed = parsed_pred is not None
+
+        gold = q.get("answer") if "answer" in q and q["answer"] is not None else q.get("answer_idx")
+        correct = bool(parsed and str(parsed_pred).strip().upper() == str(gold).strip().upper())
+
+        row = dict(q)
+        row["raw_output"] = raw_output
+        row["pred"] = parsed_pred
+        row["parsed"] = parsed
+        row["correct"] = correct
+        row["n_generated_tokens"] = n_gen_tokens
+        row["finished_naturally"] = finished_naturally
+        row["seconds"] = sec_q
+        row["loop_suspect"] = compute_loop_suspect(raw_output)
+        row["condition"] = "C1"
+        row["model"] = args.model
+
+        append_jsonl(out_file, [row])
+        assert_appended_row_valid(out_file, expected_id=row.get("id"))
+        n_processed += 1
+
+        if (n_processed % 10 == 0) or (i + 1 == len(todo)):
+            print(f"[{args.model}] Processed {len(existing_ids) + n_processed}/{len(sweep_questions)}", flush=True)
+
+    # Manifest creation
+    total_done = len(read_jsonl(out_file)) if os.path.exists(out_file) else 0
+    completed_model = completed_all and (total_done == len(sweep_questions))
+    elapsed_hours = round((time.time() - t0_sweep) / 3600.0, 4)
+
+    rule_file = "docs/BUDGET_DECISION_RULE.md"
+    rule_hash = ""
+    if os.path.exists(rule_file):
+        with open(rule_file, "rb") as fh:
+            rule_hash = hashlib.sha256(fh.read()).hexdigest()
+
+    def _get_git_commit():
+        try:
+            import subprocess
+            return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        except Exception:
+            return os.environ.get("GIT_COMMIT", "unknown")
+
+    manifest_data = {
+        "git_commit_hash": _get_git_commit(),
+        "rule_file_sha256": rule_hash,
+        "generation_config": {
+            "max_new_tokens": args.sweep_cap,
+            "do_sample": False,
+            "eos_token_id": sorted(list(llm.eos)) if llm is not None else [151645],
+            "pad_token_id": llm.pad_id if llm is not None else 151643,
+        },
+        "torch_version": torch.__version__ if "torch" in sys.modules else "unknown",
+        "transformers_version": transformers.__version__ if "transformers" in sys.modules else "unknown",
+        "dtype": str(mcfg.get("dtype", "float16")),
+        "batch_size": args.batch_size or 1,
+        "N": len(sweep_questions),
+        "seed": 42,
+        "completed": completed_model,
+        "hours_used": elapsed_hours,
+        "model": args.model,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    manifest_path = os.path.join(out_base, "manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest_data, fh, indent=2)
+    with open(os.path.join(out_base, f"manifest_{args.model}.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest_data, fh, indent=2)
+    print(f"[{args.model}] Manifest saved to {manifest_path} (completed={completed_model})", flush=True)
+    print(f"\n=== BUDGET SWEEP COMPLETE for {args.model} (total_done={total_done}/{len(sweep_questions)}) ===\n", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="v3 Matched-Pair Generic vs Medical QA Pipeline")
     parser.add_argument("--config", default="configs/base.yaml", help="Path to base.yaml config")
@@ -434,6 +629,11 @@ def main():
     parser.add_argument("--check-only", action="store_true", help="Format and parse check only")
     parser.add_argument("--tiny", action="store_true", help="Run tiny CPU check with tiny_model")
     parser.add_argument("--device", default=None, help="Torch device override (auto, cuda, cpu)")
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size override")
+    parser.add_argument("--budget-sweep", action="store_true", help="Run token-budget sweep for Pair B on validation")
+    parser.add_argument("--sweep-n", type=int, default=100, help="Number of validation MedQA questions to sweep (default: 100)")
+    parser.add_argument("--sweep-max-hours", type=float, default=10.0, help="Maximum execution time in hours before graceful stop (default: 10.0)")
+    parser.add_argument("--sweep-cap", type=int, default=4096, help="Maximum new tokens for sweep generation (default: 4096)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -464,11 +664,20 @@ def main():
     if args.out:
         out_base = args.out
     else:
-        out_base = f"/kaggle/working/outputs/v3/{args.model}" if os.path.exists("/kaggle/working") else f"outputs/v3/{args.model}"
+        if args.budget_sweep:
+            out_base = "/kaggle/working/outputs/sweeps/budget_pair_b" if os.path.exists("/kaggle/working") else "outputs/sweeps/budget_pair_b"
+        else:
+            out_base = f"/kaggle/working/outputs/v3/{args.model}" if os.path.exists("/kaggle/working") else f"outputs/v3/{args.model}"
     os.makedirs(out_base, exist_ok=True)
 
     # Locate question files
     p1_test, p1_val, u2_test, u2_val = find_question_files(args.work)
+
+    # Branch immediately to budget sweep if requested (validation only)
+    if args.budget_sweep:
+        run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base)
+        return
+
     print(f"Data sources:")
     print(f"  Phase 1 test       : {p1_test} (exists: {os.path.exists(p1_test)})")
     print(f"  Phase 1 val        : {p1_val} (exists: {os.path.exists(p1_val)})")
