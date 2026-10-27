@@ -435,6 +435,41 @@ def compute_loop_suspect(text: str) -> bool:
     return ratio < 0.2
 
 
+def build_sweep_row(
+    q: dict,
+    raw_output: str,
+    parsed_pred: Any,
+    parsed: bool,
+    correct: bool,
+    n_gen_tokens: int,
+    finished_naturally: bool,
+    sec_q: float,
+    model_name: str,
+) -> dict:
+    """Pure function to construct a budget sweep row with all required evaluation schema keys.
+
+    Required schema keys checked by assert_appended_row_valid:
+      - 'id' (from q)
+      - 'pred'
+      - 'parsed'
+      - 'correct'
+      - 'truncated' (at the 4096 cap, truncated=True iff no EOS was emitted)
+    """
+    row = dict(q)
+    row["raw_output"] = raw_output
+    row["pred"] = parsed_pred
+    row["parsed"] = parsed
+    row["correct"] = correct
+    row["truncated"] = not finished_naturally
+    row["n_generated_tokens"] = n_gen_tokens
+    row["finished_naturally"] = finished_naturally
+    row["seconds"] = sec_q
+    row["loop_suspect"] = compute_loop_suspect(raw_output)
+    row["condition"] = "C1"
+    row["model"] = model_name
+    return row
+
+
 def run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base):
     """Run token-budget sweep for Pair B (greedy cap=4096 on validation split)."""
     if args.split != "validation":
@@ -548,17 +583,17 @@ def run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base):
         gold = q.get("answer") if "answer" in q and q["answer"] is not None else q.get("answer_idx")
         correct = bool(parsed and str(parsed_pred).strip().upper() == str(gold).strip().upper())
 
-        row = dict(q)
-        row["raw_output"] = raw_output
-        row["pred"] = parsed_pred
-        row["parsed"] = parsed
-        row["correct"] = correct
-        row["n_generated_tokens"] = n_gen_tokens
-        row["finished_naturally"] = finished_naturally
-        row["seconds"] = sec_q
-        row["loop_suspect"] = compute_loop_suspect(raw_output)
-        row["condition"] = "C1"
-        row["model"] = args.model
+        row = build_sweep_row(
+            q=q,
+            raw_output=raw_output,
+            parsed_pred=parsed_pred,
+            parsed=parsed,
+            correct=correct,
+            n_gen_tokens=n_gen_tokens,
+            finished_naturally=finished_naturally,
+            sec_q=sec_q,
+            model_name=args.model,
+        )
 
         append_jsonl(out_file, [row])
         assert_appended_row_valid(out_file, expected_id=row.get("id"))

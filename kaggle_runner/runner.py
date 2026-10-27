@@ -97,7 +97,7 @@ V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val que
 
 # Token-budget sweep for Pair B (Task 1/5, validation only, greedy cap=4096)
 V3_BUDGET_SWEEP = True
-V3_SWEEP_N = 100
+V3_SWEEP_N = 3
 V3_SWEEP_MAX_HOURS = 10.0
 V3_SWEEP_BATCH_SIZE = 1
 

@@ -45,7 +45,7 @@ def compute_sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def check_sweep(sweep_dir: str) -> bool:
+def check_sweep(sweep_dir: str, expected_n: int = 100) -> bool:
     print("\n" + "=" * 70)
     print(f"=== PAIR B BUDGET SWEEP AUDIT: {sweep_dir} ===")
     print("=" * 70 + "\n")
@@ -91,8 +91,9 @@ def check_sweep(sweep_dir: str) -> bool:
         f"manifest={manifest_rule_hash[:12]}... local={expected_rule_hash[:12]}...",
     )
 
-    # Expected N
-    expected_n = manifest.get("N", 100)
+    # Expected N: if manifest records N, use that; otherwise expected_n
+    if "N" in manifest and manifest["N"] is not None:
+        expected_n = manifest["N"]
 
     # 4. Check model files exist
     model_rows = {}
@@ -181,9 +182,15 @@ def main():
         default="outputs/sweeps/budget_pair_b",
         help="Directory containing sweep JSONL and manifest.json (default: outputs/sweeps/budget_pair_b)",
     )
+    parser.add_argument(
+        "--expected-n",
+        type=int,
+        default=100,
+        help="Expected row count per model (default: 100; overridden by manifest N if present)",
+    )
     args = parser.parse_args()
 
-    success = check_sweep(args.sweep_dir)
+    success = check_sweep(args.sweep_dir, expected_n=args.expected_n)
     sys.exit(0 if success else 1)
 
 

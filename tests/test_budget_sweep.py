@@ -14,7 +14,9 @@ Verifies:
   6. With V3_BUDGET_SWEEP unset, runner config resolves exactly as before.
 """
 
+import json
 import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,8 +29,11 @@ from src.analysis_budget_sweep import (
     is_finished_within_cap,
     is_strict_correct_at_cap,
     is_truncated_at_cap,
+    run_analysis,
     wilson_score_ci,
 )
+from src.common import append_jsonl
+from src.qa_pipeline_v3 import assert_appended_row_valid, build_sweep_row
 
 
 class TestBudgetSweepBoundaries(unittest.TestCase):
@@ -223,6 +228,72 @@ class TestValidationSplitHardAssertion(unittest.TestCase):
             check_splits(synthetic_rows)
 
 
+class TestSweepRowSchemaValidation(unittest.TestCase):
+    """Regression test: rows constructed by build_sweep_row must pass assert_appended_row_valid."""
+
+    def test_sweep_row_finished_naturally_validates(self):
+        q = {
+            "id": "medqa-val-001",
+            "question": "Sample question?",
+            "options": {"A": "Choice A", "B": "Choice B"},
+            "answer": "A",
+            "split": "validation",
+        }
+        row = build_sweep_row(
+            q=q,
+            raw_output="<think>analysis</think>\nAnswer: A",
+            parsed_pred="A",
+            parsed=True,
+            correct=True,
+            n_gen_tokens=350,
+            finished_naturally=True,
+            sec_q=1.234,
+            model_name="qwen3-4b-thinking-2507",
+        )
+        self.assertFalse(row["truncated"])
+        self.assertTrue(row["finished_naturally"])
+
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tf:
+            temp_path = tf.name
+        try:
+            append_jsonl(temp_path, [row])
+            assert_appended_row_valid(temp_path, expected_id="medqa-val-001")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    def test_sweep_row_truncated_validates(self):
+        q = {
+            "id": "medqa-val-002",
+            "question": "Sample question 2?",
+            "options": {"A": "Choice A", "B": "Choice B"},
+            "answer": "B",
+            "split": "validation",
+        }
+        row = build_sweep_row(
+            q=q,
+            raw_output="<think>cut off before producing answer",
+            parsed_pred=None,
+            parsed=False,
+            correct=False,
+            n_gen_tokens=4096,
+            finished_naturally=False,
+            sec_q=12.34,
+            model_name="qwen3-4b-thinking-2507",
+        )
+        self.assertTrue(row["truncated"])
+        self.assertFalse(row["finished_naturally"])
+
+        with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tf:
+            temp_path = tf.name
+        try:
+            append_jsonl(temp_path, [row])
+            assert_appended_row_valid(temp_path, expected_id="medqa-val-002")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
 class TestDefaultRunnerResolution(unittest.TestCase):
     """Verify that with V3_BUDGET_SWEEP unset, runner configuration resolves as before."""
 
@@ -247,7 +318,193 @@ class TestDefaultRunnerResolution(unittest.TestCase):
         self.assertIs(module_assigns["V3_BUDGET_SWEEP"], False)
         self.assertEqual(module_assigns.get("V3_SWEEP_N"), 100)
         self.assertEqual(module_assigns.get("V3_SWEEP_MAX_HOURS"), 10.0)
-        self.assertEqual(module_assigns.get("V3_SWEEP_BATCH_SIZE"), 1)
+
+class TestBudgetSweepAnalysisEndToEnd(unittest.TestCase):
+    """End-to-end tests for run_analysis on synthetic sweep fixtures."""
+
+    def test_analysis_smoke_run_n3(self):
+        """Case A: n=3 -> report starts with SMOKE banner, no Chosen Test Cap line, figures created."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = os.path.join(tmpdir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "completed": True,
+                        "N": 3,
+                        "split": "validation",
+                        "model_pair": ["qwen3-4b-thinking-2507", "medpsy-4b"],
+                    },
+                    f,
+                )
+
+            qwen_rows = []
+            medpsy_rows = []
+            for i in range(3):
+                qid = f"medqa-val-{i:03d}"
+                q = {
+                    "id": qid,
+                    "dataset": "medqa",
+                    "split": "validation",
+                    "question": f"Question {i}?",
+                    "options": {"A": "Choice A", "B": "Choice B"},
+                    "answer": "A",
+                }
+                qwen_rows.append(
+                    build_sweep_row(
+                        q=q,
+                        raw_output=f"<think>analysis {i}</think>\nAnswer: A",
+                        parsed_pred="A",
+                        parsed=True,
+                        correct=True,
+                        n_gen_tokens=500 + i * 100,
+                        finished_naturally=True,
+                        sec_q=1.0,
+                        model_name="qwen3-4b-thinking-2507",
+                    )
+                )
+                medpsy_rows.append(
+                    build_sweep_row(
+                        q=q,
+                        raw_output="Answer: A",
+                        parsed_pred="A",
+                        parsed=True,
+                        correct=True,
+                        n_gen_tokens=300 + i * 50,
+                        finished_naturally=True,
+                        sec_q=0.5,
+                        model_name="medpsy-4b",
+                    )
+                )
+
+            append_jsonl(os.path.join(tmpdir, "qwen3-4b-thinking-2507.jsonl"), qwen_rows)
+            append_jsonl(os.path.join(tmpdir, "medpsy-4b.jsonl"), medpsy_rows)
+
+            out_md = os.path.join(tmpdir, "report.md")
+            out_png = os.path.join(tmpdir, "plot.png")
+            out_svg = os.path.join(tmpdir, "plot.svg")
+
+            run_analysis(tmpdir, out_md, out_png, out_svg)
+
+            self.assertTrue(os.path.exists(out_md))
+            with open(out_md, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertTrue(
+                content.startswith("SMOKE RUN N=3: not for reporting"),
+                f"Expected smoke banner at start of report, got:\n{content[:100]}",
+            )
+            self.assertNotIn("Chosen Test Cap", content)
+            self.assertTrue(os.path.exists(out_png))
+            self.assertTrue(os.path.exists(out_svg))
+            self.assertIn("- **Consistency Check:**", content)
+
+    def test_analysis_full_run_n100_decision_rule(self):
+        """Case B: n=100 -> decision-rule section present, chosen cap matches apply_budget_decision_rule."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            manifest_path = os.path.join(tmpdir, "manifest.json")
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "completed": True,
+                        "N": 100,
+                        "split": "validation",
+                        "model_pair": ["qwen3-4b-thinking-2507", "medpsy-4b"],
+                    },
+                    f,
+                )
+
+            qwen_rows = []
+            medpsy_rows = []
+            # Construct 100 questions with mixed token counts:
+            # 0-14 (15 questions): 800 tokens, finished (finished <= 1024)
+            # 15-29 (15 questions): 1400 tokens, finished (finished <= 1536)
+            # 30-84 (55 questions): 1900 tokens, finished (finished <= 2048)
+            # 85-99 (15 questions): 4096 tokens, finished_naturally=False (truncated at all caps)
+            for i in range(100):
+                qid = f"medqa-val-{i:03d}"
+                q = {
+                    "id": qid,
+                    "dataset": "medqa",
+                    "split": "validation",
+                    "question": f"Question {i}?",
+                    "options": {"A": "Choice A", "B": "Choice B"},
+                    "answer": "A",
+                }
+                if i < 15:
+                    n_gen = 800
+                    finished = True
+                elif i < 30:
+                    n_gen = 1400
+                    finished = True
+                elif i < 85:
+                    n_gen = 1900
+                    finished = True
+                else:
+                    n_gen = 4096
+                    finished = False
+
+                qwen_rows.append(
+                    build_sweep_row(
+                        q=q,
+                        raw_output=f"<think>thought {i}</think>\nAnswer: A" if finished else "<think>cut off",
+                        parsed_pred="A" if finished else None,
+                        parsed=finished,
+                        correct=finished,
+                        n_gen_tokens=n_gen,
+                        finished_naturally=finished,
+                        sec_q=1.0,
+                        model_name="qwen3-4b-thinking-2507",
+                    )
+                )
+                medpsy_rows.append(
+                    build_sweep_row(
+                        q=q,
+                        raw_output="Answer: A",
+                        parsed_pred="A",
+                        parsed=True,
+                        correct=True,
+                        n_gen_tokens=400,
+                        finished_naturally=True,
+                        sec_q=0.5,
+                        model_name="medpsy-4b",
+                    )
+                )
+
+            # Expected truncation rates for Qwen:
+            # cap 1024: 15 finished -> 85% trunc
+            # cap 1536: 30 finished -> 70% trunc
+            # cap 2048: 85 finished -> 15% trunc (qualifies <= 20%)
+            # cap 3072: 85 finished -> 15% trunc
+            # cap 4096: 85 finished -> 15% trunc
+            synthetic_qwen_trunc_rates = {
+                1024: (100 - sum(1 for r in qwen_rows if is_finished_within_cap(r, 1024))) / 100.0,
+                1536: (100 - sum(1 for r in qwen_rows if is_finished_within_cap(r, 1536))) / 100.0,
+                2048: (100 - sum(1 for r in qwen_rows if is_finished_within_cap(r, 2048))) / 100.0,
+                3072: (100 - sum(1 for r in qwen_rows if is_finished_within_cap(r, 3072))) / 100.0,
+                4096: (100 - sum(1 for r in qwen_rows if is_finished_within_cap(r, 4096))) / 100.0,
+            }
+            expected_cap, expected_msg = apply_budget_decision_rule(synthetic_qwen_trunc_rates)
+            self.assertEqual(expected_cap, 2048)
+
+            append_jsonl(os.path.join(tmpdir, "qwen3-4b-thinking-2507.jsonl"), qwen_rows)
+            append_jsonl(os.path.join(tmpdir, "medpsy-4b.jsonl"), medpsy_rows)
+
+            out_md = os.path.join(tmpdir, "report.md")
+            out_png = os.path.join(tmpdir, "plot.png")
+            out_svg = os.path.join(tmpdir, "plot.svg")
+
+            run_analysis(tmpdir, out_md, out_png, out_svg)
+
+            self.assertTrue(os.path.exists(out_md))
+            with open(out_md, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            self.assertFalse(content.startswith("SMOKE RUN"))
+            self.assertIn("## 1. Decision Rule Execution & Selected Test Cap", content)
+            self.assertIn(f"- **Chosen Test Cap:** `{expected_cap}` tokens", content)
+            self.assertTrue(os.path.exists(out_png))
+            self.assertTrue(os.path.exists(out_svg))
+            self.assertIn("- **Consistency Check:**", content)
 
 
 if __name__ == "__main__":

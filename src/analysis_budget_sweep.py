@@ -149,11 +149,20 @@ def apply_budget_decision_rule(
 
 def check_medpsy_validation_consistency(sweep_medpsy_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Consistency check against existing greedy validation outputs in outputs/sc_val/medpsy-4b/."""
-    sc_val_path = "outputs/sc_val/medpsy-4b/medqa.jsonl"
-    if not os.path.exists(sc_val_path):
+    candidates = [
+        os.path.join(REPO_ROOT, "outputs", "sc_val", "medpsy-4b", "medqa.jsonl"),
+        os.path.join("outputs", "sc_val", "medpsy-4b", "medqa.jsonl"),
+    ]
+    sc_val_path = None
+    for p in candidates:
+        if os.path.exists(p):
+            sc_val_path = p
+            break
+
+    if not sc_val_path:
         return {
             "status": "skipped",
-            "reason": f"File not found at {sc_val_path}",
+            "reason": "File not found at outputs/sc_val/medpsy-4b/medqa.jsonl",
         }
 
     try:
@@ -206,9 +215,10 @@ def check_medpsy_validation_consistency(sweep_medpsy_rows: List[Dict[str, Any]])
 
 def plot_budget_sweep(
     results_by_cap: Dict[int, Dict[str, Any]],
-    chosen_cap: int,
+    chosen_cap: int | None,
     out_png: str,
     out_svg: str,
+    n_questions: int = 100,
 ):
     """Plot strict accuracy and truncation rate vs token cap with 95% Wilson CI bands."""
     import matplotlib
@@ -239,10 +249,11 @@ def plot_budget_sweep(
     ax1.fill_between(caps, med_acc_low, med_acc_high, color="#1f77b4", alpha=0.15)
     ax1.plot(caps, qwen_acc, marker="s", color="#d62728", label="Qwen3-4B-Thinking-2507 (Generic)", linewidth=2)
     ax1.fill_between(caps, qwen_acc_low, qwen_acc_high, color="#d62728", alpha=0.15)
-    ax1.axvline(chosen_cap, color="green", linestyle="--", linewidth=1.5, label=f"Chosen Test Cap ({chosen_cap})")
+    if chosen_cap is not None:
+        ax1.axvline(chosen_cap, color="green", linestyle="--", linewidth=1.5, label=f"Chosen Test Cap ({chosen_cap})")
     ax1.set_xlabel("Token Budget Cap (tokens)", fontsize=11, fontweight="bold")
     ax1.set_ylabel("Strict Accuracy", fontsize=11, fontweight="bold")
-    ax1.set_title("Strict Accuracy vs Token Budget Cap (C1 Validation N=100)", fontsize=12, fontweight="bold")
+    ax1.set_title(f"Strict Accuracy vs Token Budget Cap (C1 Validation N={n_questions})", fontsize=12, fontweight="bold")
     ax1.set_ylim(-0.02, 1.02)
     ax1.set_xticks(caps)
     ax1.grid(True, linestyle=":", alpha=0.6)
@@ -254,10 +265,11 @@ def plot_budget_sweep(
     ax2.plot(caps, qwen_trunc, marker="s", color="#d62728", label="Qwen3-4B-Thinking-2507", linewidth=2)
     ax2.fill_between(caps, qwen_trunc_low, qwen_trunc_high, color="#d62728", alpha=0.15)
     ax2.axhline(0.20, color="gray", linestyle=":", linewidth=1.5, label="Target Truncation <= 20%")
-    ax2.axvline(chosen_cap, color="green", linestyle="--", linewidth=1.5, label=f"Chosen Test Cap ({chosen_cap})")
+    if chosen_cap is not None:
+        ax2.axvline(chosen_cap, color="green", linestyle="--", linewidth=1.5, label=f"Chosen Test Cap ({chosen_cap})")
     ax2.set_xlabel("Token Budget Cap (tokens)", fontsize=11, fontweight="bold")
     ax2.set_ylabel("Truncation Rate", fontsize=11, fontweight="bold")
-    ax2.set_title("Truncation Rate vs Token Budget Cap (C1 Validation N=100)", fontsize=12, fontweight="bold")
+    ax2.set_title(f"Truncation Rate vs Token Budget Cap (C1 Validation N={n_questions})", fontsize=12, fontweight="bold")
     ax2.set_ylim(-0.02, 1.02)
     ax2.set_xticks(caps)
     ax2.grid(True, linestyle=":", alpha=0.6)
@@ -271,7 +283,13 @@ def plot_budget_sweep(
     print(f"Figures saved to {out_png} and {out_svg}")
 
 
-def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
+def run_analysis(
+    sweep_dir: str,
+    out_md: str,
+    out_png: str,
+    out_svg: str,
+    expected_n_override: int | None = None,
+):
     qwen_file = os.path.join(sweep_dir, f"{MODEL_GENERIC}.jsonl")
     medpsy_file = os.path.join(sweep_dir, f"{MODEL_MEDICAL}.jsonl")
 
@@ -285,13 +303,16 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
     assert all(r.get("split") == "validation" for r in qwen_rows), "FATAL: Non-validation row in Qwen sweep data"
     assert all(r.get("split") == "validation" for r in medpsy_rows), "FATAL: Non-validation row in MedPsy sweep data"
 
-    # Match rows by ID
+    # Assert both models have the same count and identical ID sets
+    assert len(qwen_rows) == len(medpsy_rows), (
+        f"Mismatched row count between models: qwen={len(qwen_rows)}, medpsy={len(medpsy_rows)}"
+    )
     qwen_dict = {r["id"]: r for r in qwen_rows}
     medpsy_dict = {r["id"]: r for r in medpsy_rows}
-    common_ids = [r["id"] for r in qwen_rows if r["id"] in medpsy_dict]
-    assert len(common_ids) == len(qwen_rows) == len(medpsy_rows), "Mismatched question IDs between models"
+    assert set(qwen_dict.keys()) == set(medpsy_dict.keys()), "Mismatched question ID sets between models"
+    common_ids = [r["id"] for r in qwen_rows]
 
-    N = len(common_ids)
+    n_rows = len(qwen_rows)
 
     # Collect token statistics per model across the full 4096 run
     qwen_tokens = np.array([qwen_dict[qid].get("n_generated_tokens", 0) for qid in common_ids])
@@ -315,9 +336,9 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
 
         # Metrics for MedPsy
         med_strict_acc = float(np.mean(med_strict))
-        med_strict_ci = wilson_score_ci(int(np.sum(med_strict)), N)
+        med_strict_ci = wilson_score_ci(int(np.sum(med_strict)), n_rows)
         med_trunc_rate = float(np.mean(med_trunc))
-        med_trunc_ci = wilson_score_ci(int(np.sum(med_trunc)), N)
+        med_trunc_ci = wilson_score_ci(int(np.sum(med_trunc)), n_rows)
         med_trunc_rows = [medpsy_dict[qid] for qid in common_ids if is_truncated_at_cap(medpsy_dict[qid], cap)]
         med_loop_share = (
             sum(1 for r in med_trunc_rows if r.get("loop_suspect")) / len(med_trunc_rows)
@@ -326,9 +347,9 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
 
         # Metrics for Qwen
         qwen_strict_acc = float(np.mean(qwen_strict))
-        qwen_strict_ci = wilson_score_ci(int(np.sum(qwen_strict)), N)
+        qwen_strict_ci = wilson_score_ci(int(np.sum(qwen_strict)), n_rows)
         qwen_trunc_rate = float(np.mean(qwen_trunc))
-        qwen_trunc_ci = wilson_score_ci(int(np.sum(qwen_trunc)), N)
+        qwen_trunc_ci = wilson_score_ci(int(np.sum(qwen_trunc)), n_rows)
         qwen_trunc_rows = [qwen_dict[qid] for qid in common_ids if is_truncated_at_cap(qwen_dict[qid], cap)]
         qwen_loop_share = (
             sum(1 for r in qwen_trunc_rows if r.get("loop_suspect")) / len(qwen_trunc_rows)
@@ -388,7 +409,7 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
             },
             "descriptive_both_finished": {
                 "n": n_both_fin,
-                "pct": (n_both_fin / N) * 100.0,
+                "pct": (n_both_fin / n_rows) * 100.0,
                 "medpsy_acc": med_both_acc,
                 "qwen_acc": qwen_both_acc,
             },
@@ -408,23 +429,35 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
         else:
             results_by_cap[cap]["comparison"]["p_trunc_holm"] = holm_adj_p[idx]
 
-    # Apply pre-registered decision rule
-    qwen_trunc_rates = {c: results_by_cap[c]["qwen"]["trunc_rate"] for c in CAPS}
-    chosen_cap, decision_rationale = apply_budget_decision_rule(qwen_trunc_rates)
-    print(f"\nDECISION RULE RESULT: {decision_rationale}\n", flush=True)
+    # Smoke run definition: iff n_rows != 100
+    is_smoke = (n_rows != 100)
+
+    chosen_cap = None
+    decision_rationale = ""
+    if not is_smoke:
+        # Apply pre-registered decision rule only when full N=100
+        qwen_trunc_rates = {c: results_by_cap[c]["qwen"]["trunc_rate"] for c in CAPS}
+        chosen_cap, decision_rationale = apply_budget_decision_rule(qwen_trunc_rates)
+        print(f"\nDECISION RULE RESULT: {decision_rationale}\n", flush=True)
+    else:
+        print(f"\nSMOKE RUN N={n_rows}: decision-rule output suppressed (requires full N=100).\n", flush=True)
 
     # MedPsy consistency check against sc_val
     consistency_res = check_medpsy_validation_consistency(medpsy_rows)
 
     # Plot
-    plot_budget_sweep(results_by_cap, chosen_cap, out_png, out_svg)
+    plot_budget_sweep(results_by_cap, chosen_cap, out_png, out_svg, n_questions=n_rows)
 
     # Write Markdown Report
     lines = []
+    if is_smoke:
+        lines.append(f"SMOKE RUN N={n_rows}: not for reporting")
+        lines.append("")
+
     lines.append("# Pair B Validation Token-Budget Sweep Report")
     lines.append("")
     lines.append(f"**Models:** `medpsy-4b` (Medical SLM) vs `qwen3-4b-thinking-2507` (Generic Reasoning Control)")
-    lines.append(f"**Dataset:** MedQA validation split (first {N} questions in file order)")
+    lines.append(f"**Dataset:** MedQA validation split (first {n_rows} questions in file order)")
     lines.append(f"**Condition:** Condition C1 (closed-book baseline)")
     lines.append(f"**Decoding:** Strictly greedy (`do_sample=False`), one run at `max_new_tokens=4096`")
     lines.append("")
@@ -437,19 +470,25 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
 
     lines.append("## 1. Decision Rule Execution & Selected Test Cap")
     lines.append("")
-    lines.append(rf"**Pre-Registered Decision Rule:** Select the smallest cap in $[1024, 1536, 2048, 3072, 4096]$ at which `qwen3-4b-thinking-2507` validation truncation $\le 20.0\%$. If none qualifies, fall back to 4096.")
-    lines.append("")
-    lines.append(f"- **Chosen Test Cap:** `{chosen_cap}` tokens")
-    lines.append(f"- **Rule Outcome:** {decision_rationale}")
-    lines.append(f"- **Equal Budget Application:** Both `medpsy-4b` and `qwen3-4b-thinking-2507` will receive cap `{chosen_cap}` in the final Pair B test run.")
+    if is_smoke:
+        lines.append("> [!WARNING]")
+        lines.append(f"> **Decision-rule output suppressed (SMOKE RUN N={n_rows} != 100).**")
+        lines.append("> The pre-registered decision rule requires the full N=100 validation sample to fix the final Pair B test cap.")
+        lines.append("> This report contains preliminary diagnostic sweep curves only.")
+    else:
+        lines.append(rf"**Pre-Registered Decision Rule:** Select the smallest cap in $[1024, 1536, 2048, 3072, 4096]$ at which `qwen3-4b-thinking-2507` validation truncation $\le 20.0\%$. If none qualifies, fall back to 4096.")
+        lines.append("")
+        lines.append(f"- **Chosen Test Cap:** `{chosen_cap}` tokens")
+        lines.append(f"- **Rule Outcome:** {decision_rationale}")
+        lines.append(f"- **Equal Budget Application:** Both `medpsy-4b` and `qwen3-4b-thinking-2507` will receive cap `{chosen_cap}` in the final Pair B test run.")
     lines.append("")
 
     lines.append("## 2. Token Generation Summary Across Full Generation (Cap=4096)")
     lines.append("")
     lines.append("| Model | Median Tokens | p90 Tokens | Min Tokens | Max Tokens | Finished Naturally (%) |")
     lines.append("|---|---|---|---|---|---|")
-    med_fin_total = sum(1 for r in medpsy_rows if r.get("finished_naturally")) / N * 100.0
-    qwen_fin_total = sum(1 for r in qwen_rows if r.get("finished_naturally")) / N * 100.0
+    med_fin_total = sum(1 for r in medpsy_rows if r.get("finished_naturally")) / n_rows * 100.0
+    qwen_fin_total = sum(1 for r in qwen_rows if r.get("finished_naturally")) / n_rows * 100.0
     lines.append(f"| `medpsy-4b` | {np.median(medpsy_tokens):.1f} | {np.percentile(medpsy_tokens, 90):.1f} | {np.min(medpsy_tokens)} | {np.max(medpsy_tokens)} | {med_fin_total:.1f}% |")
     lines.append(f"| `qwen3-4b-thinking-2507` | {np.median(qwen_tokens):.1f} | {np.percentile(qwen_tokens, 90):.1f} | {np.min(qwen_tokens)} | {np.max(qwen_tokens)} | {qwen_fin_total:.1f}% |")
     lines.append("")
@@ -509,7 +548,7 @@ def run_analysis(sweep_dir: str, out_md: str, out_png: str, out_svg: str):
     lines.append("|---|---|---|---|")
     for cap in CAPS:
         sub = results_by_cap[cap]["descriptive_both_finished"]
-        lines.append(f"| {cap} | {sub['n']}/{N} ({sub['pct']:.1f}%) | {sub['medpsy_acc']*100:.1f}% | {sub['qwen_acc']*100:.1f}% |")
+        lines.append(f"| {cap} | {sub['n']}/{n_rows} ({sub['pct']:.1f}%) | {sub['medpsy_acc']*100:.1f}% | {sub['qwen_acc']*100:.1f}% |")
     lines.append("")
 
     lines.append("## 6. MedPsy-4B Validation Consistency Diagnostic")
@@ -556,9 +595,15 @@ def main():
         default="outputs/analysis/budget_pair_b.svg",
         help="Path to output SVG plot",
     )
+    parser.add_argument(
+        "--expected-n",
+        type=int,
+        default=None,
+        help="Optional expected row count (smoke run if loaded n_rows != 100)",
+    )
     args = parser.parse_args()
 
-    run_analysis(args.sweep_dir, args.out_md, args.out_png, args.out_svg)
+    run_analysis(args.sweep_dir, args.out_md, args.out_png, args.out_svg, expected_n_override=args.expected_n)
 
 
 if __name__ == "__main__":
