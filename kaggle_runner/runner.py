@@ -85,7 +85,7 @@ QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=
 # Output path: outputs/v3/<model>/<condition>/<model>.jsonl
 V3_RUN = True
 V3_MODEL = "qwen3-1.7b-thinking"
-V3_CONDITIONS = "C1"
+V3_CONDITIONS = "C2"
 V3_PILOT = False
 V3_PILOT_N = 10
 V3_CONFIRM_TEST = True
