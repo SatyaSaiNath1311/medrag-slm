@@ -83,12 +83,12 @@ QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
 # Pilot (V3_PILOT=True) runs the stratified N=50 val subset first; full run after.
 # Output path: outputs/v3/<model>/<condition>/<model>.jsonl
-V3_RUN = True
+V3_RUN = False
 V3_MODEL = "qwen3-1.7b-thinking"
 V3_CONDITIONS = "C2"
 V3_PILOT = False
 V3_PILOT_N = 10
-V3_CONFIRM_TEST = True
+V3_CONFIRM_TEST = False
 V3_DATASETS = "medqa"
 V3_PARALLEL_MODELS = "medpsy-1.7b,qwen3-1.7b-thinking"
 
@@ -96,7 +96,7 @@ V3_PARALLEL_MODELS = "medpsy-1.7b,qwen3-1.7b-thinking"
 V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models
 
 # Token-budget sweep for Pair B (Task 1/5, validation only, greedy cap=4096)
-V3_BUDGET_SWEEP = False
+V3_BUDGET_SWEEP = True
 V3_SWEEP_N = 100
 V3_SWEEP_MAX_HOURS = 10.0
 V3_SWEEP_BATCH_SIZE = 1
