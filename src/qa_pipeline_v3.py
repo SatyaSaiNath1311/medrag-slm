@@ -27,6 +27,7 @@ import sys
 import time
 import zlib
 from pathlib import Path
+from typing import Any
 
 # Add repo root to sys.path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -630,7 +631,7 @@ def run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base):
             "pad_token_id": llm.pad_id if llm is not None else 151643,
         },
         "torch_version": torch.__version__ if "torch" in sys.modules else "unknown",
-        "transformers_version": transformers.__version__ if "transformers" in sys.modules else "unknown",
+        "transformers_version": sys.modules["transformers"].__version__ if "transformers" in sys.modules else "unknown",
         "dtype": str(mcfg.get("dtype", "float16")),
         "batch_size": args.batch_size or 1,
         "N": len(sweep_questions),
