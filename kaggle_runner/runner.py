@@ -103,7 +103,7 @@ V3_SWEEP_BATCH_SIZE = 1
 
 # Gemma prompt-sensitivity check (Task 2/5, validation only, greedy cap=16, 3 prompt variants)
 V3_GEMMA_PROMPT_SENS = True
-V3_GEMMA_SENS_N = 3
+V3_GEMMA_SENS_N = 200
 V3_GEMMA_SENS_MAX_HOURS = 3.0
 
 # Optional legacy env overrides for base runner settings
