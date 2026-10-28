@@ -101,6 +101,11 @@ V3_SWEEP_N = 100
 V3_SWEEP_MAX_HOURS = 10.0
 V3_SWEEP_BATCH_SIZE = 1
 
+# Gemma prompt-sensitivity check (Task 2/5, validation only, greedy cap=16, 3 prompt variants)
+V3_GEMMA_PROMPT_SENS = False
+V3_GEMMA_SENS_N = 200
+V3_GEMMA_SENS_MAX_HOURS = 3.0
+
 # Optional legacy env overrides for base runner settings
 for flag, val in [
     ("FINAL_MEDPSY", "FINAL_MEDPSY"),
@@ -115,6 +120,7 @@ for flag, val in [
     ("V3_RUN", "V3_RUN"),
     ("V3_TRUNC_SENSITIVITY", "V3_TRUNC_SENSITIVITY"),
     ("V3_BUDGET_SWEEP", "V3_BUDGET_SWEEP"),
+    ("V3_GEMMA_PROMPT_SENS", "V3_GEMMA_PROMPT_SENS"),
 ]:
     if flag in os.environ:
         locals()[val] = os.environ[flag].lower() in ("1", "true", "yes")
@@ -125,17 +131,21 @@ if "V3_SWEEP_MAX_HOURS" in os.environ:
     V3_SWEEP_MAX_HOURS = float(os.environ["V3_SWEEP_MAX_HOURS"])
 if "V3_SWEEP_BATCH_SIZE" in os.environ:
     V3_SWEEP_BATCH_SIZE = int(os.environ["V3_SWEEP_BATCH_SIZE"])
+if "V3_GEMMA_SENS_N" in os.environ:
+    V3_GEMMA_SENS_N = int(os.environ["V3_GEMMA_SENS_N"])
+if "V3_GEMMA_SENS_MAX_HOURS" in os.environ:
+    V3_GEMMA_SENS_MAX_HOURS = float(os.environ["V3_GEMMA_SENS_MAX_HOURS"])
 
 # Check for unified MedPsy 3-stage overnight push (historical completed run)
 _is_medpsy_overnight = (
     MEDPSY_UNANS_V2_BASELINE and MEDPSY_PUBMEDQA_BASELINE and MEDPSY_PUBMEDQA_RAG
-    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY or V3_BUDGET_SWEEP or MEDPSY_UNANS_V2_REASONING or QWEN3_4B_UNANS_V2 or QWEN3_4B_THINKING_MEDQA)
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or V3_RUN or V3_TRUNC_SENSITIVITY or V3_BUDGET_SWEEP or V3_GEMMA_PROMPT_SENS or MEDPSY_UNANS_V2_REASONING or QWEN3_4B_UNANS_V2 or QWEN3_4B_THINKING_MEDQA)
 )
 
 # Check for unified 2-stage push: Stage A2 (MedPsy-4B reasoning baseline) + Stage D (Qwen3-4B base+RAG)
 _is_two_stage_push = (
     MEDPSY_UNANS_V2_REASONING and QWEN3_4B_UNANS_V2
-    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or V3_RUN or V3_TRUNC_SENSITIVITY or V3_BUDGET_SWEEP or QWEN3_4B_THINKING_MEDQA)
+    and not (BUILD_UNANS_V2_EVIDENCE or UNANS_V2_SLM or MEDPSY_UNANS_V2_BASELINE or MEDPSY_PUBMEDQA_BASELINE or MEDPSY_PUBMEDQA_RAG or V3_RUN or V3_TRUNC_SENSITIVITY or V3_BUDGET_SWEEP or V3_GEMMA_PROMPT_SENS or QWEN3_4B_THINKING_MEDQA)
 )
 
 # Mutual exclusivity guard for specialized modes vs base/legacy runner flags
@@ -152,6 +162,7 @@ _active_special_modes = [
         ("V3_RUN", V3_RUN),
         ("V3_TRUNC_SENSITIVITY", V3_TRUNC_SENSITIVITY),
         ("V3_BUDGET_SWEEP", V3_BUDGET_SWEEP),
+        ("V3_GEMMA_PROMPT_SENS", V3_GEMMA_PROMPT_SENS),
     ] if v
 ]
 if not (_is_medpsy_overnight or _is_two_stage_push) and len(_active_special_modes) > 1:
@@ -167,8 +178,8 @@ if _active_special_modes:
         ("PROFILE", PROFILE),
         ("PARALLEL_GPUS", PARALLEL_GPUS),
     ]
-    # for V3_RUN, V3_TRUNC_SENSITIVITY, and V3_BUDGET_SWEEP, TINY and CHECK_ONLY are supported.
-    if not (V3_RUN or V3_TRUNC_SENSITIVITY or V3_BUDGET_SWEEP):
+    # for V3_RUN, V3_TRUNC_SENSITIVITY, V3_BUDGET_SWEEP, and V3_GEMMA_PROMPT_SENS, TINY and CHECK_ONLY are supported.
+    if not (V3_RUN or V3_TRUNC_SENSITIVITY or V3_BUDGET_SWEEP or V3_GEMMA_PROMPT_SENS):
         _disallowed.extend([("TINY", TINY), ("CHECK_ONLY", CHECK_ONLY)])
     _conflicting_flags = [m for m, v in _disallowed if v]
     if _conflicting_flags:
@@ -384,6 +395,8 @@ if SC_SHARD is None:
         print("V3_TRUNC_SENSITIVITY mode enabled: cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models")
     if V3_BUDGET_SWEEP:
         print(f"V3_BUDGET_SWEEP mode enabled: models=['qwen3-4b-thinking-2507', 'medpsy-4b'], N={V3_SWEEP_N}, max_hours={V3_SWEEP_MAX_HOURS}, batch_size={V3_SWEEP_BATCH_SIZE}")
+    if V3_GEMMA_PROMPT_SENS:
+        print(f"V3_GEMMA_PROMPT_SENS mode enabled: models=['gemma3-4b', 'medgemma-1.5-4b-it'], N={V3_GEMMA_SENS_N}, max_hours={V3_GEMMA_SENS_MAX_HOURS}, variants=['V1', 'V2', 'V3']")
 
     if PARALLEL_GPUS:
         print("PARALLEL_GPUS mode enabled: splitting model list across 2 GPUs")
@@ -3162,6 +3175,114 @@ if V3_BUDGET_SWEEP:
     print(f"Sweep manifest written to {manifest_path} (completed={all_completed})", flush=True)
 
     print("\nV3_BUDGET_SWEEP COMPLETE:", exit_codes, flush=True)
+    if any_failed or not all_completed:
+        sys.exit(1)
+    sys.exit(0)
+
+
+# ── V3_GEMMA_PROMPT_SENS mode ──────────────────────────────────────────────────
+if V3_GEMMA_PROMPT_SENS:
+    verify_frozen_hashes_before_run(CODE_DIR, WORK)
+    _sens_models = ["gemma3-4b", "medgemma-1.5-4b-it"]
+    _sens_out = (
+        "/kaggle/working/outputs/sweeps/gemma_prompt_sensitivity"
+        if os.path.exists("/kaggle/working")
+        else "outputs/sweeps/gemma_prompt_sensitivity"
+    )
+    os.makedirs(_sens_out, exist_ok=True)
+    print(
+        f"\nStarting V3_GEMMA_PROMPT_SENS: models={_sens_models}, N={V3_GEMMA_SENS_N}, "
+        f"max_hours={V3_GEMMA_SENS_MAX_HOURS}, variants=['V1', 'V2', 'V3']",
+        flush=True,
+    )
+
+    procs = []
+    t0_sens = time.time()
+    for i, smodel in enumerate(_sens_models):
+        cmd_s = [
+            sys.executable, "-m", "src.qa_pipeline_v3",
+            "--config", "configs/base.yaml",
+            "--work", WORK,
+            "--model", smodel,
+            "--split", "validation",
+            "--gemma-prompt-sens",
+            "--sens-n", str(V3_GEMMA_SENS_N),
+            "--sens-max-hours", str(V3_GEMMA_SENS_MAX_HOURS),
+            "--out", _sens_out,
+        ]
+        if CHECK_ONLY:
+            cmd_s += ["--check-only"]
+        if TINY:
+            cmd_s += ["--tiny"]
+
+        extra_env = {"CUDA_VISIBLE_DEVICES": str(i)}
+        if "HF_TOKEN" in os.environ:
+            extra_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
+        procs.append((f"{smodel} (GPU {i})", run_bg(cmd_s, extra_env=extra_env)))
+
+    print(f"\nWaiting for {len(procs)} parallel prompt-sensitivity subprocess(es)...", flush=True)
+    exit_codes = {}
+    for label, proc in procs:
+        rc = proc.wait()
+        exit_codes[label] = rc
+        print(f"  {label} finished with exit code {rc}", flush=True)
+
+    elapsed_hours = (time.time() - t0_sens) / 3600.0
+    any_failed = any(rc != 0 for rc in exit_codes.values())
+
+    # Build and verify combined manifest.json
+    import hashlib
+    rule_path = "docs/GEMMA_PROMPT_SENSITIVITY_RULE.md"
+    rule_hash = ""
+    if os.path.exists(rule_path):
+        with open(rule_path, "rb") as fh:
+            rule_hash = hashlib.sha256(fh.read()).hexdigest()
+
+    from src.qa_pipeline_v3 import PROMPT_TEMPLATE_HASHES
+
+    def _get_git_commit():
+        try:
+            return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        except Exception:
+            return os.environ.get("GIT_COMMIT", "unknown")
+
+    # Check that both model outputs exist and have N * 3 rows
+    all_completed = (not any_failed)
+    for smodel in _sens_models:
+        mf = os.path.join(_sens_out, f"{smodel}.jsonl")
+        if not os.path.exists(mf):
+            all_completed = False
+            break
+        with open(mf, "r", encoding="utf-8") as f:
+            lines = [ln for ln in f if ln.strip()]
+            if len(lines) < V3_GEMMA_SENS_N * 3:
+                all_completed = False
+
+    manifest_path = os.path.join(_sens_out, "manifest.json")
+    manifest_data = {
+        "git_commit_hash": _get_git_commit(),
+        "rule_file_sha256": rule_hash,
+        "prompt_template_hashes": PROMPT_TEMPLATE_HASHES,
+        "generation_config": {
+            "max_new_tokens": 16,
+            "do_sample": False,
+        },
+        "torch_version": "2.6.0" if "torch" not in sys.modules else sys.modules["torch"].__version__,
+        "transformers_version": "4.49.0" if "transformers" not in sys.modules else sys.modules["transformers"].__version__,
+        "dtype": "float32",
+        "N": V3_GEMMA_SENS_N,
+        "variants": ["V1", "V2", "V3"],
+        "seed": 42,
+        "completed": all_completed,
+        "hours_used": round(elapsed_hours, 4),
+        "models": _sens_models,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest_data, fh, indent=2)
+    print(f"Prompt-sensitivity manifest written to {manifest_path} (completed={all_completed})", flush=True)
+
+    print("\nV3_GEMMA_PROMPT_SENS COMPLETE:", exit_codes, flush=True)
     if any_failed or not all_completed:
         sys.exit(1)
     sys.exit(0)

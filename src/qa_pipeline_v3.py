@@ -651,6 +651,306 @@ def run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base):
     print(f"\n=== BUDGET SWEEP COMPLETE for {args.model} (total_done={total_done}/{len(sweep_questions)}) ===\n", flush=True)
 
 
+# ── Gemma Prompt Sensitivity Protocol & Helpers ───────────────────────────────
+
+def prompt_v1(q: dict) -> str:
+    """Variant 1: Baseline v3 C1 prompt (byte-identical to baseline_prompt)."""
+    return baseline_prompt(q)
+
+
+def prompt_v2(q: dict) -> str:
+    """Variant 2: Clinical evaluation phrasing with parenthesized option labels."""
+    opts_str = "\n".join(f"({k}) {v}" for k, v in q["options"].items())
+    return (
+        "The following is a multiple-choice medical examination question. "
+        "Please evaluate the clinical scenario and select the single best option.\n\n"
+        f"Question: {q['question']}\n"
+        f"Options:\n{opts_str}\n\n"
+        "Provide the letter corresponding to the correct answer."
+    )
+
+
+def prompt_v3(q: dict) -> str:
+    """Variant 3: Board-style presentation with bracketed choice labels."""
+    opts_str = "\n".join(f"[{k}] {v}" for k, v in q["options"].items())
+    return (
+        "Carefully read the patient presentation below and identify the correct diagnostic or management step.\n\n"
+        f"Question: {q['question']}\n"
+        f"Choices:\n{opts_str}\n\n"
+        "State the letter of the single correct option."
+    )
+
+
+PROMPT_VARIANTS = {
+    "V1": prompt_v1,
+    "V2": prompt_v2,
+    "V3": prompt_v3,
+}
+
+PROMPT_TEMPLATE_V1 = (
+    "You are a medical expert answering a multiple-choice question.\n\n"
+    "Question: {question}\nOptions:\n{options}\n\n"
+    "Answer with the letter of the correct option."
+)
+
+PROMPT_TEMPLATE_V2 = (
+    "The following is a multiple-choice medical examination question. "
+    "Please evaluate the clinical scenario and select the single best option.\n\n"
+    "Question: {question}\nOptions:\n{options}\n\n"
+    "Provide the letter corresponding to the correct answer."
+)
+
+PROMPT_TEMPLATE_V3 = (
+    "Carefully read the patient presentation below and identify the correct diagnostic or management step.\n\n"
+    "Question: {question}\nChoices:\n{options}\n\n"
+    "State the letter of the single correct option."
+)
+
+PROMPT_TEMPLATE_HASHES = {
+    "V1": hashlib.sha256(PROMPT_TEMPLATE_V1.encode("utf-8")).hexdigest(),
+    "V2": hashlib.sha256(PROMPT_TEMPLATE_V2.encode("utf-8")).hexdigest(),
+    "V3": hashlib.sha256(PROMPT_TEMPLATE_V3.encode("utf-8")).hexdigest(),
+}
+
+
+def build_prompt_sens_row(
+    q: dict,
+    variant: str,
+    raw_output: str,
+    parsed_pred: Any,
+    parsed: bool,
+    correct: bool,
+    n_gen_tokens: int,
+    finished_naturally: bool,
+    sec_q: float,
+    model_name: str,
+) -> dict:
+    """Pure function to construct a Gemma prompt-sensitivity row.
+
+    Required schema keys checked by assert_appended_row_valid:
+      - 'id' (from q)
+      - 'pred'
+      - 'parsed'
+      - 'correct'
+      - 'truncated' (at the 16-token cap, truncated=True iff no EOS was emitted)
+
+    Additional schema keys:
+      - 'variant' ('V1', 'V2', 'V3')
+      - 'n_generated_tokens'
+      - 'finished_naturally'
+      - 'seconds'
+      - 'raw_output'
+      - 'model'
+      - 'condition' ('C1')
+    """
+    row = dict(q)
+    row["variant"] = variant
+    row["raw_output"] = raw_output
+    row["pred"] = parsed_pred
+    row["parsed"] = parsed
+    row["correct"] = correct
+    row["truncated"] = not finished_naturally
+    row["n_generated_tokens"] = n_gen_tokens
+    row["finished_naturally"] = finished_naturally
+    row["seconds"] = sec_q
+    row["condition"] = "C1"
+    row["model"] = model_name
+    return row
+
+
+def run_gemma_prompt_sens(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base):
+    """Run prompt-sensitivity check for Gemma pair on validation MedQA across V1, V2, V3."""
+    if args.split != "validation":
+        raise ValueError(f"ERROR: Gemma prompt-sensitivity check requires split='validation', got split='{args.split}'")
+
+    if not os.path.exists(p1_val):
+        sys.exit(f"ERROR: Validation questions not found at {p1_val}")
+    p1_questions = read_jsonl(p1_val)
+
+    # Hard assertion: Every single loaded row MUST have split == 'validation'
+    for q in p1_questions:
+        if q.get("split") != "validation":
+            raise AssertionError(f"FATAL: Non-validation split detected! id={q.get('id')} split={q.get('split')}")
+
+    # First N MedQA questions in file order
+    medqa_val = [q for q in p1_questions if q.get("dataset") == "medqa"]
+    sens_n = args.sens_n
+    sweep_questions = medqa_val[:sens_n]
+    if len(sweep_questions) < sens_n:
+        raise ValueError(f"Requested sens_n={sens_n}, but only {len(sweep_questions)} MedQA val questions available.")
+    assert all(q.get("split") == "validation" for q in sweep_questions), "FATAL: Question without split=='validation' in sweep subset"
+
+    os.makedirs(out_base, exist_ok=True)
+    out_file = os.path.join(out_base, f"{args.model}.jsonl")
+
+    # Resume pattern: load existing (id, variant) pairs
+    existing_rows = read_jsonl(out_file) if os.path.exists(out_file) else []
+    done_pairs = {(r["id"], r.get("variant")) for r in existing_rows if "id" in r and "variant" in r}
+
+    variants = ["V1", "V2", "V3"]
+    total_expected = len(sweep_questions) * len(variants)
+    print(
+        f"\n=== GEMMA PROMPT-SENSITIVITY: {args.model} | N={len(sweep_questions)} | "
+        f"Variants={variants} | Already done: {len(done_pairs)}/{total_expected} ===",
+        flush=True,
+    )
+
+    if len(done_pairs) >= total_expected:
+        print(f"[{args.model}] All {total_expected} (id, variant) pairs already completed in {out_file}.", flush=True)
+        return
+
+    # Device and model loading
+    device = args.device or get_device()
+    if args.tiny:
+        device = "cpu"
+
+    if args.check_only or args.tiny:
+        llm = None
+    else:
+        banner(f"LOADING MODEL FOR PROMPT SENSITIVITY: {args.model} ({mcfg.get('id')}) on {device}")
+        t0_load = time.time()
+        llm = LLM(mcfg, device=device)
+        print(f"Model loaded in {time.time() - t0_load:.1f}s (load_source={getattr(llm, 'load_source', 'default')})", flush=True)
+
+    batch_size = args.batch_size or mcfg.get("batch_size", qcfg.get("batch_size", 8))
+    t0_sens = time.time()
+    max_sec = args.sens_max_hours * 3600.0
+    completed_all = True
+    n_processed = 0
+
+    for variant in variants:
+        if (time.time() - t0_sens) >= max_sec:
+            print(f"[{args.model}] Reached max sensitivity hours ({args.sens_max_hours}h). Stopping gracefully.", flush=True)
+            completed_all = False
+            break
+
+        todo = [q for q in sweep_questions if (q["id"], variant) not in done_pairs]
+        if not todo:
+            print(f"[{args.model}] Variant {variant} already complete ({len(sweep_questions)} rows). Skipping.", flush=True)
+            continue
+
+        print(f"[{args.model}] Starting Variant {variant}: {len(todo)} questions to process...", flush=True)
+        builder = PROMPT_VARIANTS[variant]
+
+        for i in range(0, len(todo), batch_size):
+            if (time.time() - t0_sens) >= max_sec:
+                print(f"[{args.model}] Reached max sensitivity hours ({args.sens_max_hours}h). Stopping gracefully.", flush=True)
+                completed_all = False
+                break
+
+            batch = todo[i : i + batch_size]
+            t0_batch = time.perf_counter()
+
+            if args.check_only or args.tiny:
+                # Fast mock for tests / check-only
+                results = []
+                for q in batch:
+                    raw_out = f"Answer: {q.get('answer', 'A')}"
+                    results.append({
+                        "raw_output": raw_out,
+                        "n_gen_tokens": 2,
+                        "finished_naturally": True,
+                        "seconds": 0.01,
+                    })
+            else:
+                batch_prompts = [builder(q) for q in batch]
+                batch_letters = [list(q.get("options", {}).keys()) for q in batch]
+
+                # Use llm.generate_safe with max_new_tokens_baseline (16)
+                gen_res = llm.generate_safe(batch_prompts, batch_letters, max_new_tokens=16)
+                sec_per_q = round((time.perf_counter() - t0_batch) / len(batch), 4) if batch else 0.0
+
+                results = []
+                for res in gen_res:
+                    raw_out = res.get("raw_output", "")
+                    n_gen = res.get("gen_tokens", 0)
+                    fin_nat = (n_gen < 16)
+                    results.append({
+                        "raw_output": raw_out,
+                        "n_gen_tokens": n_gen,
+                        "finished_naturally": fin_nat,
+                        "seconds": sec_per_q,
+                    })
+
+            for q, r_info in zip(batch, results):
+                raw_output = r_info["raw_output"]
+                n_gen_tokens = r_info["n_gen_tokens"]
+                finished_naturally = r_info["finished_naturally"]
+                sec_q = r_info["seconds"]
+
+                parsed_pred = parse_answer(raw_output, q.get("options", {}))
+                parsed = (parsed_pred is not None)
+                gold = q.get("answer") if "answer" in q and q["answer"] is not None else q.get("answer_idx")
+                correct = bool(parsed and str(parsed_pred).strip().upper() == str(gold).strip().upper())
+
+                row = build_prompt_sens_row(
+                    q=q,
+                    variant=variant,
+                    raw_output=raw_output,
+                    parsed_pred=parsed_pred,
+                    parsed=parsed,
+                    correct=correct,
+                    n_gen_tokens=n_gen_tokens,
+                    finished_naturally=finished_naturally,
+                    sec_q=sec_q,
+                    model_name=args.model,
+                )
+
+                append_jsonl(out_file, [row])
+                assert_appended_row_valid(out_file, expected_id=row.get("id"))
+                done_pairs.add((row["id"], variant))
+                n_processed += 1
+
+            print(f"  [{args.model} | {variant}] Done {len([p for p in done_pairs if p[1] == variant])}/{len(sweep_questions)}", flush=True)
+
+    # Manifest creation
+    total_done = len(read_jsonl(out_file)) if os.path.exists(out_file) else 0
+    completed_model = completed_all and (total_done == total_expected)
+    elapsed_hours = round((time.time() - t0_sens) / 3600.0, 4)
+
+    rule_file = "docs/GEMMA_PROMPT_SENSITIVITY_RULE.md"
+    rule_hash = ""
+    if os.path.exists(rule_file):
+        with open(rule_file, "rb") as fh:
+            rule_hash = hashlib.sha256(fh.read()).hexdigest()
+
+    def _get_git_commit():
+        try:
+            import subprocess
+            return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        except Exception:
+            return os.environ.get("GIT_COMMIT", "unknown")
+
+    manifest_data = {
+        "git_commit_hash": _get_git_commit(),
+        "rule_file_sha256": rule_hash,
+        "prompt_template_hashes": PROMPT_TEMPLATE_HASHES,
+        "generation_config": {
+            "max_new_tokens": 16,
+            "do_sample": False,
+        },
+        "torch_version": torch.__version__ if "torch" in sys.modules else "unknown",
+        "transformers_version": sys.modules["transformers"].__version__ if "transformers" in sys.modules else "unknown",
+        "dtype": str(mcfg.get("dtype", "float32")),
+        "batch_size": batch_size,
+        "N": len(sweep_questions),
+        "variants": variants,
+        "seed": 42,
+        "completed": completed_model,
+        "hours_used": elapsed_hours,
+        "model": args.model,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+    manifest_path = os.path.join(out_base, "manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest_data, fh, indent=2)
+    with open(os.path.join(out_base, f"manifest_{args.model}.json"), "w", encoding="utf-8") as fh:
+        json.dump(manifest_data, fh, indent=2)
+    print(f"[{args.model}] Manifest saved to {manifest_path} (completed={completed_model})", flush=True)
+    print(f"\n=== GEMMA PROMPT-SENSITIVITY COMPLETE for {args.model} (total_done={total_done}/{total_expected}) ===\n", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description="v3 Matched-Pair Generic vs Medical QA Pipeline")
     parser.add_argument("--config", default="configs/base.yaml", help="Path to base.yaml config")
@@ -670,6 +970,9 @@ def main():
     parser.add_argument("--sweep-n", type=int, default=100, help="Number of validation MedQA questions to sweep (default: 100)")
     parser.add_argument("--sweep-max-hours", type=float, default=10.0, help="Maximum execution time in hours before graceful stop (default: 10.0)")
     parser.add_argument("--sweep-cap", type=int, default=4096, help="Maximum new tokens for sweep generation (default: 4096)")
+    parser.add_argument("--gemma-prompt-sens", action="store_true", help="Run prompt-sensitivity check for Gemma pair on validation")
+    parser.add_argument("--sens-n", type=int, default=200, help="Number of validation MedQA questions (default: 200)")
+    parser.add_argument("--sens-max-hours", type=float, default=3.0, help="Maximum execution time in hours (default: 3.0)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -702,6 +1005,8 @@ def main():
     else:
         if args.budget_sweep:
             out_base = "/kaggle/working/outputs/sweeps/budget_pair_b" if os.path.exists("/kaggle/working") else "outputs/sweeps/budget_pair_b"
+        elif args.gemma_prompt_sens:
+            out_base = "/kaggle/working/outputs/sweeps/gemma_prompt_sensitivity" if os.path.exists("/kaggle/working") else "outputs/sweeps/gemma_prompt_sensitivity"
         else:
             out_base = f"/kaggle/working/outputs/v3/{args.model}" if os.path.exists("/kaggle/working") else f"outputs/v3/{args.model}"
     os.makedirs(out_base, exist_ok=True)
@@ -712,6 +1017,11 @@ def main():
     # Branch immediately to budget sweep if requested (validation only)
     if args.budget_sweep:
         run_budget_sweep(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base)
+        return
+
+    # Branch immediately to Gemma prompt-sensitivity sweep if requested (validation only)
+    if args.gemma_prompt_sens:
+        run_gemma_prompt_sens(args, cfg, mcfg, qcfg, v3_cfg, p1_val, out_base)
         return
 
     print(f"Data sources:")
