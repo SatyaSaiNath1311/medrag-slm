@@ -96,9 +96,9 @@ V3_PARALLEL_MODELS = "medpsy-1.7b,qwen3-1.7b-thinking"
 V3_TRUNC_SENSITIVITY = False # compare cap=1024 vs cap=2048 on 100 MedQA val questions for 4 thinking models
 
 # Token-budget sweep for Pair B (Task 1/5, validation only, greedy cap=4096)
-V3_BUDGET_SWEEP = True
+V3_BUDGET_SWEEP = False
 V3_SWEEP_N = 100
-V3_SWEEP_MAX_HOURS = 11.0
+V3_SWEEP_MAX_HOURS = 10.0
 V3_SWEEP_BATCH_SIZE = 1
 
 # Optional legacy env overrides for base runner settings
