@@ -7,6 +7,8 @@ Covers:
   4. Cross-check assertion failing loudly when a metric disagrees with analysis reports (Table 1).
   5. AUROC with tie handling and half credit on synthetic cases.
   6. Table 2 cross-check assertion failing loudly on AUROC or truncation disagreement.
+  7. Table 3 tokens-per-second formula and excluded-row footnote on synthetic fixtures.
+  8. Table 3 cross-check assertion failing loudly on MedPsy-4B C1/C2 mean seconds disagreement.
 """
 
 import tempfile
@@ -17,10 +19,13 @@ import numpy as np
 
 from src.paper_tables import (
     auroc_with_ties,
+    build_table3_markdown,
     check_not_shard,
+    compute_efficiency_record,
     compute_macro_f1,
     cross_check_results,
     cross_check_table2_results,
+    cross_check_table3_results,
     filter_medqa_rows,
 )
 
@@ -190,6 +195,111 @@ class TestPaperTablesSynthetic(unittest.TestCase):
             with self.assertRaises(AssertionError) as ctx:
                 cross_check_table2_results([mismatched_ctrl], tmp_root)
             self.assertIn("computed control trunc 10.0% != report 0.0%", str(ctx.exception))
+
+    def test_tokens_per_second_formula(self):
+        # Synthetic fixture for tokens-per-second formula:
+        # Tokens/second = mean generated tokens divided by mean seconds.
+        # Row 1: 10s, 100 gen tokens
+        # Row 2: 30s, 300 gen tokens
+        # Mean seconds = 20.0, Mean gen tokens = 200.0 -> Tokens/sec = 10.0
+        rows = [
+            {"seconds": 10.0, "gen_tokens": 100},
+            {"seconds": 30.0, "gen_tokens": 300},
+        ]
+        model_cfg = {"id": "test/model-synthetic", "reasoning": False}
+        rec = compute_efficiency_record(
+            model_name="model-synthetic",
+            condition_label="C1 (closed-book)",
+            dataset_name="MedQA",
+            rows=rows,
+            model_cfg=model_cfg,
+        )
+        self.assertEqual(rec["n"], 2)
+        self.assertAlmostEqual(rec["mean_seconds"], 20.0)
+        self.assertAlmostEqual(rec["median_seconds"], 20.0)
+        self.assertAlmostEqual(rec["p90_seconds"], 28.0)
+        self.assertAlmostEqual(rec["mean_gen_tokens"], 200.0)
+        self.assertAlmostEqual(rec["tokens_per_second"], 10.0)
+        self.assertEqual(rec["peak_vram"], "not measured")
+        self.assertEqual(rec["ram"], "not measured")
+
+    def test_excluded_row_footnote(self):
+        # Synthetic fixture where rows lack either seconds or gen_tokens:
+        # Row 1: valid seconds (10.0), valid tokens (100)
+        # Row 2: valid seconds (20.0), lacks gen_tokens
+        # Row 3: lacks seconds, valid tokens (200)
+        # Row 4: lacks both fields
+        rows = [
+            {"seconds": 10.0, "gen_tokens": 100},
+            {"seconds": 20.0},
+            {"gen_tokens": 200},
+            {},
+        ]
+        model_cfg = {"id": "test/model-partial", "reasoning": True}
+        rec = compute_efficiency_record(
+            model_name="model-partial",
+            condition_label="C2 (retrieval)",
+            dataset_name="MedQA",
+            rows=rows,
+            model_cfg=model_cfg,
+        )
+        self.assertEqual(rec["n"], 4)
+        self.assertEqual(rec["n_excluded_seconds"], 2)
+        self.assertEqual(rec["n_excluded_tokens"], 2)
+        # Valid seconds = [10.0, 20.0] -> mean 15.0
+        self.assertAlmostEqual(rec["mean_seconds"], 15.0)
+        # Valid tokens = [100, 200] -> mean 150.0
+        self.assertAlmostEqual(rec["mean_gen_tokens"], 150.0)
+        # Tokens/sec = 150.0 / 15.0 = 10.0
+        self.assertAlmostEqual(rec["tokens_per_second"], 10.0)
+
+        # Verify that build_table3_markdown includes the excluded-row footnote
+        md = build_table3_markdown([rec])
+        self.assertIn("Excluded 2 row(s) from seconds/question statistics and 2 row(s) from generated tokens statistics", md)
+        self.assertIn("not measured", md)
+        self.assertIn("Tokens/second", md)
+
+    def test_table3_cross_check_fails_on_disagreement(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            report_dir = tmp_root / "outputs" / "analysis"
+            report_dir.mkdir(parents=True, exist_ok=True)
+
+            report_file = report_dir / "medpsy_rag.md"
+            report_file.write_text(
+                "# MedPsy-4B: baseline vs RAG on MedQA test (n = 500, paired)\n\n"
+                "| Mode | Accuracy [95% CI] | Truncated | Acc. when answering (abstain if truncated) | Coverage | s/question |\n"
+                "|---|---|---|---|---|---|\n"
+                "| Baseline (no RAG) | 87.6% [84.8, 90.2] | 10.6% | 93.1% | 89.4% | 37.3 |\n"
+                "| RAG (top-5 evidence) | 89.0% [86.4, 91.6] | 21.6% | 92.6% | 78.4% | 63.9 |\n",
+                encoding="utf-8",
+            )
+
+            # Matching records
+            matching_recs = [
+                {"model_key": "medpsy-4b", "condition": "C1 (closed-book)", "mean_seconds": 37.31},
+                {"model_key": "medpsy-4b", "condition": "C2 (retrieval)", "mean_seconds": 63.89},
+            ]
+            # Should not raise
+            cross_check_table3_results(matching_recs, tmp_root)
+
+            # Mismatched C1 seconds
+            mismatched_c1 = [
+                {"model_key": "medpsy-4b", "condition": "C1 (closed-book)", "mean_seconds": 40.0},
+                {"model_key": "medpsy-4b", "condition": "C2 (retrieval)", "mean_seconds": 63.89},
+            ]
+            with self.assertRaises(AssertionError) as ctx:
+                cross_check_table3_results(mismatched_c1, tmp_root)
+            self.assertIn("MedPsy-4B C1 mean seconds mismatch", str(ctx.exception))
+
+            # Mismatched C2 seconds
+            mismatched_c2 = [
+                {"model_key": "medpsy-4b", "condition": "C1 (closed-book)", "mean_seconds": 37.31},
+                {"model_key": "medpsy-4b", "condition": "C2 (retrieval)", "mean_seconds": 55.0},
+            ]
+            with self.assertRaises(AssertionError) as ctx:
+                cross_check_table3_results(mismatched_c2, tmp_root)
+            self.assertIn("MedPsy-4B C2 mean seconds mismatch", str(ctx.exception))
 
 
 if __name__ == "__main__":

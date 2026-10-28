@@ -1,10 +1,12 @@
-"""src/paper_tables.py — Build Table 1 (QA Performance) and Table 2 (Reliability) for V3 Matched-Pair Study.
+"""src/paper_tables.py — Build Table 1 (QA Performance), Table 2 (Reliability), and Table 3 (Efficiency) for V3 Matched-Pair Study.
 
 Generates:
   - docs/tables/table1_qa.md
   - docs/tables/table1_qa.csv
   - docs/tables/table2_reliability.md
   - docs/tables/table2_reliability.csv
+  - docs/tables/table3_efficiency.md
+  - docs/tables/table3_efficiency.csv
 
 Protocol & Ground Rules:
   - Reads only committed, frozen evaluation data from test splits.
@@ -859,8 +861,305 @@ def build_table2_csv(records: List[Dict[str, Any]]) -> str:
     return output.getvalue()
 
 
+# ── Table 3: Inference Efficiency ──────────────────────────────────────────────
+
+def compute_efficiency_record(
+    model_name: str,
+    condition_label: str,
+    dataset_name: str,
+    rows: List[Dict[str, Any]],
+    model_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Compute runtime, latency percentiles, token generation, and throughput for a model cell."""
+    hf_id = model_cfg.get("id", model_name)
+    is_thinking = bool(model_cfg.get("reasoning") is True)
+    mode_str = "thinking (reasoning=true)" if is_thinking else "direct answer"
+    n_total = len(rows)
+
+    # Filter rows with valid seconds
+    valid_seconds = [float(r["seconds"]) for r in rows if r.get("seconds") is not None]
+    n_excluded_seconds = n_total - len(valid_seconds)
+
+    # Filter rows with valid gen_tokens
+    valid_tokens = [float(r["gen_tokens"]) for r in rows if r.get("gen_tokens") is not None]
+    n_excluded_tokens = n_total - len(valid_tokens)
+
+    if valid_seconds:
+        mean_seconds = float(np.mean(valid_seconds))
+        median_seconds = float(np.median(valid_seconds))
+        p90_seconds = float(np.percentile(valid_seconds, 90))
+    else:
+        mean_seconds = None
+        median_seconds = None
+        p90_seconds = None
+
+    if valid_tokens:
+        mean_gen_tokens = float(np.mean(valid_tokens))
+    else:
+        mean_gen_tokens = None
+
+    if mean_seconds is not None and mean_seconds > 0 and mean_gen_tokens is not None:
+        tokens_per_second = mean_gen_tokens / mean_seconds
+    else:
+        tokens_per_second = None
+
+    return {
+        "model_key": model_name,
+        "model": hf_id,
+        "mode": mode_str,
+        "condition": condition_label,
+        "dataset": dataset_name,
+        "n": n_total,
+        "mean_seconds": mean_seconds,
+        "median_seconds": median_seconds,
+        "p90_seconds": p90_seconds,
+        "mean_gen_tokens": mean_gen_tokens,
+        "tokens_per_second": tokens_per_second,
+        "peak_vram": "not measured",
+        "ram": "not measured",
+        "n_excluded_seconds": n_excluded_seconds,
+        "n_excluded_tokens": n_excluded_tokens,
+    }
+
+
+def load_all_table3_records(repo_root: Path) -> List[Dict[str, Any]]:
+    """Load efficiency records for all 18 cells already covered in Table 1."""
+    models_cfg, _ = load_project_configs(repo_root)
+    records: List[Dict[str, Any]] = []
+
+    # 1. Pair A: MedQA test (C1, C2) for medpsy-1.7b and qwen3-1.7b-thinking
+    pair_a_models = ["medpsy-1.7b", "qwen3-1.7b-thinking"]
+    for cond_key, cond_lbl in [("C1", "C1 (closed-book)"), ("C2", "C2 (retrieval)")]:
+        for m_name in pair_a_models:
+            p = repo_root / "outputs" / "v3" / m_name / cond_key / f"{m_name}.jsonl"
+            check_not_shard(p)
+            rows = read_jsonl(p)
+            for r in rows:
+                assert r.get("dataset") == "medqa"
+            records.append(
+                compute_efficiency_record(
+                    model_name=m_name,
+                    condition_label=cond_lbl,
+                    dataset_name="MedQA",
+                    rows=rows,
+                    model_cfg=models_cfg.get(m_name, {}),
+                )
+            )
+
+    # 2. Pair B: MedQA test (C1, C2) for medpsy-4b and qwen3-4b-thinking-2507
+    p_mp4_c1 = repo_root / "outputs" / "kaggle_qa" / "medpsy_final" / "work" / "phase5" / "medpsy-4b.jsonl"
+    check_not_shard(p_mp4_c1)
+    raw_mp4_c1 = read_jsonl(p_mp4_c1)
+    assert len(raw_mp4_c1) == 650, f"Expected 650 rows in {p_mp4_c1}, got {len(raw_mp4_c1)}"
+    rows_mp4_c1 = filter_medqa_rows(raw_mp4_c1)
+    records.append(
+        compute_efficiency_record(
+            model_name="medpsy-4b",
+            condition_label="C1 (closed-book)",
+            dataset_name="MedQA",
+            rows=rows_mp4_c1,
+            model_cfg=models_cfg.get("medpsy-4b", {}),
+        )
+    )
+
+    p_qw4_c1 = repo_root / "outputs" / "v3" / "qwen3-4b-thinking-2507" / "C1" / "qwen3-4b-thinking-2507.jsonl"
+    check_not_shard(p_qw4_c1)
+    rows_qw4_c1 = read_jsonl(p_qw4_c1)
+    records.append(
+        compute_efficiency_record(
+            model_name="qwen3-4b-thinking-2507",
+            condition_label="C1 (closed-book)",
+            dataset_name="MedQA",
+            rows=rows_qw4_c1,
+            model_cfg=models_cfg.get("qwen3-4b-thinking-2507", {}),
+        )
+    )
+
+    p_mp4_c2 = repo_root / "outputs" / "kaggle_qa" / "medpsy_rag" / "work" / "phase8" / "medpsy-4b.jsonl"
+    check_not_shard(p_mp4_c2)
+    rows_mp4_c2 = read_jsonl(p_mp4_c2)
+    records.append(
+        compute_efficiency_record(
+            model_name="medpsy-4b",
+            condition_label="C2 (retrieval)",
+            dataset_name="MedQA",
+            rows=rows_mp4_c2,
+            model_cfg=models_cfg.get("medpsy-4b", {}),
+        )
+    )
+
+    p_qw4_c2 = repo_root / "outputs" / "v3" / "qwen3-4b-thinking-2507" / "C2" / "qwen3-4b-thinking-2507.jsonl"
+    check_not_shard(p_qw4_c2)
+    rows_qw4_c2 = read_jsonl(p_qw4_c2)
+    records.append(
+        compute_efficiency_record(
+            model_name="qwen3-4b-thinking-2507",
+            condition_label="C2 (retrieval)",
+            dataset_name="MedQA",
+            rows=rows_qw4_c2,
+            model_cfg=models_cfg.get("qwen3-4b-thinking-2507", {}),
+        )
+    )
+
+    # 3. Gemma Pair: gemma3-4b vs medgemma-1.5-4b-it
+    gemma_models = ["gemma3-4b", "medgemma-1.5-4b-it"]
+    for cond_key, cond_lbl in [("C1", "C1 (closed-book)"), ("C2", "C2 (retrieval)")]:
+        for ds in ["MedQA", "PubMedQA"]:
+            for m_name in gemma_models:
+                p = repo_root / "outputs" / "v3" / m_name / cond_key / f"{m_name}.jsonl"
+                check_not_shard(p)
+                all_rows = read_jsonl(p)
+                ds_rows = [r for r in all_rows if r.get("dataset", "").lower() == ds.lower()]
+                records.append(
+                    compute_efficiency_record(
+                        model_name=m_name,
+                        condition_label=cond_lbl,
+                        dataset_name=ds,
+                        rows=ds_rows,
+                        model_cfg=models_cfg.get(m_name, {}),
+                    )
+                )
+
+    # C3 (oracle abstract, PubMedQA only)
+    for m_name in gemma_models:
+        p = repo_root / "outputs" / "v3" / m_name / "C3" / f"{m_name}.jsonl"
+        check_not_shard(p)
+        rows_c3 = read_jsonl(p)
+        for r in rows_c3:
+            assert r.get("dataset") == "pubmedqa"
+        records.append(
+            compute_efficiency_record(
+                model_name=m_name,
+                condition_label="C3 (oracle abstract)",
+                dataset_name="PubMedQA",
+                rows=rows_c3,
+                model_cfg=models_cfg.get(m_name, {}),
+            )
+        )
+
+    assert len(records) == 18, f"Expected 18 efficiency records, got {len(records)}"
+    return records
+
+
+def cross_check_table3_results(records: List[Dict[str, Any]], repo_root: Path) -> None:
+    """Cross-check MedPsy-4B C1 and C2 mean seconds against outputs/analysis/medpsy_rag.md and fail loudly on mismatch."""
+    p_rag = repo_root / "outputs" / "analysis" / "medpsy_rag.md"
+    if p_rag.exists():
+        t_rag = p_rag.read_text(encoding="utf-8")
+        m_c1 = re.search(r"\|\s*Baseline\s*\(no RAG\)[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|\s*(\d+\.\d+)\s*\|", t_rag)
+        m_c2 = re.search(r"\|\s*RAG\s*\(top-5 evidence\)[^|]*\|[^|]*\|[^|]*\|[^|]*\|[^|]*\|\s*(\d+\.\d+)\s*\|", t_rag)
+        exp_c1_sec = float(m_c1.group(1)) if m_c1 else 37.3
+        exp_c2_sec = float(m_c2.group(1)) if m_c2 else 63.9
+    else:
+        exp_c1_sec = 37.3
+        exp_c2_sec = 63.9
+
+    for rec in records:
+        if rec.get("model_key") == "medpsy-4b":
+            if "C1" in rec.get("condition", ""):
+                val = rec.get("mean_seconds")
+                val_str = f"{val:.1f}" if val is not None else "None"
+                if val is None or round(val, 1) != exp_c1_sec:
+                    raise AssertionError(
+                        f"MedPsy-4B C1 mean seconds mismatch: computed {val_str} != report {exp_c1_sec:.1f}"
+                    )
+            elif "C2" in rec.get("condition", ""):
+                val = rec.get("mean_seconds")
+                val_str = f"{val:.1f}" if val is not None else "None"
+                if val is None or round(val, 1) != exp_c2_sec:
+                    raise AssertionError(
+                        f"MedPsy-4B C2 mean seconds mismatch: computed {val_str} != report {exp_c2_sec:.1f}"
+                    )
+
+
+def build_table3_markdown(records: List[Dict[str, Any]]) -> str:
+    """Format efficiency records as a publication markdown table."""
+    lines: List[str] = [
+        "# Table 3: Inference Efficiency and Generation Latency across Architectures and Inference Modes (V3 Study)",
+        "",
+        "Empirical measurement of inference runtime, throughput, and memory consumption across **C1 closed-book**, **C2 retrieval**, and **C3 oracle abstract**.",
+        "",
+        "| Model | Mode | Condition | Dataset | N | Mean seconds/question | Median seconds/question | p90 seconds/question | Mean generated tokens | Tokens/second | Peak VRAM | RAM |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+
+    for r in records:
+        mean_sec_str = f"{r['mean_seconds']:.1f}" if r.get("mean_seconds") is not None else "—"
+        median_sec_str = f"{r['median_seconds']:.1f}" if r.get("median_seconds") is not None else "—"
+        p90_sec_str = f"{r['p90_seconds']:.1f}" if r.get("p90_seconds") is not None else "—"
+        mean_tok_str = f"{r['mean_gen_tokens']:.1f}" if r.get("mean_gen_tokens") is not None else "—"
+        tps_str = f"{r['tokens_per_second']:.1f}" if r.get("tokens_per_second") is not None else "—"
+
+        lines.append(
+            f"| `{r['model']}` | {r['mode']} | {r['condition']} | {r['dataset']} | {r['n']} | "
+            f"{mean_sec_str} | {median_sec_str} | {p90_sec_str} | {mean_tok_str} | {tps_str} | "
+            f"{r['peak_vram']} | {r['ram']} |"
+        )
+
+    total_excluded_sec = sum(r.get("n_excluded_seconds", 0) for r in records)
+    total_excluded_tok = sum(r.get("n_excluded_tokens", 0) for r in records)
+
+    if total_excluded_sec > 0 or total_excluded_tok > 0:
+        footnote_text = (
+            f"Excluded {total_excluded_sec} row(s) from seconds/question statistics and "
+            f"{total_excluded_tok} row(s) from generated tokens statistics due to missing data in row files."
+        )
+    else:
+        footnote_text = (
+            "All evaluation rows contained recorded seconds and generated token counts (0 rows excluded)."
+        )
+
+    lines.extend([
+        "",
+        "> [!NOTE]",
+        "> - **Tokens/second formula**: Stated as mean generated tokens divided by mean seconds per question ($\\text{Tokens/second} = \\frac{\\text{Mean generated tokens}}{\\text{Mean seconds/question}}$).",
+        "> - **Peak VRAM and RAM**: Printed as \"not measured\" for every row because no manifest records them. They will be measured in the live deployment test and timings come from batched offline evaluation on Kaggle 2x T4, so they are not single-request latencies.",
+        f"> - **Footnote**: {footnote_text}",
+        "",
+        f"* Footnote: {footnote_text}",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def build_table3_csv(records: List[Dict[str, Any]]) -> str:
+    """Format efficiency records as a standard CSV file."""
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow([
+        "model",
+        "mode",
+        "condition",
+        "dataset",
+        "n",
+        "mean_seconds",
+        "median_seconds",
+        "p90_seconds",
+        "mean_gen_tokens",
+        "tokens_per_second",
+        "peak_vram",
+        "ram",
+    ])
+    for r in records:
+        writer.writerow([
+            r["model"],
+            r["mode"],
+            r["condition"],
+            r["dataset"],
+            r["n"],
+            f"{r['mean_seconds']:.2f}" if r.get("mean_seconds") is not None else "",
+            f"{r['median_seconds']:.2f}" if r.get("median_seconds") is not None else "",
+            f"{r['p90_seconds']:.2f}" if r.get("p90_seconds") is not None else "",
+            f"{r['mean_gen_tokens']:.2f}" if r.get("mean_gen_tokens") is not None else "",
+            f"{r['tokens_per_second']:.2f}" if r.get("tokens_per_second") is not None else "",
+            r["peak_vram"],
+            r["ram"],
+        ])
+    return output.getvalue()
+
+
 def generate_tables(repo_root: Optional[Path] = None, check_mode: bool = False) -> int:
-    """Load data, verify cross-checks, and write or check table1 and table2 outputs."""
+    """Load data, verify cross-checks, and write or check table1, table2, and table3 outputs."""
     root = repo_root or REPO_ROOT
 
     # ── Table 1: QA Performance ──
@@ -885,12 +1184,24 @@ def generate_tables(repo_root: Optional[Path] = None, check_mode: bool = False) 
     p_t2_md = root / "docs" / "tables" / "table2_reliability.md"
     p_t2_csv = root / "docs" / "tables" / "table2_reliability.csv"
 
+    # ── Table 3: Efficiency ──
+    records_t3 = load_all_table3_records(root)
+    cross_check_table3_results(records_t3, root)
+
+    md_content_t3 = build_table3_markdown(records_t3)
+    csv_content_t3 = build_table3_csv(records_t3)
+
+    p_t3_md = root / "docs" / "tables" / "table3_efficiency.md"
+    p_t3_csv = root / "docs" / "tables" / "table3_efficiency.csv"
+
     if check_mode:
         for p, computed, name in [
             (p_t1_md, md_content_t1, "Table 1 MD"),
             (p_t1_csv, csv_content_t1, "Table 1 CSV"),
             (p_t2_md, md_content_t2, "Table 2 MD"),
             (p_t2_csv, csv_content_t2, "Table 2 CSV"),
+            (p_t3_md, md_content_t3, "Table 3 MD"),
+            (p_t3_csv, csv_content_t3, "Table 3 CSV"),
         ]:
             if not p.exists():
                 print(f"FAIL: Target file does not exist: {p}", file=sys.stderr)
@@ -900,7 +1211,7 @@ def generate_tables(repo_root: Optional[Path] = None, check_mode: bool = False) 
                 print(f"FAIL: {p} ({name}) differs from computed content.", file=sys.stderr)
                 return 1
 
-        print("PASS: docs/tables/table1_qa and table2_reliability (md, csv) match committed outputs.")
+        print("PASS: docs/tables/table1_qa, table2_reliability, and table3_efficiency (md, csv) match committed outputs.")
         return 0
 
     p_t1_md.parent.mkdir(parents=True, exist_ok=True)
@@ -908,15 +1219,19 @@ def generate_tables(repo_root: Optional[Path] = None, check_mode: bool = False) 
     p_t1_csv.write_text(csv_content_t1, encoding="utf-8")
     p_t2_md.write_text(md_content_t2, encoding="utf-8")
     p_t2_csv.write_text(csv_content_t2, encoding="utf-8")
+    p_t3_md.write_text(md_content_t3, encoding="utf-8")
+    p_t3_csv.write_text(csv_content_t3, encoding="utf-8")
     print(f"Wrote {p_t1_md}")
     print(f"Wrote {p_t1_csv}")
     print(f"Wrote {p_t2_md}")
     print(f"Wrote {p_t2_csv}")
+    print(f"Wrote {p_t3_md}")
+    print(f"Wrote {p_t3_csv}")
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Table 1 (QA) and Table 2 (Reliability) for V3 study.")
+    parser = argparse.ArgumentParser(description="Build Table 1 (QA), Table 2 (Reliability), and Table 3 (Efficiency) for V3 study.")
     parser.add_argument(
         "--check",
         action="store_true",

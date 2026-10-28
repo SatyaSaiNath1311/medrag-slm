@@ -1,0 +1,19 @@
+model,mode,condition,dataset,n,mean_seconds,median_seconds,p90_seconds,mean_gen_tokens,tokens_per_second,peak_vram,ram
+qvac/MedPsy-1.7B,thinking (reasoning=true),C1 (closed-book),MedQA,500,34.44,34.23,38.91,821.12,23.84,not measured,not measured
+Qwen/Qwen3-1.7B,thinking (reasoning=true),C1 (closed-book),MedQA,500,34.04,34.34,38.96,805.56,23.67,not measured,not measured
+qvac/MedPsy-1.7B,thinking (reasoning=true),C2 (retrieval),MedQA,500,42.80,43.23,45.69,927.73,21.67,not measured,not measured
+Qwen/Qwen3-1.7B,thinking (reasoning=true),C2 (retrieval),MedQA,500,38.64,39.25,43.00,827.76,21.42,not measured,not measured
+qvac/MedPsy-4B,thinking (reasoning=true),C1 (closed-book),MedQA,500,37.30,37.15,46.69,562.85,15.09,not measured,not measured
+Qwen/Qwen3-4B-Thinking-2507,thinking (reasoning=true),C1 (closed-book),MedQA,500,65.04,64.59,66.57,1024.00,15.74,not measured,not measured
+qvac/MedPsy-4B,thinking (reasoning=true),C2 (retrieval),MedQA,500,63.93,63.39,74.72,758.31,11.86,not measured,not measured
+Qwen/Qwen3-4B-Thinking-2507,thinking (reasoning=true),C2 (retrieval),MedQA,500,88.38,88.10,92.35,1024.00,11.59,not measured,not measured
+google/gemma-3-4b-it,direct answer,C1 (closed-book),MedQA,500,1.06,1.04,1.24,15.66,14.83,not measured,not measured
+google/medgemma-1.5-4b-it,direct answer,C1 (closed-book),MedQA,500,1.13,1.09,1.34,15.97,14.15,not measured,not measured
+google/gemma-3-4b-it,direct answer,C1 (closed-book),PubMedQA,500,0.38,0.37,0.40,7.19,18.98,not measured,not measured
+google/medgemma-1.5-4b-it,direct answer,C1 (closed-book),PubMedQA,500,0.29,0.22,0.40,2.08,7.23,not measured,not measured
+google/gemma-3-4b-it,direct answer,C2 (retrieval),MedQA,500,3.81,3.75,4.37,11.31,2.97,not measured,not measured
+google/medgemma-1.5-4b-it,direct answer,C2 (retrieval),MedQA,500,4.11,3.95,5.19,10.41,2.53,not measured,not measured
+google/gemma-3-4b-it,direct answer,C2 (retrieval),PubMedQA,500,3.25,3.19,3.92,11.46,3.53,not measured,not measured
+google/medgemma-1.5-4b-it,direct answer,C2 (retrieval),PubMedQA,500,3.46,3.39,4.26,10.40,3.00,not measured,not measured
+google/gemma-3-4b-it,direct answer,C3 (oracle abstract),PubMedQA,500,0.59,0.59,0.60,7.00,11.84,not measured,not measured
+google/medgemma-1.5-4b-it,direct answer,C3 (oracle abstract),PubMedQA,500,0.62,0.61,0.62,7.00,11.37,not measured,not measured
