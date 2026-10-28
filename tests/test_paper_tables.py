@@ -4,17 +4,23 @@ Covers:
   1. The MedQA filter on a 650-row file (500 medqa + 150 unanswerable -> 500 medqa).
   2. Shard files being ignored (check_not_shard raises ValueError on *_shard*).
   3. Macro-F1 computation on known tiny cases.
-  4. Cross-check assertion failing loudly when a metric disagrees with analysis reports.
+  4. Cross-check assertion failing loudly when a metric disagrees with analysis reports (Table 1).
+  5. AUROC with tie handling and half credit on synthetic cases.
+  6. Table 2 cross-check assertion failing loudly on AUROC or truncation disagreement.
 """
 
 import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from src.paper_tables import (
+    auroc_with_ties,
     check_not_shard,
     compute_macro_f1,
     cross_check_results,
+    cross_check_table2_results,
     filter_medqa_rows,
 )
 
@@ -105,6 +111,85 @@ class TestPaperTablesSynthetic(unittest.TestCase):
             with self.assertRaises(AssertionError) as ctx:
                 cross_check_results([mismatched_fallback], tmp_root)
             self.assertIn("computed fallback acc 0.600 != report 0.500", str(ctx.exception))
+
+    def test_auroc_with_ties_synthetic_fixtures(self):
+        # 1. Complete tie (all scores identical) -> exactly 0.5
+        pos_tie = np.array([0.5, 0.5])
+        neg_tie = np.array([0.5, 0.5])
+        self.assertAlmostEqual(auroc_with_ties(pos_tie, neg_tie), 0.5)
+
+        # 2. Perfect separation (all pos > all neg) -> 1.0
+        pos_perf = np.array([0.9, 0.8])
+        neg_perf = np.array([0.2, 0.1])
+        self.assertAlmostEqual(auroc_with_ties(pos_perf, neg_perf), 1.0)
+
+        # 3. Complete inversion (all pos < all neg) -> 0.0
+        pos_inv = np.array([0.1, 0.2])
+        neg_inv = np.array([0.8, 0.9])
+        self.assertAlmostEqual(auroc_with_ties(pos_inv, neg_inv), 0.0)
+
+        # 4. Tie handling exact half credit:
+        # Pairs: (1.0, 0.5) -> 1.0; (1.0, 0.0) -> 1.0; (0.5, 0.5) -> 0.5; (0.5, 0.0) -> 1.0
+        # Expected AUROC = (1.0 + 1.0 + 0.5 + 1.0) / 4 = 3.5 / 4 = 0.875
+        pos_mix = np.array([1.0, 0.5])
+        neg_mix = np.array([0.5, 0.0])
+        self.assertAlmostEqual(auroc_with_ties(pos_mix, neg_mix), 0.875)
+
+        # 5. Empty inputs return None
+        self.assertIsNone(auroc_with_ties(np.array([]), np.array([0.5])))
+        self.assertIsNone(auroc_with_ties(np.array([0.5]), np.array([])))
+
+    def test_table2_cross_check_fails_on_disagreement(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            report_dir = tmp_root / "outputs" / "analysis"
+            report_dir.mkdir(parents=True, exist_ok=True)
+
+            report_file = report_dir / "pair_a_c45.md"
+            report_file.write_text(
+                "# Pair A C4/C5 Analysis\n\n"
+                "## 3. Confidence Separation on All Rows (N=140)\n\n"
+                "| Condition | Model | Mean Conf Chal (N=100) | Mean Conf Ctrl (N=40) | Chal Conf >= 0.90 (%) | AUROC (1 - conf) | 95% Bootstrap CI | MedPsy - Qwen Diff | 95% Diff CI |\n"
+                "|---|---|---|---|---|---|---|---|---|\n"
+                "| C4 | `qwen3-1.7b-thinking` | 0.9801 | 1.0000 | 94.0% | 0.6200 | [0.5800, 0.6632] | — | — |\n\n"
+                "### Truncation Rate: Challenge Rows vs Control Rows\n\n"
+                "| Condition | Model | Challenge Truncation (N=100, Wilson 95% CI) | Control Truncation (N=40, Wilson 95% CI) |\n"
+                "|---|---|---|---|\n"
+                "| C4 | `qwen3-1.7b-thinking` | 29/100 (29.0%, [21.0%, 38.5%]) | 0/40 (0.0%, [0.0%, 8.8%]) |\n",
+                encoding="utf-8",
+            )
+
+            # Matching record
+            matching_rec = {
+                "model_key": "qwen3-1.7b-thinking",
+                "condition": "C4 (closed-book unanswerable)",
+                "auroc": 0.6200,
+                "chal_trunc_pct": 29.0,
+                "ctrl_trunc_pct": 0.0,
+            }
+            # Should not raise
+            cross_check_table2_results([matching_rec], tmp_root)
+
+            # Disagreeing AUROC
+            mismatched_auc = dict(matching_rec)
+            mismatched_auc["auroc"] = 0.7500
+            with self.assertRaises(AssertionError) as ctx:
+                cross_check_table2_results([mismatched_auc], tmp_root)
+            self.assertIn("computed AUROC 0.7500 != report 0.6200", str(ctx.exception))
+
+            # Disagreeing challenge truncation
+            mismatched_chal = dict(matching_rec)
+            mismatched_chal["chal_trunc_pct"] = 35.0
+            with self.assertRaises(AssertionError) as ctx:
+                cross_check_table2_results([mismatched_chal], tmp_root)
+            self.assertIn("computed challenge trunc 35.0% != report 29.0%", str(ctx.exception))
+
+            # Disagreeing control truncation
+            mismatched_ctrl = dict(matching_rec)
+            mismatched_ctrl["ctrl_trunc_pct"] = 10.0
+            with self.assertRaises(AssertionError) as ctx:
+                cross_check_table2_results([mismatched_ctrl], tmp_root)
+            self.assertIn("computed control trunc 10.0% != report 0.0%", str(ctx.exception))
 
 
 if __name__ == "__main__":

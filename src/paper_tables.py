@@ -1,11 +1,13 @@
-"""src/paper_tables.py — Build Table 1 (QA Performance) for V3 Matched-Pair Study.
+"""src/paper_tables.py — Build Table 1 (QA Performance) and Table 2 (Reliability) for V3 Matched-Pair Study.
 
 Generates:
   - docs/tables/table1_qa.md
   - docs/tables/table1_qa.csv
+  - docs/tables/table2_reliability.md
+  - docs/tables/table2_reliability.csv
 
 Protocol & Ground Rules:
-  - Reads only committed, frozen evaluation data from test splits (N=500 per cell).
+  - Reads only committed, frozen evaluation data from test splits.
   - Strict Accuracy (Primary): parsed, not truncated, and correct.
   - With-Fallback Accuracy (Secondary): raw stored correctness.
   - Never reads any *_shard*.jsonl file.
@@ -18,14 +20,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
+import json
 import math
 import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import yaml
 
+from src.analysis_gemma_pair import auroc_with_ties, is_verbal_abstention, paired_bootstrap_auroc
 from src.answer_validity import (
     fallback_accuracy,
     is_fallback_correct,
@@ -506,46 +512,411 @@ def build_table1_csv(records: List[Dict[str, Any]]) -> str:
     return output.getvalue()
 
 
+# ── Table 2: Reliability and Abstention ──────────────────────────────────────────
+
+def compute_reliability_record(
+    model_key: str,
+    condition_label: str,
+    rows: List[Dict[str, Any]],
+    model_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Compute reliability, abstention, truncation, confidence, and AUROC metrics for a model x condition cell."""
+    model_id = model_cfg.get("id", model_key)
+    mode_str = "thinking (reasoning=true)" if model_cfg.get("reasoning", False) else "direct answer"
+
+    chal = [r for r in rows if r.get("should_abstain") is True]
+    ctrl = [r for r in rows if not r.get("should_abstain")]
+
+    n_chal = len(chal)
+    n_ctrl = len(ctrl)
+
+    k_chal_trunc = sum(1 for r in chal if is_truncated(r))
+    chal_trunc_pct = (k_chal_trunc / n_chal * 100.0) if n_chal > 0 else 0.0
+
+    if n_ctrl > 0:
+        k_ctrl_trunc = sum(1 for r in ctrl if is_truncated(r))
+        ctrl_trunc_pct = (k_ctrl_trunc / n_ctrl * 100.0)
+    else:
+        k_ctrl_trunc = None
+        ctrl_trunc_pct = None
+
+    chal_confs = np.array([float(r.get("confidence", 0.0)) for r in chal])
+    mean_conf_chal = float(np.mean(chal_confs)) if len(chal_confs) > 0 else None
+
+    if n_ctrl > 0:
+        ctrl_confs = np.array([float(r.get("confidence", 0.0)) for r in ctrl])
+        mean_conf_ctrl = float(np.mean(ctrl_confs))
+    else:
+        ctrl_confs = np.array([])
+        mean_conf_ctrl = None
+
+    if n_ctrl > 0 and n_chal > 0:
+        pos_scores = 1.0 - chal_confs
+        neg_scores = 1.0 - ctrl_confs
+        auroc_val = auroc_with_ties(pos_scores, neg_scores)
+
+        # Paired bootstrap CI (10,000 resamples, seed 42) evaluated on row-level alignment
+        labels = np.array([1 if r.get("should_abstain") else 0 for r in rows])
+        scores = 1.0 - np.array([float(r.get("confidence", 0.0)) for r in rows])
+        ci_res, _, _ = paired_bootstrap_auroc(labels, scores, scores, n_boot=10000, seed=42)
+        auroc_ci_lo, auroc_ci_hi = ci_res
+    else:
+        auroc_val = None
+        auroc_ci_lo = None
+        auroc_ci_hi = None
+
+    k_explicit = sum(1 for r in rows if r.get("abstained") is True)
+    k_verbal = sum(1 for r in rows if is_verbal_abstention(r.get("raw_output")))
+
+    return {
+        "model_key": model_key,
+        "model": model_id,
+        "mode": mode_str,
+        "condition": condition_label,
+        "n_chal": n_chal,
+        "n_ctrl": n_ctrl,
+        "k_chal_trunc": k_chal_trunc,
+        "chal_trunc_pct": chal_trunc_pct,
+        "k_ctrl_trunc": k_ctrl_trunc,
+        "ctrl_trunc_pct": ctrl_trunc_pct,
+        "mean_conf_chal": mean_conf_chal,
+        "mean_conf_ctrl": mean_conf_ctrl,
+        "auroc": auroc_val,
+        "auroc_ci_lo": auroc_ci_lo,
+        "auroc_ci_hi": auroc_ci_hi,
+        "explicit_abstentions": k_explicit,
+        "verbal_refusals": k_verbal,
+    }
+
+
+def load_all_table2_records(repo_root: Path) -> List[Dict[str, Any]]:
+    """Load all reliability records across C4, C5 (140 rows each), and Phase 5 MedPsy-4B (150 rows)."""
+    models_cfg, _ = load_project_configs(repo_root)
+    records: List[Dict[str, Any]] = []
+
+    # 1. C4 (closed-book unanswerable, 140 rows)
+    c4_models = ["medpsy-1.7b", "qwen3-1.7b-thinking", "gemma3-4b", "medgemma-1.5-4b-it"]
+    for m_name in c4_models:
+        p = repo_root / "outputs" / "v3" / m_name / "C4" / f"{m_name}.jsonl"
+        check_not_shard(p)
+        rows = read_jsonl(p)
+        assert len(rows) == 140, f"Expected 140 rows in {p}, got {len(rows)}"
+        records.append(
+            compute_reliability_record(
+                model_key=m_name,
+                condition_label="C4 (closed-book unanswerable)",
+                rows=rows,
+                model_cfg=models_cfg.get(m_name, {}),
+            )
+        )
+
+    # 2. C5 (retrieval unanswerable, 140 rows)
+    c5_models = ["medpsy-1.7b", "qwen3-1.7b-thinking", "gemma3-4b", "medgemma-1.5-4b-it"]
+    for m_name in c5_models:
+        p = repo_root / "outputs" / "v3" / m_name / "C5" / f"{m_name}.jsonl"
+        check_not_shard(p)
+        rows = read_jsonl(p)
+        assert len(rows) == 140, f"Expected 140 rows in {p}, got {len(rows)}"
+        records.append(
+            compute_reliability_record(
+                model_key=m_name,
+                condition_label="C5 (retrieval unanswerable)",
+                rows=rows,
+                model_cfg=models_cfg.get(m_name, {}),
+            )
+        )
+
+    # 3. MedPsy-4B from Phase 5 filtered to dataset == "unanswerable" (150 rows)
+    p_mp4 = repo_root / "outputs" / "kaggle_qa" / "medpsy_final" / "work" / "phase5" / "medpsy-4b.jsonl"
+    check_not_shard(p_mp4)
+    raw_mp4 = read_jsonl(p_mp4)
+    rows_mp4_unans = [r for r in raw_mp4 if r.get("dataset") == "unanswerable"]
+    assert len(rows_mp4_unans) == 150, f"Expected 150 unanswerable rows in {p_mp4}, got {len(rows_mp4_unans)}"
+    records.append(
+        compute_reliability_record(
+            model_key="medpsy-4b",
+            condition_label="Phase 5 (closed-book unanswerable)",
+            rows=rows_mp4_unans,
+            model_cfg=models_cfg.get("medpsy-4b", {}),
+        )
+    )
+
+    assert len(records) == 9, f"Expected 9 reliability records, got {len(records)}"
+    return records
+
+
+def cross_check_table2_results(records: List[Dict[str, Any]], repo_root: Path) -> None:
+    """Cross-check every AUROC and truncation value against committed analysis reports and fail loudly on mismatch."""
+    # 1. Pair A: outputs/analysis/pair_a_c45.md
+    p_pair_a = repo_root / "outputs" / "analysis" / "pair_a_c45.md"
+    if p_pair_a.exists():
+        t_a = p_pair_a.read_text(encoding="utf-8")
+        for rec in records:
+            if rec["model_key"] in ("qwen3-1.7b-thinking", "medpsy-1.7b"):
+                cond = "C4" if "C4" in rec["condition"] else "C5"
+                m_key = rec["model_key"]
+
+                # Cross-check AUROC from Section 3
+                m_auc = re.search(
+                    rf"\|\s*{cond}\s*\|\s*`?{m_key}`?\s*\|\s*(\d+\.\d+)\s*\|\s*(\d+\.\d+)\s*\|\s*(\d+\.\d+)%\s*\|\s*(\d+\.\d+)\s*\|\s*\[(\d+\.\d+),\s*(\d+\.\d+)\]",
+                    t_a,
+                )
+                if m_auc:
+                    exp_auroc = float(m_auc.group(4))
+                    if round(rec["auroc"], 4) != exp_auroc:
+                        raise AssertionError(
+                            f"Pair A Table 2 cross-check failure for {m_key} {cond}: "
+                            f"computed AUROC {rec['auroc']:.4f} != report {exp_auroc:.4f}"
+                        )
+
+                # Cross-check Truncation from Section 5
+                m_trunc = re.search(
+                    rf"\|\s*{cond}\s*\|\s*`?{m_key}`?\s*\|\s*\d+/\d+\s*\((\d+\.\d+)%[^)]*\)\s*\|\s*\d+/\d+\s*\((\d+\.\d+)%[^)]*\)",
+                    t_a,
+                )
+                if m_trunc:
+                    exp_chal_trunc = float(m_trunc.group(1))
+                    exp_ctrl_trunc = float(m_trunc.group(2))
+                    if round(rec["chal_trunc_pct"], 1) != exp_chal_trunc:
+                        raise AssertionError(
+                            f"Pair A Table 2 cross-check failure for {m_key} {cond}: "
+                            f"computed challenge trunc {rec['chal_trunc_pct']:.1f}% != report {exp_chal_trunc:.1f}%"
+                        )
+                    if round(rec["ctrl_trunc_pct"], 1) != exp_ctrl_trunc:
+                        raise AssertionError(
+                            f"Pair A Table 2 cross-check failure for {m_key} {cond}: "
+                            f"computed control trunc {rec['ctrl_trunc_pct']:.1f}% != report {exp_ctrl_trunc:.1f}%"
+                        )
+
+    # 2. Gemma Pair: outputs/analysis/gemma_pair.md
+    p_gemma = repo_root / "outputs" / "analysis" / "gemma_pair.md"
+    if p_gemma.exists():
+        t_g = p_gemma.read_text(encoding="utf-8")
+        for rec in records:
+            if rec["model_key"] in ("gemma3-4b", "medgemma-1.5-4b-it"):
+                cond = "C4" if "C4" in rec["condition"] else "C5"
+                m_str = "Gemma-3-4B" if "gemma3" in rec["model_key"] else "MedGemma-1.5-4B-it"
+
+                # Cross-check AUROC from Section 5
+                m_auc = re.search(
+                    rf"\|\s*{cond}\s*\|\s*{m_str}[^|]*\|\s*(\d+\.\d+)\s*\|\s*(\d+\.\d+)\s*\|\s*[^|]*\|\s*[^|]*\|\s*(\d+\.\d+)\s*\|\s*`?\[(\d+\.\d+),\s*(\d+\.\d+)\]`?",
+                    t_g,
+                )
+                if m_auc:
+                    exp_auroc = float(m_auc.group(3))
+                    if round(rec["auroc"], 4) != exp_auroc:
+                        raise AssertionError(
+                            f"Gemma Table 2 cross-check failure for {rec['model_key']} {cond}: "
+                            f"computed AUROC {rec['auroc']:.4f} != report {exp_auroc:.4f}"
+                        )
+
+                # For Gemma Pair, truncation across all conditions is strictly 0.0%
+                if round(rec["chal_trunc_pct"], 1) != 0.0:
+                    raise AssertionError(
+                        f"Gemma Table 2 cross-check failure for {rec['model_key']} {cond}: "
+                        f"computed challenge trunc {rec['chal_trunc_pct']:.1f}% != report 0.0%"
+                    )
+                if round(rec["ctrl_trunc_pct"], 1) != 0.0:
+                    raise AssertionError(
+                        f"Gemma Table 2 cross-check failure for {rec['model_key']} {cond}: "
+                        f"computed control trunc {rec['ctrl_trunc_pct']:.1f}% != report 0.0%"
+                    )
+
+
+def load_grounding_record(repo_root: Path) -> Dict[str, Any]:
+    """Read MedPsy-4B grounding metrics and counts from analysis reports."""
+    p_nli = repo_root / "outputs" / "analysis_nli" / "medpsy_test_citation_metrics.json"
+
+    scorable = 379
+    pair_entail = [311, 677]
+    corrected_est = [0.2605022156573117, 0.1576765140324963, 0.42698670605613]
+    answer_support = [201, 379]
+
+    if p_nli.exists():
+        try:
+            nli_data = json.loads(p_nli.read_text(encoding="utf-8"))
+            scorable = nli_data.get("scorable", scorable)
+            pair_entail = nli_data.get("pair_entail", pair_entail)
+            corrected_est = nli_data.get("corrected_est", corrected_est)
+            answer_support = nli_data.get("answer_support", answer_support)
+        except Exception:
+            pass
+
+    return {
+        "scorable": scorable,
+        "pair_entail": pair_entail,
+        "corrected_est": corrected_est,
+        "answer_support": answer_support,
+    }
+
+
+def build_table2_markdown(
+    records: List[Dict[str, Any]],
+    grounding: Dict[str, Any],
+    models_cfg: Dict[str, Dict[str, Any]],
+) -> str:
+    """Format reliability records, MedPsy-4B grounding block, and comparability note as markdown."""
+    lines: List[str] = [
+        "# Table 2: Reliability, Abstention, and Grounding across Architectures and Inference Modes (V3 Study)",
+        "",
+        "Evaluation of selective prediction, token exhaustion (truncation), and confidence separation between unanswerable challenge questions and answerable control questions across **C4 closed-book** and **C5 retrieval**.",
+        "",
+        "| Model | Mode | Condition | N chal / ctrl | Chal trunc % | Ctrl trunc % | Mean conf chal | Mean conf ctrl | AUROC (1-conf) [95% CI] | Explicit abstention count | Verbal refusal count |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+
+    for r in records:
+        chal_trunc_str = f"{r['chal_trunc_pct']:.1f}%" if r["chal_trunc_pct"] is not None else "—"
+        ctrl_trunc_str = f"{r['ctrl_trunc_pct']:.1f}%" if r["ctrl_trunc_pct"] is not None else "—"
+        mean_conf_chal_str = f"{r['mean_conf_chal']:.4f}" if r["mean_conf_chal"] is not None else "—"
+        mean_conf_ctrl_str = f"{r['mean_conf_ctrl']:.4f}" if r["mean_conf_ctrl"] is not None else "—"
+        if r["auroc"] is not None:
+            auroc_str = f"{r['auroc']:.4f} [{r['auroc_ci_lo']:.4f}, {r['auroc_ci_hi']:.4f}]"
+        else:
+            auroc_str = "—"
+
+        lines.append(
+            f"| `{r['model']}` | {r['mode']} | {r['condition']} | {r['n_chal']} / {r['n_ctrl']} | "
+            f"{chal_trunc_str} | {ctrl_trunc_str} | {mean_conf_chal_str} | {mean_conf_ctrl_str} | "
+            f"{auroc_str} | {r['explicit_abstentions']} | {r['verbal_refusals']} |"
+        )
+
+    # ── Grounding Block ──
+    scorable = grounding["scorable"]
+    pair_ent = grounding["pair_entail"]
+    corr = grounding["corrected_est"]
+    ans_sup = grounding["answer_support"]
+
+    scorable_str = f"{scorable} / 500 ({scorable / 500.0 * 100:.1f}%)"
+    cited_str = str(pair_ent[1])
+    ub_str = f"{pair_ent[0]} / {pair_ent[1]} ({pair_ent[0] / max(pair_ent[1], 1) * 100:.1f}%)"
+    corr_str = f"{corr[0] * 100:.1f}% [{corr[1] * 100:.1f}%, {corr[2] * 100:.1f}%]"
+    sup_str = f"{ans_sup[0]} / {ans_sup[1]} ({ans_sup[0] / max(ans_sup[1], 1) * 100:.1f}%)"
+
+    mp4_id = models_cfg.get("medpsy-4b", {}).get("id", "qvac/MedPsy-4B")
+    mp17_id = models_cfg.get("medpsy-1.7b", {}).get("id", "qvac/MedPsy-1.7B")
+    qw17_id = models_cfg.get("qwen3-1.7b-thinking", {}).get("id", "Qwen/Qwen3-1.7B")
+    gem_id = models_cfg.get("gemma3-4b", {}).get("id", "google/gemma-3-4b-it")
+    mgem_id = models_cfg.get("medgemma-1.5-4b-it", {}).get("id", "google/medgemma-1.5-4b-it")
+
+    lines.extend([
+        "",
+        "## Grounding (MedPsy-4B only)",
+        "",
+        "| Model | Scorable Answers (N/500) | Total Cited Passages | Citation Precision (NLI Upper Bound) | Citation Precision (Corrected Est) [Range] | Answer-Level Support (NLI) |",
+        "|---|---|---|---|---|---|",
+        f"| `{mp4_id}` | {scorable_str} | {cited_str} | {ub_str} | {corr_str} | {sup_str} |",
+        f"| `{mp17_id}` | not evaluated | not evaluated | not evaluated | not evaluated | not evaluated |",
+        f"| `{qw17_id}` | not evaluated | not evaluated | not evaluated | not evaluated | not evaluated |",
+        f"| `{gem_id}` | not evaluated | not evaluated | not evaluated | not evaluated | not evaluated |",
+        f"| `{mgem_id}` | not evaluated | not evaluated | not evaluated | not evaluated | not evaluated |",
+        "",
+        "> [!NOTE]",
+        "> The 150-row MedPsy-4B unanswerable set and the 140-row (100 challenge + 40 control) unanswerable_v2 set are different pools and are not directly comparable.",
+        "",
+    ])
+
+    return "\n".join(lines)
+
+
+def build_table2_csv(records: List[Dict[str, Any]]) -> str:
+    """Format reliability records as a standard CSV file."""
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    writer.writerow([
+        "model",
+        "mode",
+        "condition",
+        "n_challenge",
+        "n_control",
+        "challenge_trunc_pct",
+        "control_trunc_pct",
+        "mean_conf_challenge",
+        "mean_conf_control",
+        "auroc",
+        "auroc_ci_lo",
+        "auroc_ci_hi",
+        "explicit_abstentions",
+        "verbal_refusals",
+    ])
+    for r in records:
+        writer.writerow([
+            r["model"],
+            r["mode"],
+            r["condition"],
+            r["n_chal"],
+            r["n_ctrl"],
+            f"{r['chal_trunc_pct']:.4f}" if r["chal_trunc_pct"] is not None else "",
+            f"{r['ctrl_trunc_pct']:.4f}" if r["ctrl_trunc_pct"] is not None else "",
+            f"{r['mean_conf_chal']:.4f}" if r["mean_conf_chal"] is not None else "",
+            f"{r['mean_conf_ctrl']:.4f}" if r["mean_conf_ctrl"] is not None else "",
+            f"{r['auroc']:.4f}" if r["auroc"] is not None else "",
+            f"{r['auroc_ci_lo']:.4f}" if r["auroc_ci_lo"] is not None else "",
+            f"{r['auroc_ci_hi']:.4f}" if r["auroc_ci_hi"] is not None else "",
+            r["explicit_abstentions"],
+            r["verbal_refusals"],
+        ])
+    return output.getvalue()
+
+
 def generate_tables(repo_root: Optional[Path] = None, check_mode: bool = False) -> int:
-    """Load data, verify cross-checks, and write or check table1 outputs."""
+    """Load data, verify cross-checks, and write or check table1 and table2 outputs."""
     root = repo_root or REPO_ROOT
-    records = load_all_table1_records(root)
-    cross_check_results(records, root)
 
-    md_content = build_table1_markdown(records)
-    csv_content = build_table1_csv(records)
+    # ── Table 1: QA Performance ──
+    records_t1 = load_all_table1_records(root)
+    cross_check_results(records_t1, root)
 
-    p_md = root / "docs" / "tables" / "table1_qa.md"
-    p_csv = root / "docs" / "tables" / "table1_qa.csv"
+    md_content_t1 = build_table1_markdown(records_t1)
+    csv_content_t1 = build_table1_csv(records_t1)
+
+    p_t1_md = root / "docs" / "tables" / "table1_qa.md"
+    p_t1_csv = root / "docs" / "tables" / "table1_qa.csv"
+
+    # ── Table 2: Reliability & Abstention ──
+    records_t2 = load_all_table2_records(root)
+    cross_check_table2_results(records_t2, root)
+    grounding_data = load_grounding_record(root)
+    models_cfg = load_model_configs(root)
+
+    md_content_t2 = build_table2_markdown(records_t2, grounding_data, models_cfg)
+    csv_content_t2 = build_table2_csv(records_t2)
+
+    p_t2_md = root / "docs" / "tables" / "table2_reliability.md"
+    p_t2_csv = root / "docs" / "tables" / "table2_reliability.csv"
 
     if check_mode:
-        if not p_md.exists() or not p_csv.exists():
-            print(f"FAIL: Target files do not exist: {p_md} or {p_csv}", file=sys.stderr)
-            return 1
+        for p, computed, name in [
+            (p_t1_md, md_content_t1, "Table 1 MD"),
+            (p_t1_csv, csv_content_t1, "Table 1 CSV"),
+            (p_t2_md, md_content_t2, "Table 2 MD"),
+            (p_t2_csv, csv_content_t2, "Table 2 CSV"),
+        ]:
+            if not p.exists():
+                print(f"FAIL: Target file does not exist: {p}", file=sys.stderr)
+                return 1
+            existing = p.read_text(encoding="utf-8")
+            if existing != computed:
+                print(f"FAIL: {p} ({name}) differs from computed content.", file=sys.stderr)
+                return 1
 
-        existing_md = p_md.read_text(encoding="utf-8")
-        existing_csv = p_csv.read_text(encoding="utf-8")
-
-        if existing_md != md_content:
-            print(f"FAIL: {p_md} differs from computed table content.", file=sys.stderr)
-            return 1
-        if existing_csv != csv_content:
-            print(f"FAIL: {p_csv} differs from computed CSV content.", file=sys.stderr)
-            return 1
-
-        print("PASS: docs/tables/table1_qa (md, csv) match committed outputs.")
+        print("PASS: docs/tables/table1_qa and table2_reliability (md, csv) match committed outputs.")
         return 0
 
-    p_md.parent.mkdir(parents=True, exist_ok=True)
-    p_md.write_text(md_content, encoding="utf-8")
-    p_csv.write_text(csv_content, encoding="utf-8")
-    print(f"Wrote {p_md}")
-    print(f"Wrote {p_csv}")
+    p_t1_md.parent.mkdir(parents=True, exist_ok=True)
+    p_t1_md.write_text(md_content_t1, encoding="utf-8")
+    p_t1_csv.write_text(csv_content_t1, encoding="utf-8")
+    p_t2_md.write_text(md_content_t2, encoding="utf-8")
+    p_t2_csv.write_text(csv_content_t2, encoding="utf-8")
+    print(f"Wrote {p_t1_md}")
+    print(f"Wrote {p_t1_csv}")
+    print(f"Wrote {p_t2_md}")
+    print(f"Wrote {p_t2_csv}")
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Table 1 QA Performance for V3 study.")
+    parser = argparse.ArgumentParser(description="Build Table 1 (QA) and Table 2 (Reliability) for V3 study.")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -557,3 +928,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
