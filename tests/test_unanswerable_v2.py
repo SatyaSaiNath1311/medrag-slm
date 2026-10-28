@@ -15,6 +15,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -36,6 +37,7 @@ from src.build_unanswerable_v2 import (  # noqa: E402
     extract_corpus_vocabulary,
     get_distinctive_token,
     load_corpus_snippets,
+    validate_and_regenerate_pairs,
     verify_zero_corpus_matches,
 )
 
@@ -52,7 +54,9 @@ class TestUnanswerableV2(unittest.TestCase):
         """Ensure benchmark files exist before running tests."""
         if not (VAL_PATH.exists() and TEST_PATH.exists() and SHA_PATH.exists()):
             raise AssertionError("Run python3 src/build_unanswerable_v2.py first")
-        ensure_pairs_validated()
+        # Fast part: regenerate and validate pairs in memory using phonetic
+        # and prefix diversity rules without performing heavy corpus scan (~0.05s).
+        validate_and_regenerate_pairs(seed=42, verbose=False)
 
     def setUp(self):
         with open(VAL_PATH, "r", encoding="utf-8") as f:
@@ -208,6 +212,7 @@ class TestUnanswerableV2(unittest.TestCase):
         self.assertEqual(len(recorded_hash), 64)
         self.assertEqual(calculated_hash, recorded_hash, "Frozen test set SHA256 checksum mismatch!")
 
+    @pytest.mark.slow
     def test_no_fake_name_corpus_hits(self):
         """Verify all fabricated drug and disease names have ZERO hits in the textbook corpus.
 
@@ -215,6 +220,7 @@ class TestUnanswerableV2(unittest.TestCase):
         on the ``text`` field of each corpus snippet — ids and titles are excluded.
         The count is the true number of corpus snippets that contain the phrase.
         """
+        ensure_pairs_validated()
         corpus_file = CORPUS_PATH if CORPUS_PATH.exists() else REPO_ROOT / "work" / "phase2" / "corpus.jsonl"
         if not corpus_file.exists():
             self.skipTest("Textbook corpus file not found on disk; skipping corpus hit test.")
@@ -268,8 +274,10 @@ class TestUnanswerableV2(unittest.TestCase):
         self.assertTrue(contains_pharma_stem("samplestat"))
         self.assertTrue(contains_pharma_stem("samplegrel"))
 
+    @pytest.mark.slow
     def test_levenshtein_distance_rule(self):
         """Verify fake names (drugs and diseases) have Levenshtein distance >= 3 from common real drugs and corpus tokens."""
+        ensure_pairs_validated()
         self.assertGreaterEqual(len(COMMON_REAL_DRUGS), 280)
         all_fake_names = [p["fake_name"] for p in DRUG_PAIRS] + [p["fake_name"] for p in DISEASE_PAIRS]
         for name in all_fake_names:
@@ -304,8 +312,10 @@ class TestUnanswerableV2(unittest.TestCase):
                 f"Fake name {name!r} is in the hard-reject list!",
             )
 
+    @pytest.mark.slow
     def test_distinctive_tokens_global_uniqueness(self):
         """Assert all distinctive tokens across fabricated names are strictly unique."""
+        ensure_pairs_validated()
         all_fake_names = [p["fake_name"] for p in DRUG_PAIRS] + [p["fake_name"] for p in DISEASE_PAIRS]
         self.assertEqual(len(all_fake_names), 100)
         distinctive_tokens = [get_distinctive_token(name) for name in all_fake_names]

@@ -1,0 +1,17 @@
+pair,condition,dataset,split,n,domain_model,generic_model,domain_strict_acc,domain_strict_ci_lo,domain_strict_ci_hi,generic_strict_acc,generic_strict_ci_lo,generic_strict_ci_hi,strict_diff,strict_diff_ci_lo,strict_diff_ci_hi,mcnemar_raw_p,holm_adj_p,domain_fallback_acc,generic_fallback_acc,domain_trunc_rate,generic_trunc_rate,domain_parse_rate,generic_parse_rate,status
+Pair A,C1,MedQA,test,500,medpsy-1.7b,qwen3-1.7b-thinking,0.602,0.5585,0.644,0.304,0.2653,0.3457,0.298,0.248,0.348,<1e-4,<1e-4,0.778,0.498,0.32,0.51,0.706,0.502,COMPLETE
+Pair A,C2,MedQA,test,500,medpsy-1.7b,qwen3-1.7b-thinking,0.452,0.4089,0.4958,0.332,0.2921,0.3744,0.12,0.072,0.168,<1e-4,<1e-4,0.784,0.532,0.466,0.494,0.71,0.514,COMPLETE
+Pair A,C4,unanswerable_v2,test,140,medpsy-1.7b,qwen3-1.7b-thinking,0.25,0.1856,0.3278,0.2857,0.2174,0.3655,-0.0357,-0.0714,-0.0071,0.0625,0.0625,0.2857,0.2857,0.2,0.2071,0.8429,0.7929,COMPLETE
+Pair A,C5,unanswerable_v2,test,140,medpsy-1.7b,qwen3-1.7b-thinking,0.2357,0.1731,0.3125,0.2571,0.1919,0.3353,-0.0214,-0.0571,0.0143,0.4531,0.4531,0.2857,0.2857,0.3214,0.4286,0.7929,0.5643,COMPLETE
+Gemma Pair,C1,MedQA,test,500,medgemma-1.5-4b-it,gemma3-4b,0.548,0.5042,0.5911,0.486,0.4425,0.5297,0.062,0.008,0.114,0.0255,0.1274,0.548,0.486,0.0,0.0,1.0,1.0,COMPLETE
+Gemma Pair,C1,PubMedQA,test,500,medgemma-1.5-4b-it,gemma3-4b,0.508,0.4643,0.5516,0.492,0.4484,0.5357,0.016,-0.024,0.054,0.4797,0.9594,0.508,0.492,0.0,0.0,1.0,1.0,COMPLETE
+Gemma Pair,C2,MedQA,test,500,medgemma-1.5-4b-it,gemma3-4b,0.572,0.5282,0.6147,0.53,0.4862,0.5734,0.042,-0.004,0.088,0.0871,0.2614,0.572,0.53,0.0,0.0,1.0,1.0,COMPLETE
+Gemma Pair,C2,PubMedQA,test,500,medgemma-1.5-4b-it,gemma3-4b,0.51,0.4663,0.5536,0.502,0.4583,0.5456,0.008,-0.03,0.048,0.7666,0.9594,0.51,0.502,0.0,0.0,1.0,1.0,COMPLETE
+Gemma Pair,C3,PubMedQA,test,500,medgemma-1.5-4b-it,gemma3-4b,0.57,0.5262,0.6127,0.53,0.4862,0.5734,0.04,0.004,0.076,0.0399,0.1594,0.57,0.53,0.0,0.0,1.0,1.0,COMPLETE
+Gemma Pair,C4,unanswerable_v2,test,140,medgemma-1.5-4b-it,gemma3-4b,0.2857,0.2174,0.3655,0.2857,0.2174,0.3655,0.0,0.0,0.0,1.0000,1.0000,0.2857,0.2857,0.0,0.0,1.0,0.9929,COMPLETE
+Gemma Pair,C5,unanswerable_v2,test,140,medgemma-1.5-4b-it,gemma3-4b,0.2786,0.211,0.358,0.2714,0.2046,0.3505,0.0071,-0.0143,0.0357,1.0000,1.0000,0.2786,0.2714,0.0,0.0,1.0,0.9857,COMPLETE
+Pair B,C1,MedQA,test,500,medpsy-4b,qwen3-4b-thinking-2507,0.832,0.7967,0.8622,0.004,0.0011,0.0145,0.828,0.794,0.86,<1e-4,<1e-4,0.876,0.668,0.106,0.996,0.904,0.02,COMPLETE
+Pair B,C2,MedQA,test,500,medpsy-4b,qwen3-4b-thinking-2507,0.726,0.6853,0.7633,0.0,0.0,0.0076,0.726,0.686,0.764,<1e-4,<1e-4,0.89,0.604,0.216,1.0,0.838,0.006,COMPLETE
+Pair B,C3,PubMedQA,test,500,medpsy-4b,qwen3-4b-thinking-2507,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,GAP
+Pair B,C4,unanswerable_v2,test,140,medpsy-4b,qwen3-4b-thinking-2507,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,GAP
+Pair B,C5,unanswerable_v2,test,140,medpsy-4b,qwen3-4b-thinking-2507,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,N/A,GAP

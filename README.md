@@ -127,4 +127,29 @@ The v3 study evaluates matched pairs of generic vs. medical-domain small languag
    python3 src/make_pair_figures.py
    ```
 
+## Reproduce
+
+See [`docs/REPRODUCE.md`](docs/REPRODUCE.md) for full environmental details, frozen hashes, and compute audit.
+
+To audit data integrity and reproduce all tables and paper claims locally on CPU without a GPU:
+```bash
+# 1. Execute master verification gate (< 2 minutes on CPU)
+bash scripts/verify_all.sh
+
+# 2. Regenerate consolidated final results tables (MD, CSV, LaTeX)
+python3 -m src.final_results_v3
+
+# 3. Regenerate master paper fact ledger
+python3 -m src.build_paper_facts
+
+# 4. Re-run individual analysis reports
+python3 src/analysis_pair_a_medqa.py
+python3 src/analysis_gemma_pair.py
+python3 src/analysis_pair_b.py
+python3 src/analysis_budget_sweep.py
+python3 src/analysis_gemma_prompt_sensitivity.py
+python3 scripts/generate_pair_b_tables.py
+```
+
+
 

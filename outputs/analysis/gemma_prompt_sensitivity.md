@@ -49,7 +49,7 @@ No variants were flagged `FORMAT-CONFOUNDED`. Pairwise parse-rate differences:
 
 ## 4. Visual Analysis
 
-![Gemma Prompt Sensitivity Gap](outputs/analysis/gemma_prompt_sensitivity.png)
+![Gemma Prompt Sensitivity Gap](gemma_prompt_sensitivity.png)
 
 ## 5. Scope and Test-Set Integrity
 
@@ -59,8 +59,8 @@ No variants were flagged `FORMAT-CONFOUNDED`. Pairwise parse-rate differences:
 
 ## 6. Execution Provenance & Manifest
 
-- **Git Commit:** `unknown`
-- **Rule Document Hash (sha256):** `unknown`
+- **Git Commit:** `0d3bf316a6780664760ce291fa945de2b06b2798`
+- **Rule Document Hash (sha256):** `f0a6806cfa9c6454b6babc333045aa4bf409493ea4f1f038515de7ab324bd8b7`
 - **Completed Flag:** `True`
 - **Hours Elapsed:** `0.3668`
 

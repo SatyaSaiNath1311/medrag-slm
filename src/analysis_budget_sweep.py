@@ -103,6 +103,13 @@ def holm_bonferroni(p_values: List[float]) -> List[float]:
     return adjusted
 
 
+def format_p_val(p: float) -> str:
+    """Format p-value: if < 1e-4, return '<1e-4', otherwise f'{p:.4f}'."""
+    if p < 1e-4:
+        return "<1e-4"
+    return f"{p:.4f}"
+
+
 def is_finished_within_cap(row: Dict[str, Any], cap: int) -> bool:
     """A row counts as finished within cap c iff finished_naturally and n_generated_tokens <= c."""
     return bool(row.get("finished_naturally") and (row.get("n_generated_tokens", 999999) <= cap))
@@ -204,12 +211,13 @@ def check_medpsy_validation_consistency(sweep_medpsy_rows: List[Dict[str, Any]])
         })
 
     agreement_rate = matches / len(eligible)
+    rel_sc_val = os.path.relpath(sc_val_path, REPO_ROOT) if os.path.isabs(sc_val_path) else sc_val_path
     return {
         "status": "success",
         "n_eligible": len(eligible),
         "matches": matches,
         "agreement_rate": agreement_rate,
-        "sc_val_file": sc_val_path,
+        "sc_val_file": rel_sc_val,
     }
 
 
@@ -525,15 +533,19 @@ def run_analysis(
     lines.append("|---|---|---|---|---|---|---|")
     for cap in CAPS:
         cmp = results_by_cap[cap]["comparison"]
+        p_s_raw = format_p_val(cmp['p_strict_raw'])
+        p_s_holm = format_p_val(cmp['p_strict_holm'])
         lines.append(
             f"| {cap} | Strict Accuracy | {cmp['strict_diff']*100:+.1f}% | "
             f"[{cmp['strict_diff_ci'][0]*100:+.1f}%, {cmp['strict_diff_ci'][1]*100:+.1f}%] | "
-            f"b={cmp['b_strict']}, c={cmp['c_strict']} | {cmp['p_strict_raw']:.4f} | {cmp['p_strict_holm']:.4f} |"
+            f"b={cmp['b_strict']}, c={cmp['c_strict']} | {p_s_raw} | {p_s_holm} |"
         )
+        p_t_raw = format_p_val(cmp['p_trunc_raw'])
+        p_t_holm = format_p_val(cmp['p_trunc_holm'])
         lines.append(
             f"| {cap} | Truncation Rate | {cmp['trunc_diff']*100:+.1f}% | "
             f"[{cmp['trunc_diff_ci'][0]*100:+.1f}%, {cmp['trunc_diff_ci'][1]*100:+.1f}%] | "
-            f"b={cmp['b_trunc']}, c={cmp['c_trunc']} | {cmp['p_trunc_raw']:.4f} | {cmp['p_trunc_holm']:.4f} |"
+            f"b={cmp['b_trunc']}, c={cmp['c_trunc']} | {p_t_raw} | {p_t_holm} |"
         )
     lines.append("")
 

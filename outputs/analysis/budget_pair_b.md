@@ -52,16 +52,16 @@ Strict accuracy requires: finished naturally within cap $c$, parsed successfully
 
 | Cap | Metric | MedPsy - Qwen Diff | Paired Bootstrap 95% CI | Discordant (b / c) | Raw McNemar p | Holm-Adjusted p |
 |---|---|---|---|---|---|---|
-| 1024 | Strict Accuracy | +88.0% | [+81.0%, +94.0%] | b=88, c=0 | 0.0000 | 0.0000 |
-| 1024 | Truncation Rate | -94.0% | [-98.0%, -89.0%] | b=0, c=94 | 0.0000 | 0.0000 |
-| 1536 | Strict Accuracy | +86.0% | [+79.0%, +92.0%] | b=86, c=0 | 0.0000 | 0.0000 |
-| 1536 | Truncation Rate | -92.0% | [-97.0%, -86.0%] | b=0, c=92 | 0.0000 | 0.0000 |
-| 2048 | Strict Accuracy | +74.0% | [+65.0%, +82.0%] | b=74, c=0 | 0.0000 | 0.0000 |
-| 2048 | Truncation Rate | -80.0% | [-87.0%, -72.0%] | b=0, c=80 | 0.0000 | 0.0000 |
-| 3072 | Strict Accuracy | +43.0% | [+32.0%, +53.0%] | b=45, c=2 | 0.0000 | 0.0000 |
-| 3072 | Truncation Rate | -45.0% | [-55.0%, -35.0%] | b=0, c=45 | 0.0000 | 0.0000 |
-| 4096 | Strict Accuracy | +32.0% | [+22.0%, +42.0%] | b=34, c=2 | 0.0000 | 0.0000 |
-| 4096 | Truncation Rate | -28.0% | [-37.0%, -19.0%] | b=0, c=28 | 0.0000 | 0.0000 |
+| 1024 | Strict Accuracy | +88.0% | [+81.0%, +94.0%] | b=88, c=0 | <1e-4 | <1e-4 |
+| 1024 | Truncation Rate | -94.0% | [-98.0%, -89.0%] | b=0, c=94 | <1e-4 | <1e-4 |
+| 1536 | Strict Accuracy | +86.0% | [+79.0%, +92.0%] | b=86, c=0 | <1e-4 | <1e-4 |
+| 1536 | Truncation Rate | -92.0% | [-97.0%, -86.0%] | b=0, c=92 | <1e-4 | <1e-4 |
+| 2048 | Strict Accuracy | +74.0% | [+65.0%, +82.0%] | b=74, c=0 | <1e-4 | <1e-4 |
+| 2048 | Truncation Rate | -80.0% | [-87.0%, -72.0%] | b=0, c=80 | <1e-4 | <1e-4 |
+| 3072 | Strict Accuracy | +43.0% | [+32.0%, +53.0%] | b=45, c=2 | <1e-4 | <1e-4 |
+| 3072 | Truncation Rate | -45.0% | [-55.0%, -35.0%] | b=0, c=45 | <1e-4 | <1e-4 |
+| 4096 | Strict Accuracy | +32.0% | [+22.0%, +42.0%] | b=34, c=2 | <1e-4 | <1e-4 |
+| 4096 | Truncation Rate | -28.0% | [-37.0%, -19.0%] | b=0, c=28 | <1e-4 | <1e-4 |
 
 ## 5. Descriptive Finished-Only Subset (Non-Comparative Diagnostic)
 
@@ -80,7 +80,7 @@ Strict accuracy requires: finished naturally within cap $c$, parsed successfully
 
 ## 6. MedPsy-4B Validation Consistency Diagnostic
 
-- **Reference File:** `/Users/satyasainathteeparthi/Documents/MTECH/Phase 1 Medrag/medrag-slm/outputs/sc_val/medpsy-4b/medqa.jsonl` (greedy column)
+- **Reference File:** `outputs/sc_val/medpsy-4b/medqa.jsonl` (greedy column)
 - **Evaluated Subset:** MedPsy-4B questions that finished within 1,024 tokens and overlap with `sc_val`
 - **Overlapping Rows:** 94
 - **Exact Predicted-Answer Agreement:** 94/94 (100.0%)

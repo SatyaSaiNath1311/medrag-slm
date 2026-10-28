@@ -18,6 +18,20 @@ if str(REPO_ROOT) not in sys.path:
 
 from unittest.mock import MagicMock, patch
 
+# kaggle_chat/chat_app.py imports gradio, faiss, bm25s, Stemmer, torch, and transformers at module level.
+# If gradio is missing, chat_app attempts an in-process subprocess pip install, which takes 4+ minutes
+# and fails at collection in plain / offline pytest runs.
+try:
+    import pytest
+    for _pkg in ["gradio", "faiss", "bm25s", "Stemmer"]:
+        pytest.importorskip(_pkg, reason=f"{_pkg} is an optional dependency for kaggle_chat.chat_app")
+except ImportError:
+    for _pkg in ["gradio", "faiss", "bm25s", "Stemmer"]:
+        try:
+            __import__(_pkg)
+        except ImportError:
+            raise unittest.SkipTest(f"{_pkg} is not installed; skipping chat_app tests")
+
 from kaggle_chat.chat_app import (
     check_emergency,
     evaluate_abstention,

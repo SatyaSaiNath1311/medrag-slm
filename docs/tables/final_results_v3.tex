@@ -1,0 +1,89 @@
+\begin{table*}[t]
+\centering
+\small
+\caption{Pair A: \texttt{medpsy-1.7b} (domain) vs. \texttt{qwen3-1.7b-thinking} (generic) on MedQA test ($N=500$, greedy decoding, thinking cap 1,024). Strict accuracy requires parsed, untruncated, and correct outputs. Multiplicity family $m=6$ across conditions and metrics.}
+\label{tab:pair_a_medqa}
+\begin{tabular}{llccccccc}
+\toprule
+Condition & Model & Strict Acc [95\% CI] & Fallback Acc & Trunc Rate & Parse Rate & $\Delta$ Strict [95\% CI] & Raw $p$ & Holm $p$ \\
+\midrule
+
+C1 & \texttt{medpsy-1.7b} & 60.2\% [55.8, 64.4] & 77.8\% & 32.0\% & 70.6\% & \multirow{2}{*}{+29.8\% [+24.8, +34.8]} & \multirow{2}{*}{<1e-4} & \multirow{2}{*}{<1e-4} \\
+
+ & \texttt{qwen3-1.7b-thinking} & 30.4\% [26.5, 34.6] & 49.8\% & 51.0\% & 50.2\% & & & \\
+
+\midrule
+
+C2 & \texttt{medpsy-1.7b} & 45.2\% [40.9, 49.6] & 78.4\% & 46.6\% & 71.0\% & \multirow{2}{*}{+12.0\% [+7.2, +16.8]} & \multirow{2}{*}{<1e-4} & \multirow{2}{*}{<1e-4} \\
+
+ & \texttt{qwen3-1.7b-thinking} & 33.2\% [29.2, 37.4] & 53.2\% & 49.4\% & 51.4\% & & & \\
+
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Gemma Pair: \texttt{medgemma-1.5-4b-it} (domain) vs. \texttt{gemma3-4b} (generic) on test split ($N=500$ per cell, greedy direct decoding). Truncation was 0.0\% across all answerable cells. Multiplicity family $m=5$ across evaluated answerable cells.}
+\label{tab:gemma_pair}
+\begin{tabular}{llccccccc}
+\toprule
+Cell & Model & Strict Acc [95\% CI] & Fallback Acc & Trunc Rate & Parse Rate & $\Delta$ Strict [95\% CI] & Raw $p$ & Holm $p$ \\
+\midrule
+
+C1 MedQA & \texttt{medgemma-1.5-4b-it} & 54.8\% [50.4, 59.1] & 54.8\% & 0.0\% & 100.0\% & \multirow{2}{*}{+6.2\% [+0.8, +11.4]} & \multirow{2}{*}{0.0255} & \multirow{2}{*}{0.1274} \\
+
+ & \texttt{gemma3-4b} & 48.6\% [44.2, 53.0] & 48.6\% & 0.0\% & 100.0\% & & & \\
+
+\midrule
+
+C1 PubMedQA & \texttt{medgemma-1.5-4b-it} & 50.8\% [46.4, 55.2] & 50.8\% & 0.0\% & 100.0\% & \multirow{2}{*}{+1.6\% [-2.4, +5.4]} & \multirow{2}{*}{0.4797} & \multirow{2}{*}{0.9594} \\
+
+ & \texttt{gemma3-4b} & 49.2\% [44.8, 53.6] & 49.2\% & 0.0\% & 100.0\% & & & \\
+
+\midrule
+
+C2 MedQA & \texttt{medgemma-1.5-4b-it} & 57.2\% [52.8, 61.5] & 57.2\% & 0.0\% & 100.0\% & \multirow{2}{*}{+4.2\% [-0.4, +8.8]} & \multirow{2}{*}{0.0871} & \multirow{2}{*}{0.2614} \\
+
+ & \texttt{gemma3-4b} & 53.0\% [48.6, 57.3] & 53.0\% & 0.0\% & 100.0\% & & & \\
+
+\midrule
+
+C2 PubMedQA & \texttt{medgemma-1.5-4b-it} & 51.0\% [46.6, 55.4] & 51.0\% & 0.0\% & 100.0\% & \multirow{2}{*}{+0.8\% [-3.0, +4.8]} & \multirow{2}{*}{0.7666} & \multirow{2}{*}{0.9594} \\
+
+ & \texttt{gemma3-4b} & 50.2\% [45.8, 54.6] & 50.2\% & 0.0\% & 100.0\% & & & \\
+
+\midrule
+
+C3 PubMedQA & \texttt{medgemma-1.5-4b-it} & 57.0\% [52.6, 61.3] & 57.0\% & 0.0\% & 100.0\% & \multirow{2}{*}{+4.0\% [+0.4, +7.6]} & \multirow{2}{*}{0.0399} & \multirow{2}{*}{0.1594} \\
+
+ & \texttt{gemma3-4b} & 53.0\% [48.6, 57.3] & 53.0\% & 0.0\% & 100.0\% & & & \\
+
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Pair B: \texttt{medpsy-4b} (domain) vs. \texttt{qwen3-4b-thinking-2507} (generic) on MedQA test ($N=500$, greedy decoding, thinking cap 1,024). Multiplicity family $m=2$ across C1 and C2.}
+\label{tab:pair_b_medqa}
+\begin{tabular}{llccccccc}
+\toprule
+Condition & Model & Strict Acc [95\% CI] & Fallback Acc & Trunc Rate & Parse Rate & $\Delta$ Strict [95\% CI] & Raw $p$ & Holm $p$ \\
+\midrule
+
+C1 & \texttt{medpsy-4b} & 83.2\% [79.7, 86.2] & 87.6\% & 10.6\% & 90.4\% & \multirow{2}{*}{+82.8\% [+79.4, +86.0]} & \multirow{2}{*}{<1e-4} & \multirow{2}{*}{<1e-4} \\
+
+ & \texttt{qwen3-4b-thinking-2507} & 0.4\% [0.1, 1.4] & 66.8\% & 99.6\% & 2.0\% & & & \\
+
+\midrule
+
+C2 & \texttt{medpsy-4b} & 72.6\% [68.5, 76.3] & 89.0\% & 21.6\% & 83.8\% & \multirow{2}{*}{+72.6\% [+68.6, +76.4]} & \multirow{2}{*}{<1e-4} & \multirow{2}{*}{<1e-4} \\
+
+ & \texttt{qwen3-4b-thinking-2507} & 0.0\% [0.0, 0.8] & 60.4\% & 100.0\% & 0.6\% & & & \\
+
+\bottomrule
+\end{tabular}
+\end{table*}

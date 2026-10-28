@@ -437,7 +437,7 @@ def generate_markdown_report(
     # 5. Visual Analysis Reference
     lines.append("## 4. Visual Analysis")
     lines.append("")
-    lines.append(f"![Gemma Prompt Sensitivity Gap](outputs/analysis/gemma_prompt_sensitivity.png)")
+    lines.append(f"![Gemma Prompt Sensitivity Gap](gemma_prompt_sensitivity.png)")
     lines.append("")
 
     # 6. Scope Statement
@@ -451,8 +451,8 @@ def generate_markdown_report(
     # 7. Metadata / Provenance
     lines.append("## 6. Execution Provenance & Manifest")
     lines.append("")
-    lines.append(f"- **Git Commit:** `{manifest.get('git_commit', 'unknown')}`")
-    lines.append(f"- **Rule Document Hash (sha256):** `{manifest.get('rule_hash', 'unknown')}`")
+    lines.append(f"- **Git Commit:** `{manifest.get('git_commit_hash', manifest.get('git_commit', 'unknown'))}`")
+    lines.append(f"- **Rule Document Hash (sha256):** `{manifest.get('rule_file_sha256', manifest.get('rule_hash', 'unknown'))}`")
     lines.append(f"- **Completed Flag:** `{manifest.get('completed', False)}`")
     lines.append(f"- **Hours Elapsed:** `{manifest.get('hours_used', 'N/A')}`")
     lines.append("")
