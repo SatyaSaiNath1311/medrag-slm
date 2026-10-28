@@ -1,3 +1,8 @@
+> [!WARNING]
+> **SUPERSEDED — DO NOT QUOTE IN THE PAPER.**
+> This report is from an earlier multi-model benchmark (committed 2026-10-16) with a different protocol and a different model set (`qwen3-4b` = `Qwen/Qwen3-4B`, `phi4-mini`, `smollm3-3b`, adaptive gating). It is NOT the v3 matched-pair study. In particular, its "Accuracy" column is the with-fallback measure, not the strict primary metric, and its `qwen3-4b` is the non-reasoning base model, not `qwen3-4b-thinking-2507`.
+> The paper reports only the v3 matched-pair results in `docs/tables/final_results_v3.md` and `docs/PAPER_FACTS.md`.
+
 # Medical RAG Small Language Model (SLM) Benchmark: Presentation Tables
 
 Comprehensive empirical evaluation comparing open-weight small language models (1.7B to 4B parameters) and medical reasoning models across **Baseline (parametric-only)**, **Full RAG**, **Best Adaptive Gate**, and **+Abstract (PubMedQA oracle context)**.
