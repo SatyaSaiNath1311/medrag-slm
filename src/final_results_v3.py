@@ -690,8 +690,9 @@ def build_markdown(data: Dict[str, Any]) -> str:
 
     lines.append("### 5.2 Gemma Prompt-Sensitivity Evaluation (MedQA Validation Split, N=200)")
     lines.append("Evaluation across three prompt variations (`docs/GEMMA_PROMPT_SENSITIVITY_RULE.md`): V1 (standard baseline), V2 (clinical scenario), V3 (board examination).")
-    lines.append("")
-    lines.append("- **Pre-Registered Stability Verdict:** `STABLE` (Gap spread across variants: **2.50 pp**, within pre-registered $\\le 10.0$ pp threshold; no sign flip).")
+    _gaps = [data["prompt_sens"][v]["cmp"]["strict_diff"] * 100 for v in ["V1", "V2", "V3"]]
+    _spread = max(_gaps) - min(_gaps)
+    lines.append(f"- **Pre-Registered Stability Verdict:** `STABLE` (Gap spread across variants: **{_spread:.2f} pp**, within pre-registered $\\le 10.0$ pp threshold; no sign flip).")
     lines.append("- **Format-Confound Status:** None flagged (all variants exhibited $\\le 5.0$ pp difference in parse rates).")
     lines.append("")
     lines.append("| Variant | Gemma-3-4B Acc | MedGemma-1.5-4B-it Acc | Gap (Gemma3 - MedGemma) | 95% Bootstrap CI | Exact McNemar p | Status |")
@@ -712,10 +713,32 @@ def build_markdown(data: Dict[str, Any]) -> str:
     lines.append("")
     lines.append("| Flag ID | Category | Empirical Observation | Scientific Impact |")
     lines.append("|---|---|---|---|")
-    lines.append("| **L01** | Truncation Ceiling | Qwen3-4B-Thinking-2507 suffered 99.6% (498/500) truncation in C1 and 100.0% (500/500) in C2 at 1,024 cap on frozen test. | Strict accuracy collapsed to 0.4% and 0.0%. Test cap represents budget exhaustion rather than reasoning parity. |")
-    lines.append("| **L02** | Residual Truncation | Qwen3-4B-Thinking-2507 exhibited 28.0% residual truncation at 4,096 tokens on validation sweep. | Reasoning loops persist even at 4x budget cap; unconstrained budget does not eliminate pathological looping. |")
-    lines.append("| **L03** | RAG Truncation Inflation | MedPsy-1.7B truncation increased from 32.0% in C1 to 46.6% in C2 (+14.6 pp) upon retrieval injection. | Evidence ingestion inflates thinking length, driving a net -15.0 pp strict accuracy degradation under fixed cap. |")
-    lines.append("| **L04** | Format Sensitivity | Gemma prompt-sensitivity variants yielded 0.00 pp parse rate difference (all 100.0% parsed). | No format confound observed; direct-answer formatting remained perfectly stable across prompt framings. |")
+    _q_c1 = data["pair_b"]["C1"]["gen"]
+    _q_c2 = data["pair_b"]["C2"]["gen"]
+    lines.append(
+        f"| **L01** | Truncation Ceiling | Qwen3-4B-Thinking-2507 suffered {_q_c1['trunc_rate']*100:.1f}% ({_q_c1['trunc_k']}/{_q_c1['n']}) truncation in C1 and {_q_c2['trunc_rate']*100:.1f}% ({_q_c2['trunc_k']}/{_q_c2['n']}) in C2 at 1,024 cap on frozen test. | "
+        f"Strict accuracy collapsed to {_q_c1['strict_acc']*100:.1f}% and {_q_c2['strict_acc']*100:.1f}%. Test cap represents budget exhaustion rather than reasoning parity. |"
+    )
+    _q_4096 = data["budget_sweep"][4096]["gen"]
+    lines.append(
+        f"| **L02** | Residual Truncation | Qwen3-4B-Thinking-2507 exhibited {_q_4096['trunc_rate']*100:.1f}% residual truncation at 4,096 tokens on validation sweep. | "
+        f"Reasoning loops persist even at 4x budget cap; unconstrained budget does not eliminate pathological looping. |"
+    )
+    _m_c1 = data["pair_a_medqa"]["C1"]["med"]
+    _m_c2 = data["pair_a_medqa"]["C2"]["med"]
+    _t_diff = (_m_c2['trunc_rate'] - _m_c1['trunc_rate']) * 100
+    _s_diff = (_m_c2['strict_acc'] - _m_c1['strict_acc']) * 100
+    lines.append(
+        f"| **L03** | RAG Truncation Inflation | MedPsy-1.7B truncation increased from {_m_c1['trunc_rate']*100:.1f}% in C1 to {_m_c2['trunc_rate']*100:.1f}% in C2 ({_t_diff:+.1f} pp) upon retrieval injection. | "
+        f"Evidence ingestion inflates thinking length, driving a net {_s_diff:+.1f} pp strict accuracy degradation under fixed cap. |"
+    )
+    _p_diffs = [abs(data["prompt_sens"][v]["med"]["parse_rate"] - data["prompt_sens"][v]["gen"]["parse_rate"]) * 100 for v in ["V1", "V2", "V3"]]
+    _min_parse = min(min(data["prompt_sens"][v]["med"]["parse_rate"], data["prompt_sens"][v]["gen"]["parse_rate"]) * 100 for v in ["V1", "V2", "V3"])
+    _parse_desc = "all 100.0% parsed" if _min_parse == 100.0 else f"all >= {_min_parse:.1f}% parsed"
+    lines.append(
+        f"| **L04** | Format Sensitivity | Gemma prompt-sensitivity variants yielded {max(_p_diffs):.2f} pp parse rate difference ({_parse_desc}). | "
+        f"No format confound observed; direct-answer formatting remained perfectly stable across prompt framings. |"
+    )
     lines.append("| **L05** | Coverage Gaps | Pair B evaluated strictly on MedQA C1 and C2. Conditions C3, C4, C5 were not evaluated. | Cross-condition comparisons for Pair B on PubMedQA and Unanswerable v2 remain empirical gaps. |")
     lines.append("")
 
@@ -888,14 +911,16 @@ Condition & Model & Strict Acc [95\% CI] & Fallback Acc & Trunc Rate & Parse Rat
 \end{table*}""")
 
     # Table 2: Gemma Pair
-    parts.append(r"""\begin{table*}[t]
+    cell_keys = ["C1_MedQA", "C1_PubMedQA", "C2_MedQA", "C2_PubMedQA", "C3_PubMedQA"]
+    _g_max_trunc = max(max(data["gemma_pair"][ck]["med"]["trunc_rate"], data["gemma_pair"][ck]["gen"]["trunc_rate"]) for ck in cell_keys)
+    parts.append(rf"""\begin{{table*}}[t]
 \centering
 \small
-\caption{Gemma Pair: \texttt{medgemma-1.5-4b-it} (domain) vs. \texttt{gemma3-4b} (generic) on test split ($N=500$ per cell, greedy direct decoding). Truncation was 0.0\% across all answerable cells. Multiplicity family $m=5$ across evaluated answerable cells.}
-\label{tab:gemma_pair}
-\begin{tabular}{llccccccc}
+\caption{{Gemma Pair: \texttt{{medgemma-1.5-4b-it}} (domain) vs. \texttt{{gemma3-4b}} (generic) on test split ($N=500$ per cell, greedy direct decoding). Truncation was {_g_max_trunc*100:.1f}\% across all answerable cells. Multiplicity family $m=5$ across evaluated answerable cells.}}
+\label{{tab:gemma_pair}}
+\begin{{tabular}}{{llccccccc}}
 \toprule
-Cell & Model & Strict Acc [95\% CI] & Fallback Acc & Trunc Rate & Parse Rate & $\Delta$ Strict [95\% CI] & Raw $p$ & Holm $p$ \\
+Condition & Model & Strict Acc [95\% CI] & Fallback Acc & Trunc Rate & Parse Rate & $\Delta$ Strict [95\% CI] & Raw $p$ & Holm $p$ \\
 \midrule""")
     cell_keys = ["C1_MedQA", "C1_PubMedQA", "C2_MedQA", "C2_PubMedQA", "C3_PubMedQA"]
     for idx, ck in enumerate(cell_keys):

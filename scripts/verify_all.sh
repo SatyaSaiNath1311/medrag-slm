@@ -7,15 +7,16 @@
 #   3. Outputs & Sweeps integrity audit (IDs, uniqueness, counts, manifests, no hf_ tokens, rule hashes)
 #   4. Paper Facts ledger check (python3 -m src.build_paper_facts --check)
 #   5. Consolidated Results tables check (python3 -m src.final_results_v3 --check)
-#   6. Kaggle runner default mode flags check (text parse, all V3 flags False)
-#   7. Clean working tree check under outputs/ and docs/
+#   6. Deployment model selection check (python3 -m src.select_deployment_model --check)
+#   7. Kaggle runner default mode flags check (text parse, all V3 flags False)
+#   8. Clean working tree check under outputs/ and docs/
 #
 # Prints elapsed time of each gate, exactly one PASS/FAIL line per check, and a final summary.
 # Exits non-zero on any failure.
 
 set -u
 
-TOTAL_CHECKS=7
+TOTAL_CHECKS=8
 PASSED_CHECKS=0
 FAILED_CHECKS=0
 
@@ -77,6 +78,7 @@ TEST_FILES=(
     "tests/test_final_results.py"
     "tests/test_gemma_prompt_sens.py"
     "tests/test_idk.py"
+    "tests/test_model_selection.py"
     "tests/test_pairs.py"
     "tests/test_parsing.py"
     "tests/test_question_types.py"
@@ -148,7 +150,17 @@ else
     report_fail "docs/tables/final_results_v3 consistency check" "regenerate via python3 -m src.final_results_v3" "$((T1 - T0))"
 fi
 
-# Check 6: All V3 Runner Default Flags are False (parsed as text, never imported)
+# Check 6: Deployment Model Selection Consistency (--check)
+T0=$(date +%s)
+if python3 -m src.select_deployment_model --check > /dev/null 2>&1; then
+    T1=$(date +%s)
+    report_pass "docs/MODEL_SELECTION.md and docs/model_selection.json match committed outputs" "$((T1 - T0))"
+else
+    T1=$(date +%s)
+    report_fail "docs/MODEL_SELECTION consistency check" "regenerate via python3 -m src.select_deployment_model" "$((T1 - T0))"
+fi
+
+# Check 7: All V3 Runner Default Flags are False (parsed as text, never imported)
 T0=$(date +%s)
 RUNNER_FLAGS_PASS=$(python3 - << 'EOF'
 import ast
@@ -187,7 +199,7 @@ else
     report_fail "Kaggle runner flags audit" "$RUNNER_FLAGS_PASS" "$((T1 - T0))"
 fi
 
-# Check 7: Git Working Tree Clean under outputs/ and docs/
+# Check 8: Git Working Tree Clean under outputs/ and docs/
 T0=$(date +%s)
 STATUS_OUTPUT=$(git status --porcelain outputs/ docs/)
 T1=$(date +%s)

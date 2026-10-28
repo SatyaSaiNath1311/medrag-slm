@@ -138,7 +138,7 @@ In [src/qa_pipeline_v3.py](file:///Users/satyasainathteeparthi/Documents/MTECH/P
 
 **AUROC Findings**:
 - In **C4 (Baseline)**, MedGemma achieves a statistically significant +0.1967 higher AUROC than Gemma3 ($0.9617$ vs $0.7650$, paired bootstrap 95% CI $[+0.1434, +0.2510]$). Gemma3 assigned $\ge 0.90$ confidence to 97% of unanswerable questions, whereas MedGemma did so for 59%.
-- In **C5 (RAG)**, MedGemma's AUROC is $0.8982$ vs Gemma3's $0.8325$; the paired difference is $+0.0657$, with 95% CI $[-0.0052, +0.1393]$ spanning zero.
+- In **C5 (RAG)**, MedGemma's AUROC is $0.8982$ vs Gemma3's $0.8325$; the paired difference is +0.0657, with 95% CI $[-0.0052, +0.1393]$ spanning zero.
 
 ### Breakdown by Unanswerability Category
 

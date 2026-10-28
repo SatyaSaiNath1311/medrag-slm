@@ -65,7 +65,7 @@ def main():
     sb = [s for s in sb if s is not None]
     sr = [s for s in sr if s is not None]
 
-    L = ["# MedPsy-4B: baseline vs RAG on MedQA test (n = 500, paired)\n",
+    L = [f"# MedPsy-4B: baseline vs RAG on MedQA test (n = {len(ids)}, paired)\n",
          "| Mode | Accuracy [95% CI] | Truncated | Acc. when answering (abstain if truncated) | Coverage | s/question |",
          "|---|---|---|---|---|---|"]
     for name, cor, tru, acc_a, cov, secs in (("Baseline (no RAG)", cb, tb, ab, cov_b, sb),

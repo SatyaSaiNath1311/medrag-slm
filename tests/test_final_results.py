@@ -9,13 +9,14 @@ Covers:
 """
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from scripts.compare_report_numbers import compare_reports
 from src.analysis_gemma_prompt_sensitivity import load_and_validate_gemma_sweeps
-from src.build_paper_facts import FACTS, generate_markdown
+from src.build_paper_facts import FACTS, compute_facts, generate_markdown
 from src.final_results_v3 import (
     evaluate_model_cell,
     evaluate_paired_comparison,
@@ -92,6 +93,54 @@ class TestFactsLedgerAudit(unittest.TestCase):
         # Tampered content
         tampered_md = clean_md.replace("+29.8 pp", "+35.0 pp")
         self.assertNotEqual(clean_md.strip(), tampered_md.strip())
+
+    def test_facts_ledger_text_changes_when_fact_mutated(self):
+        """Mutating a fact value changes the generated markdown ledger."""
+        orig_val = FACTS[0]["value"]
+        try:
+            md_before = generate_markdown()
+            FACTS[0]["value"] = "99.9% (0.999)"
+            md_after = generate_markdown()
+            self.assertNotEqual(md_before, md_after)
+            self.assertIn("99.9%", md_after)
+        finally:
+            FACTS[0]["value"] = orig_val
+
+    def test_paper_facts_tampered_source_fails(self):
+        """Altering a number in a temporary copy of a source report alters computed facts and fails check."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            repo_root = Path(__file__).resolve().parent.parent
+            shutil.copytree(repo_root / "outputs" / "analysis", tmp_root / "outputs" / "analysis")
+            shutil.copytree(repo_root / "outputs" / "sweeps", tmp_root / "outputs" / "sweeps")
+            (tmp_root / "docs").mkdir(parents=True, exist_ok=True)
+            shutil.copy(repo_root / "docs" / "PAPER_FACTS.md", tmp_root / "docs" / "PAPER_FACTS.md")
+
+            # 1. Base compute_facts on clean tmp_root succeeds and matches docs/PAPER_FACTS.md
+            facts_clean = compute_facts(tmp_root)
+            clean_md = generate_markdown(facts_clean)
+            expected_md = (tmp_root / "docs" / "PAPER_FACTS.md").read_text(encoding="utf-8")
+            self.assertEqual(clean_md.strip(), expected_md.strip())
+
+            # 2. Alter one number in a source report (outputs/analysis/gemma_prompt_sensitivity.md)
+            target_report = tmp_root / "outputs" / "analysis" / "gemma_prompt_sensitivity.md"
+            orig_text = target_report.read_text(encoding="utf-8")
+            tampered_text = orig_text.replace("-10.00", "-99.99")
+            target_report.write_text(tampered_text, encoding="utf-8")
+
+            # Assert that the recomputed facts differ and that checking against docs/PAPER_FACTS.md fails
+            facts_tampered = compute_facts(tmp_root)
+            tampered_md = generate_markdown(facts_tampered)
+            self.assertNotEqual(tampered_md.strip(), expected_md.strip())
+            f059_tampered = next(f for f in facts_tampered if f["id"] == "F059")
+            self.assertIn("-99.99", f059_tampered["value"])
+
+            # 3. Altering a line format or deleting a required metric causes compute_facts to fail
+            broken_text = orig_text.replace("-10.00", "INVALID")
+            target_report.write_text(broken_text, encoding="utf-8")
+            with self.assertRaises(Exception):
+                compute_facts(tmp_root)
+
 
 
 class TestCompareReportNumbers(unittest.TestCase):
@@ -301,6 +350,31 @@ class TestFinalResultsMainEndToEnd(unittest.TestCase):
             main(["--repo-root", str(self.repo), "--check"])
         except SystemExit as e:
             self.assertEqual(e.code, 0, f"--check failed with exit code {e.code}")
+
+    def test_report_text_changes_when_input_row_mutated(self):
+        """Mutating one input row in the synthetic layout changes the generated markdown and CSV tables."""
+        main(["--repo-root", str(self.repo)])
+        out_md = self.repo / "docs" / "tables" / "final_results_v3.md"
+        out_csv = self.repo / "docs" / "tables" / "final_results_v3.csv"
+        md_before = out_md.read_text(encoding="utf-8")
+        csv_before = out_csv.read_text(encoding="utf-8")
+
+        # Mutate row in outputs/v3/medpsy-1.7b/C1/medpsy-1.7b.jsonl: flip correct from True to False
+        target_file = self.repo / "outputs" / "v3" / "medpsy-1.7b" / "C1" / "medpsy-1.7b.jsonl"
+        rows = [json.loads(line) for line in target_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertTrue(rows[0]["correct"])
+        rows[0]["correct"] = False
+        with open(target_file, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+
+        # Re-run main
+        main(["--repo-root", str(self.repo)])
+        md_after = out_md.read_text(encoding="utf-8")
+        csv_after = out_csv.read_text(encoding="utf-8")
+
+        self.assertNotEqual(md_before, md_after)
+        self.assertNotEqual(csv_before, csv_after)
 
 
 if __name__ == "__main__":

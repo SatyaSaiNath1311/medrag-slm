@@ -140,10 +140,12 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
                 "chal_trunc": chal_trunc,
             }
 
+            chal_rows = [r for r in rows if r.get("should_abstain")]
+            chal_trunc_pct = (chal_trunc / max(1, len(chal_rows))) * 100
             p(f"| {cond} | `{model}` | {n_total} | {n_parsed} ({n_parsed/n_total*100:.1f}%) | "
               f"{n_trunc} ({n_trunc/n_total*100:.1f}%) | "
               f"{ctrl_correct}/{len(ctrl_rows)} ({ctrl_correct/len(ctrl_rows)*100:.1f}%, [{ctrl_ci[0]*100:.1f}%, {ctrl_ci[1]*100:.1f}%]) | "
-              f"{chal_trunc} ({chal_trunc/100*100:.1f}%) |")
+              f"{chal_trunc} ({chal_trunc_pct:.1f}%) |")
     p()
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -202,6 +204,7 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
     p("| Condition | Model | Mean Conf Chal (N=100) | Mean Conf Ctrl (N=40) | Chal Conf >= 0.90 (%) | AUROC (1 - conf) | 95% Bootstrap CI | MedPsy - Qwen Diff | 95% Diff CI |")
     p("|---|---|---|---|---|---|---|---|---|")
 
+    all_qwen_aurocs = {}
     for cond in CONDITIONS:
         g_rows = data[GENERIC_MODEL][cond]
         m_rows = data[DOMAIN_MODEL][cond]
@@ -214,6 +217,7 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
         m_scores = 1.0 - m_confs
 
         g_auc = auroc_with_ties(g_scores[labels == 1], g_scores[labels == 0])
+        all_qwen_aurocs[cond] = g_auc
         m_auc = auroc_with_ties(m_scores[labels == 1], m_scores[labels == 0])
         diff_auc = m_auc - g_auc
 
@@ -259,6 +263,7 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
     p("| Condition | Clean N (Chal / Ctrl) | Model | Mean Conf Chal | Mean Conf Ctrl | Chal Conf >= 0.90 (%) | AUROC (1 - conf) | 95% Bootstrap CI | MedPsy - Qwen Diff | 95% Diff CI |")
     p("|---|---|---|---|---|---|---|---|---|---|")
 
+    clean_qwen_aurocs = {}
     for cond in CONDITIONS:
         g_rows = data[GENERIC_MODEL][cond]
         m_rows = data[DOMAIN_MODEL][cond]
@@ -283,6 +288,7 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
         m_scores = 1.0 - m_confs
 
         g_auc = auroc_with_ties(g_scores[labels == 1], g_scores[labels == 0])
+        clean_qwen_aurocs[cond] = g_auc
         m_auc = auroc_with_ties(m_scores[labels == 1], m_scores[labels == 0])
         diff_auc = m_auc - g_auc
 
@@ -302,8 +308,8 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
     p("> [!IMPORTANT]")
     p("> **Critical Sensitivity Finding**: When restricted strictly to rows where generation completed without budget exhaustion "
       "(`parsed == True and truncated == False` for both models), Qwen3-1.7B-thinking's predicted token probability saturates at 1.0000 on virtually all questions "
-      "(mean 1.0000 on both challenge and control). Consequently, its genuine separation AUROC drops to chance level (0.5164 in C4, 0.5000 in C5). "
-      "The higher apparent AUROCs in Section 3 (0.6200 and 0.7027) were driven by forced continuation confidences on truncated questions.")
+      f"(mean 1.0000 on both challenge and control). Consequently, its genuine separation AUROC drops to chance level ({clean_qwen_aurocs.get('C4', 0.5):.4f} in C4, {clean_qwen_aurocs.get('C5', 0.5):.4f} in C5). "
+      f"The higher apparent AUROCs in Section 3 ({all_qwen_aurocs.get('C4', 0.62):.4f} and {all_qwen_aurocs.get('C5', 0.70):.4f}) were driven by forced continuation confidences on truncated questions.")
     p()
 
     # ─────────────────────────────────────────────────────────────────────────────
@@ -345,10 +351,10 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
         m_chal_ci = wilson_ci(m_chal_t, len(m_chal))
         m_ctrl_ci = wilson_ci(m_ctrl_t, len(m_ctrl))
 
-        p(f"| {cond} | `{GENERIC_MODEL}` | {g_chal_t}/100 ({g_chal_t:.1f}%, [{g_chal_ci[0]*100:.1f}%, {g_chal_ci[1]*100:.1f}%]) | "
-          f"{g_ctrl_t}/40 ({g_ctrl_t/40*100:.1f}%, [{g_ctrl_ci[0]*100:.1f}%, {g_ctrl_ci[1]*100:.1f}%]) |")
-        p(f"| {cond} | `{DOMAIN_MODEL}` | {m_chal_t}/100 ({m_chal_t:.1f}%, [{m_chal_ci[0]*100:.1f}%, {m_chal_ci[1]*100:.1f}%]) | "
-          f"{m_ctrl_t}/40 ({m_ctrl_t/40*100:.1f}%, [{m_ctrl_ci[0]*100:.1f}%, {m_ctrl_ci[1]*100:.1f}%]) |")
+        p(f"| {cond} | `{GENERIC_MODEL}` | {g_chal_t}/{len(g_chal)} ({g_chal_t/max(1, len(g_chal))*100:.1f}%, [{g_chal_ci[0]*100:.1f}%, {g_chal_ci[1]*100:.1f}%]) | "
+          f"{g_ctrl_t}/{len(g_ctrl)} ({g_ctrl_t/max(1, len(g_ctrl))*100:.1f}%, [{g_ctrl_ci[0]*100:.1f}%, {g_ctrl_ci[1]*100:.1f}%]) |")
+        p(f"| {cond} | `{DOMAIN_MODEL}` | {m_chal_t}/{len(m_chal)} ({m_chal_t/max(1, len(m_chal))*100:.1f}%, [{m_chal_ci[0]*100:.1f}%, {m_chal_ci[1]*100:.1f}%]) | "
+          f"{m_ctrl_t}/{len(m_ctrl)} ({m_ctrl_t/max(1, len(m_ctrl))*100:.1f}%, [{m_ctrl_ci[0]*100:.1f}%, {m_ctrl_ci[1]*100:.1f}%]) |")
 
         # Paired McNemar on the 100 challenge IDs
         a_c = sum(1 for g, m in zip(g_chal, m_chal) if g.get("truncated") and m.get("truncated"))
@@ -412,10 +418,17 @@ def run_analysis() -> Tuple[str, Dict[str, Any]]:
             chal_abs = sum(1 for r in chal_rows if r.get("abstained") is True or is_verbal_abstention(r.get("raw_output", "")))
             ctrl_abs = sum(1 for r in ctrl_rows if r.get("abstained") is True or is_verbal_abstention(r.get("raw_output", "")))
 
-            p(f"| {cond} | `{model}` | {len(rows)} | {n_abs_total} (0.0%) | {n_verb_total} (0.0%) | {chal_abs}/100 (0.0%) | {ctrl_abs}/40 (0.0%) |")
+            p(f"| {cond} | `{model}` | {len(rows)} | "
+              f"{n_abs_total} ({n_abs_total/len(rows)*100:.1f}%) | "
+              f"{n_verb_total} ({n_verb_total/len(rows)*100:.1f}%) | "
+              f"{chal_abs}/{len(chal_rows)} ({chal_abs/max(1, len(chal_rows))*100:.1f}%) | "
+              f"{ctrl_abs}/{len(ctrl_rows)} ({ctrl_abs/max(1, len(ctrl_rows))*100:.1f}%) |")
     p()
+    total_abs = sum(1 for c in CONDITIONS for m in [GENERIC_MODEL, DOMAIN_MODEL] for r in data[m][c] if r.get("abstained") is True)
+    total_verb = sum(1 for c in CONDITIONS for m in [GENERIC_MODEL, DOMAIN_MODEL] for r in data[m][c] if is_verbal_abstention(r.get("raw_output", "")))
+    total_q_c4 = len(data[GENERIC_MODEL]["C4"])
     p("> [!NOTE]")
-    p("> Both models recorded **0 explicit abstentions** (`abstained == True`) and **0 verbal refusals** after `'Answer:'` across all 140 questions in both C4 and C5. "
+    p(f"> Both models recorded **{total_abs} explicit abstentions** (`abstained == True`) and **{total_verb} verbal refusals** after `'Answer:'` across all {total_q_c4} questions in both C4 and C5. "
       "Neither model exhibits spontaneous or instruction-prompted abstention; when confronted with unanswerable questions, both models either run out of generation tokens (truncation) "
       "or output an answer choice with near-maximal confidence.")
     p()

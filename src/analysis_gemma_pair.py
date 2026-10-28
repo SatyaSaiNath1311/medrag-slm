@@ -311,7 +311,26 @@ class GemmaPairAnalysis:
                     )
 
         self.log()
-        self.log("> **Note**: In conditions C1, C2, and C3 for both models, truncation was 0/500 and parse rate was 500/500 (100.0%). Therefore, Strict Accuracy and With-Fallback Accuracy are identical across all benchmark cells.")
+        _cell_n = 500
+        _max_cell_t = 0
+        _min_cell_p = None
+        for cond in ["C1", "C2", "C3"]:
+            for ds in ["medqa", "pubmedqa"]:
+                if cond == "C3" and ds == "medqa":
+                    continue
+                for model_label, model_key in [("Gemma-3-4B", GENERIC_MODEL), ("MedGemma-1.5-4B-it", MEDICAL_MODEL)]:
+                    rows = [r for r in self.data[model_key][cond] if r.get("dataset") == ds]
+                    _cell_n = len(rows)
+                    _max_cell_t = max(_max_cell_t, sum(1 for r in rows if r.get("truncated")))
+                    p_c = sum(1 for r in rows if r.get("parsed"))
+                    _min_cell_p = p_c if _min_cell_p is None else min(_min_cell_p, p_c)
+        if _min_cell_p is None:
+            _min_cell_p = _cell_n
+        self.log(
+            f"> **Note**: In conditions C1, C2, and C3 for both models, truncation was {_max_cell_t}/{_cell_n} "
+            f"and parse rate was {_min_cell_p}/{_cell_n} ({_min_cell_p/max(1, _cell_n)*100:.1f}%). "
+            "Therefore, Strict Accuracy and With-Fallback Accuracy are identical across all benchmark cells."
+        )
         self.log()
 
     def run_section_2(self):
@@ -391,8 +410,19 @@ class GemmaPairAnalysis:
 
         self.log()
         self.log("**Statistical Observations**:")
-        self.log("- On MedQA C1 (Closed-Book), MedGemma-1.5-4B-it shows a +6.20% margin over Gemma-3-4B (raw $p = 0.0255$). However, when adjusting for the family of 5 paired tests via Holm-Bonferroni, the adjusted $p = 0.1274$, which does not cross the $\\alpha = 0.05$ threshold.")
-        self.log("- On PubMedQA C3 (Oracle Abstract), MedGemma achieves +4.00% higher accuracy (raw $p = 0.0399$), but this difference is likewise non-significant after Holm adjustment ($p = 0.1594$).")
+        c1_mq = next(d for d in cell_data if d["cond"] == "C1" and d["ds"] == "medqa")
+        c1_mq_h = holm_p_list[cell_data.index(c1_mq)]
+        c3_pm = next(d for d in cell_data if d["cond"] == "C3" and d["ds"] == "pubmedqa")
+        c3_pm_h = holm_p_list[cell_data.index(c3_pm)]
+        self.log(
+            f"- On MedQA C1 (Closed-Book), MedGemma-1.5-4B-it shows a {c1_mq['mean_diff']*100:+.2f}% margin over Gemma-3-4B "
+            f"(raw $p = {c1_mq['p_raw']:.4f}$). However, when adjusting for the family of 5 paired tests via Holm-Bonferroni, "
+            f"the adjusted $p = {c1_mq_h:.4f}$, which does not cross the $\\alpha = 0.05$ threshold."
+        )
+        self.log(
+            f"- On PubMedQA C3 (Oracle Abstract), MedGemma achieves {c3_pm['mean_diff']*100:+.2f}% higher accuracy "
+            f"(raw $p = {c3_pm['p_raw']:.4f}$), but this difference is likewise non-significant after Holm adjustment ($p = {c3_pm_h:.4f}$)."
+        )
         self.log("- Across all five conditions and datasets, no paired accuracy difference between Gemma-3-4B and MedGemma-1.5-4B-it remains statistically significant after family-wise error rate control.")
         self.log("- The two models differ across multiple dimensions beyond training domain data, including pretraining token mixtures, base checkpoints, and instruction-tuning recipes.")
         self.log()
@@ -575,6 +605,7 @@ class GemmaPairAnalysis:
         self.log("| Condition | Model | Chal Mean Conf | Ctrl Mean Conf | Conf Gap (Ctrl - Chal) | Chal Conf >= 0.90 | AUROC (1 - Conf) | AUROC 95% Bootstrap CI | AUROC Diff (Med - Gen) | Diff 95% Bootstrap CI |")
         self.log("| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |")
 
+        sec5_results = {}
         for cond in ["C4", "C5"]:
             rows_g = self.data[GENERIC_MODEL][cond]
             rows_m = self.data[MEDICAL_MODEL][cond]
@@ -598,7 +629,7 @@ class GemmaPairAnalysis:
             f90_g = sum(1 for x in chal_g if x >= 0.90) / len(chal_g)
             self.log(
                 f"| {cond} | Gemma-3-4B (Generic) | {np.mean(chal_g):.4f} | {np.mean(ctrl_g):.4f} | {np.mean(ctrl_g) - np.mean(chal_g):+.4f} | "
-                f"{f90_g:.4f} ({sum(1 for x in chal_g if x >= 0.90)}/100) | {g_auc:.4f} | `[{g_ci[0]:.4f}, {g_ci[1]:.4f}]` | "
+                f"{f90_g:.4f} ({sum(1 for x in chal_g if x >= 0.90)}/{len(chal_g)}) | {g_auc:.4f} | `[{g_ci[0]:.4f}, {g_ci[1]:.4f}]` | "
                 f"— | — |"
             )
 
@@ -608,14 +639,31 @@ class GemmaPairAnalysis:
             f90_m = sum(1 for x in chal_m if x >= 0.90) / len(chal_m)
             self.log(
                 f"| {cond} | MedGemma-1.5-4B-it (Medical) | {np.mean(chal_m):.4f} | {np.mean(ctrl_m):.4f} | {np.mean(ctrl_m) - np.mean(chal_m):+.4f} | "
-                f"{f90_m:.4f} ({sum(1 for x in chal_m if x >= 0.90)}/100) | {m_auc:.4f} | `[{m_ci[0]:.4f}, {m_ci[1]:.4f}]` | "
+                f"{f90_m:.4f} ({sum(1 for x in chal_m if x >= 0.90)}/{len(chal_m)}) | {m_auc:.4f} | `[{m_ci[0]:.4f}, {m_ci[1]:.4f}]` | "
                 f"**{diff_auc:+.4f}** | `[{diff_ci[0]:+.4f}, {diff_ci[1]:+.4f}]` |"
             )
+            sec5_results[cond] = {
+                "diff_auc": diff_auc,
+                "m_auc": m_auc,
+                "g_auc": g_auc,
+                "diff_ci": diff_ci,
+                "f90_g": f90_g,
+                "f90_m": f90_m,
+            }
 
         self.log()
         self.log("**AUROC Findings**:")
-        self.log("- In **C4 (Baseline)**, MedGemma achieves a statistically significant +0.1967 higher AUROC than Gemma3 ($0.9617$ vs $0.7650$, paired bootstrap 95% CI $[+0.1434, +0.2510]$). Gemma3 assigned $\ge 0.90$ confidence to 97% of unanswerable questions, whereas MedGemma did so for 59%.")
-        self.log("- In **C5 (RAG)**, MedGemma's AUROC is $0.8982$ vs Gemma3's $0.8325$; the paired difference is $+0.0657$, with 95% CI $[-0.0052, +0.1393]$ spanning zero.")
+        r4 = sec5_results["C4"]
+        r5 = sec5_results["C5"]
+        self.log(
+            f"- In **C4 (Baseline)**, MedGemma achieves a statistically significant {r4['diff_auc']:+.4f} higher AUROC than Gemma3 "
+            f"(${r4['m_auc']:.4f}$ vs ${r4['g_auc']:.4f}$, paired bootstrap 95% CI $[{r4['diff_ci'][0]:+.4f}, {r4['diff_ci'][1]:+.4f}]$). "
+            f"Gemma3 assigned $\\ge 0.90$ confidence to {r4['f90_g']*100:.0f}% of unanswerable questions, whereas MedGemma did so for {r4['f90_m']*100:.0f}%."
+        )
+        self.log(
+            f"- In **C5 (RAG)**, MedGemma's AUROC is ${r5['m_auc']:.4f}$ vs Gemma3's ${r5['g_auc']:.4f}$; "
+            f"the paired difference is {r5['diff_auc']:+.4f}, with 95% CI $[{r5['diff_ci'][0]:+.4f}, {r5['diff_ci'][1]:+.4f}]$ spanning zero."
+        )
         self.log()
 
         # Category Breakdown
@@ -751,13 +799,13 @@ class GemmaPairAnalysis:
 
                 self.log(
                     f"| {cond} | {model_label} | Standard (Stored) | "
-                    f"{ctrl_corr_std} / 40 | {ctrl_acc_std:.4f} | `[{ctrl_ci_std[0]:.4f}, {ctrl_ci_std[1]:.4f}]` | "
-                    f"{chal_abst_std} / 100 | {chal_rate_std:.4f} | `[{chal_ci_std[0]:.4f}, {chal_ci_std[1]:.4f}]` |"
+                    f"{ctrl_corr_std} / {len(ctrl)} | {ctrl_acc_std:.4f} | `[{ctrl_ci_std[0]:.4f}, {ctrl_ci_std[1]:.4f}]` | "
+                    f"{chal_abst_std} / {len(chal)} | {chal_rate_std:.4f} | `[{chal_ci_std[0]:.4f}, {chal_ci_std[1]:.4f}]` |"
                 )
                 self.log(
                     f"| {cond} | {model_label} | + Verbal Abstentions | "
-                    f"{ctrl_corr_adj} / 40 | {ctrl_acc_adj:.4f} | `[{ctrl_ci_adj[0]:.4f}, {ctrl_ci_adj[1]:.4f}]` | "
-                    f"{chal_abst_adj} / 100 | {chal_rate_adj:.4f} | `[{chal_ci_adj[0]:.4f}, {chal_ci_adj[1]:.4f}]` |"
+                    f"{ctrl_corr_adj} / {len(ctrl)} | {ctrl_acc_adj:.4f} | `[{ctrl_ci_adj[0]:.4f}, {ctrl_ci_adj[1]:.4f}]` | "
+                    f"{chal_abst_adj} / {len(chal)} | {chal_rate_adj:.4f} | `[{chal_ci_adj[0]:.4f}, {chal_ci_adj[1]:.4f}]` |"
                 )
 
         self.log()
@@ -798,12 +846,12 @@ class GemmaPairAnalysis:
                 self.log(
                     f"| {cond} | {model_label} | Raw (Stored) | "
                     f"{np.mean(c_chal_raw):.4f} | {np.mean(c_ctrl_raw):.4f} | "
-                    f"{f90_raw:.4f} ({sum(1 for x in c_chal_raw if x >= 0.90)}/100) | {auc_raw:.4f} | `[{raw_ci[0]:.4f}, {raw_ci[1]:.4f}]` |"
+                    f"{f90_raw:.4f} ({sum(1 for x in c_chal_raw if x >= 0.90)}/{len(c_chal_raw)}) | {auc_raw:.4f} | `[{raw_ci[0]:.4f}, {raw_ci[1]:.4f}]` |"
                 )
                 self.log(
                     f"| {cond} | {model_label} | + Verbal (conf=0.0) | "
                     f"{np.mean(c_chal_adj):.4f} | {np.mean(c_ctrl_adj):.4f} | "
-                    f"{f90_adj:.4f} ({sum(1 for x in c_chal_adj if x >= 0.90)}/100) | {auc_adj:.4f} | `[{adj_ci[0]:.4f}, {adj_ci[1]:.4f}]` |"
+                    f"{f90_adj:.4f} ({sum(1 for x in c_chal_adj if x >= 0.90)}/{len(c_chal_adj)}) | {auc_adj:.4f} | `[{adj_ci[0]:.4f}, {adj_ci[1]:.4f}]` |"
                 )
 
         self.log()

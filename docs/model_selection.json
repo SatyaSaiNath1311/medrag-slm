@@ -1,0 +1,108 @@
+{
+  "rule_specification": "docs/MODEL_SELECTION_RULE.md",
+  "date": "2026-10-28",
+  "split": "validation",
+  "dataset": "medqa",
+  "N": 100,
+  "winner": "medpsy-4b",
+  "status": "SELECTED",
+  "deployment_cap": 1536,
+  "rationale": "Selected on strict accuracy: MedPsy-4B achieves 92.0% vs MedGemma-1.5-4B-it's 57.0% (gap +35.0 pp, p = <1e-4, non-overlapping CIs). High-accuracy model selected regardless of latency.",
+  "eligibility": {
+    "medpsy-4b": {
+      "eligible": true,
+      "trunc_rate": 0.02,
+      "trunc_threshold_met": true,
+      "parse_rate": 1.0,
+      "parse_threshold_met": true,
+      "hardware_feasible": true,
+      "hardware_platform": "Kaggle 2x NVIDIA T4 (float16)",
+      "vram_status": "VRAM not measured, to be measured in the live test"
+    },
+    "medgemma-1.5-4b-it": {
+      "eligible": true,
+      "trunc_rate": 0.0,
+      "trunc_threshold_met": true,
+      "parse_rate": 1.0,
+      "parse_threshold_met": true,
+      "hardware_feasible": true,
+      "hardware_platform": "Kaggle 2x NVIDIA T4 (float32)",
+      "vram_status": "VRAM not measured, to be measured in the live test"
+    }
+  },
+  "candidates": {
+    "medpsy-4b": {
+      "model_id": "qvac/MedPsy-4B",
+      "style": "reasoning (thinking)",
+      "chosen_cap": 1536,
+      "cap_rationale": "Smallest cap in grid where validation truncation <= 5.0% (observed 2.0%).",
+      "strict_acc": 0.92,
+      "strict_ci_lo": 0.85,
+      "strict_ci_hi": 0.9589,
+      "fallback_acc": 0.94,
+      "trunc_rate": 0.02,
+      "trunc_ci_lo": 0.0055,
+      "trunc_ci_hi": 0.07,
+      "parse_rate": 1.0,
+      "seconds_mean": 33.5763,
+      "seconds_median": 29.6675,
+      "caps_evaluated": {
+        "1024": {
+          "strict_acc": 0.88,
+          "trunc_rate": 0.06
+        },
+        "1536": {
+          "strict_acc": 0.92,
+          "trunc_rate": 0.02
+        },
+        "2048": {
+          "strict_acc": 0.93,
+          "trunc_rate": 0.01
+        },
+        "3072": {
+          "strict_acc": 0.94,
+          "trunc_rate": 0.0
+        },
+        "4096": {
+          "strict_acc": 0.94,
+          "trunc_rate": 0.0
+        }
+      }
+    },
+    "medgemma-1.5-4b-it": {
+      "model_id": "google/medgemma-1.5-4b-it",
+      "style": "direct-answer",
+      "chosen_cap": 16,
+      "cap_rationale": "Direct-answer model fixed at operational cap max_new_tokens=16.",
+      "strict_acc": 0.57,
+      "strict_ci_lo": 0.4722,
+      "strict_ci_hi": 0.6627,
+      "fallback_acc": 0.57,
+      "trunc_rate": 0.0,
+      "trunc_ci_lo": 0.0,
+      "trunc_ci_hi": 0.037,
+      "parse_rate": 1.0,
+      "seconds_mean": 0.899,
+      "seconds_median": 0.9016
+    }
+  },
+  "comparison": {
+    "strict_diff": 0.35,
+    "bootstrap_ci_lo": 0.25,
+    "bootstrap_ci_hi": 0.45,
+    "discordant_b": 37,
+    "discordant_c": 2,
+    "mcnemar_p": 0.0,
+    "is_significant": true
+  },
+  "manifests": {
+    "medpsy-4b": {
+      "hours_used": 0.9328,
+      "timestamp": "2026-10-27T13:12:08Z"
+    },
+    "medgemma-1.5-4b-it": {
+      "hours_used": 0.16,
+      "timestamp": "2026-10-28T07:26:08Z"
+    }
+  }
+}

@@ -70,8 +70,7 @@ All caps evaluated via exact single-prefix derivation under greedy decoding (`ma
 
 ### 5.2 Gemma Prompt-Sensitivity Evaluation (MedQA Validation Split, N=200)
 Evaluation across three prompt variations (`docs/GEMMA_PROMPT_SENSITIVITY_RULE.md`): V1 (standard baseline), V2 (clinical scenario), V3 (board examination).
-
-- **Pre-Registered Stability Verdict:** `STABLE` (Gap spread across variants: **2.50 pp**, within pre-registered $\le 10.0$ pp threshold; no sign flip).
+- **Pre-Registered Stability Verdict:** `STABLE` (Gap spread across variants: **5.50 pp**, within pre-registered $\le 10.0$ pp threshold; no sign flip).
 - **Format-Confound Status:** None flagged (all variants exhibited $\le 5.0$ pp difference in parse rates).
 
 | Variant | Gemma-3-4B Acc | MedGemma-1.5-4B-it Acc | Gap (Gemma3 - MedGemma) | 95% Bootstrap CI | Exact McNemar p | Status |
@@ -87,7 +86,7 @@ Evaluation across three prompt variations (`docs/GEMMA_PROMPT_SENSITIVITY_RULE.m
 | **L01** | Truncation Ceiling | Qwen3-4B-Thinking-2507 suffered 99.6% (498/500) truncation in C1 and 100.0% (500/500) in C2 at 1,024 cap on frozen test. | Strict accuracy collapsed to 0.4% and 0.0%. Test cap represents budget exhaustion rather than reasoning parity. |
 | **L02** | Residual Truncation | Qwen3-4B-Thinking-2507 exhibited 28.0% residual truncation at 4,096 tokens on validation sweep. | Reasoning loops persist even at 4x budget cap; unconstrained budget does not eliminate pathological looping. |
 | **L03** | RAG Truncation Inflation | MedPsy-1.7B truncation increased from 32.0% in C1 to 46.6% in C2 (+14.6 pp) upon retrieval injection. | Evidence ingestion inflates thinking length, driving a net -15.0 pp strict accuracy degradation under fixed cap. |
-| **L04** | Format Sensitivity | Gemma prompt-sensitivity variants yielded 0.00 pp parse rate difference (all 100.0% parsed). | No format confound observed; direct-answer formatting remained perfectly stable across prompt framings. |
+| **L04** | Format Sensitivity | Gemma prompt-sensitivity variants yielded 0.50 pp parse rate difference (all >= 99.5% parsed). | No format confound observed; direct-answer formatting remained perfectly stable across prompt framings. |
 | **L05** | Coverage Gaps | Pair B evaluated strictly on MedQA C1 and C2. Conditions C3, C4, C5 were not evaluated. | Cross-condition comparisons for Pair B on PubMedQA and Unanswerable v2 remain empirical gaps. |
 
 ## 7. Coverage Gaps Summary

@@ -646,6 +646,38 @@ class TestEndToEndAnalysis(unittest.TestCase):
         self.assertIn("33.33%", report_text)
         self.assertIn("66.67%", report_text)
 
+    def test_report_text_changes_when_input_row_mutated(self):
+        """Mutating one input row in the synthetic prompt-sens dataset changes the generated report text."""
+        sweep_dir = self._create_synthetic_dataset(
+            n=3,
+            gemma_correct_fn=lambda v, i: True,
+            medgemma_correct_fn=lambda v, i: True,
+            sweep_name="sweep_mutation_test",
+        )
+        out_report = self.work_dir / "mut_report.md"
+        out_png = self.work_dir / "mut_plot.png"
+        out_svg = self.work_dir / "mut_plot.svg"
+
+        run_analysis(sweep_dir=sweep_dir, out_report=out_report, out_png=out_png, out_svg=out_svg, expected_n=200)
+        text_before = out_report.read_text(encoding="utf-8")
+        self.assertIn("100.00%", text_before)
+
+        # Mutate row 0 of gemma3-4b.jsonl: flip correct from True to False
+        p_gemma = sweep_dir / "gemma3-4b.jsonl"
+        rows = [json.loads(line) for line in p_gemma.read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertTrue(rows[0]["correct"])
+        rows[0]["correct"] = False
+        with open(p_gemma, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+
+        run_analysis(sweep_dir=sweep_dir, out_report=out_report, out_png=out_png, out_svg=out_svg, expected_n=200)
+        text_after = out_report.read_text(encoding="utf-8")
+
+        self.assertNotEqual(text_before, text_after)
+        self.assertIn("66.67%", text_after)
+
+
 
 
 class TestStatisticalHelpers(unittest.TestCase):

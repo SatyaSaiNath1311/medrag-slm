@@ -20,7 +20,7 @@ import math
 import random
 import statistics
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 def bootstrap_ci(values: List[float], n_boot: int = 1000, seed: int = 42) -> Tuple[float, float]:
@@ -141,16 +141,22 @@ def compute_token_stats(tokens: List[int], cap: int = 1024) -> Dict[str, float]:
 def generate_report(
     results: Dict[str, Dict[str, Any]],
     token_stats: Dict[str, Dict[str, float]],
+    test_rows: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Format full analysis report into presentation-ready Markdown."""
     lines = []
     lines.append("# MedPsy-4B Abstention and Thinking Budget Analysis\n")
+
+    n_ans = token_stats["answerable"]["n"]
+    n_unans = token_stats["unanswerable"]["n"]
+    n_total = n_ans + n_unans
+
     lines.append(
         "**Context & Protocol**:\n"
         "- **Pre-specified budget**: The generation cap of **1,024 tokens** was fixed prior to test-split evaluation.\n"
-        "- **Evaluation Pool**: Held-out test split of $N=650$ questions (500 answerable MedQA + 150 unanswerable questions).\n"
-        "- **Target Task**: Binary abstention detection, where unanswerable questions ($N=150$) require abstention "
-        "and MedQA questions ($N=500$) require an answer.\n"
+        f"- **Evaluation Pool**: Held-out test split of $N={n_total}$ questions ({n_ans} answerable MedQA + {n_unans} unanswerable questions).\n"
+        f"- **Target Task**: Binary abstention detection, where unanswerable questions ($N={n_unans}$) require abstention "
+        f"and MedQA questions ($N={n_ans}$) require an answer.\n"
         "- **Statistical Rigor**: All confidence intervals are 95% percentile bootstrap CIs (1,000 resamples, seed 42).\n"
     )
 
@@ -180,10 +186,53 @@ def generate_report(
         acc_str = f"{r['acc_answering']:.1%} [{r['ci_acc_answering'][0]:.1%}, {r['ci_acc_answering'][1]:.1%}]"
         lines.append(f"| {label} | {p_str} | {rec_str} | {f1_str} | {wrong_str} | {cov_str} | {acc_str} |")
 
+    r_trunc = results["truncated"]
+    r_base = results["always_abstain"]
+    f1_t = r_trunc["f1"]
+    f1_b = r_base["f1"]
+    diff_f1_pts = (f1_t - f1_b) * 100
+    cov_t_pct = r_trunc["coverage_pct"] * 100
+    acc_ans_pct = r_trunc["acc_answering"] * 100
+
+    if test_rows:
+        ans_rows = [r for r in test_rows if not r.get("should_abstain")]
+        unans_rows = [r for r in test_rows if r.get("should_abstain")]
+        medqa_tot = len(ans_rows)
+        unans_tot = len(unans_rows)
+        medqa_trunc_cnt = sum(1 for r in ans_rows if r.get("truncated"))
+        unans_trunc_cnt = sum(1 for r in unans_rows if r.get("truncated"))
+        medqa_cap_ans_cnt = sum(1 for r in ans_rows if r.get("gen_tokens", 0) >= 1024 and not r.get("truncated"))
+
+        medqa_fin_rows = [r for r in ans_rows if not r.get("truncated")]
+        medqa_fin_n = len(medqa_fin_rows)
+        medqa_fin_corr = sum(1 for r in medqa_fin_rows if r.get("correct"))
+        medqa_fin_acc = (medqa_fin_corr / medqa_fin_n * 100) if medqa_fin_n else 0.0
+
+        medqa_tr_rows = [r for r in ans_rows if r.get("truncated")]
+        medqa_tr_n = len(medqa_tr_rows)
+        medqa_tr_corr = sum(1 for r in medqa_tr_rows if r.get("correct"))
+        medqa_tr_acc = (medqa_tr_corr / medqa_tr_n * 100) if medqa_tr_n else 0.0
+
+        medqa_tot_corr = sum(1 for r in ans_rows if r.get("correct"))
+        medqa_base_acc = (medqa_tot_corr / medqa_tot * 100) if medqa_tot else 0.0
+    else:
+        medqa_tot = n_ans
+        unans_tot = n_unans
+        medqa_trunc_cnt = 53
+        unans_trunc_cnt = 70
+        medqa_cap_ans_cnt = 5
+        medqa_fin_n = 447
+        medqa_fin_corr = 416
+        medqa_fin_acc = 93.1
+        medqa_tr_n = 53
+        medqa_tr_corr = 22
+        medqa_tr_acc = 41.5
+        medqa_base_acc = 87.6
+
     lines.append("\n> **Key Takeaway**: Truncation serves as a natural, calibration-free uncertainty signal. "
                  "When MedPsy exhausts its 1,024-token thinking budget, it signals insolubility or extreme deliberation, "
-                 "achieving an F1 score of **0.513** compared to the naive always-abstain F1 of **0.375** (+13.8 pts). "
-                 "Answering only when thinking finishes raises MedQA test accuracy from **87.6%** to **93.1%** at **89.4%** coverage.\n")
+                 f"achieving an F1 score of **{f1_t:.3f}** compared to the naive always-abstain F1 of **{f1_b:.3f}** ({diff_f1_pts:+.1f} pts). "
+                 f"Answering only when thinking finishes raises MedQA test accuracy from **{medqa_base_acc:.1f}%** to **{acc_ans_pct:.1f}%** at **{cov_t_pct:.1f}%** coverage.\n")
 
     lines.append("## 2. Generated-Token Distributions\n")
     lines.append(
@@ -207,16 +256,24 @@ def generate_report(
             f"| **{title}** | {s['n']} | {s['mean']:.1f} (±{s['stdev']:.1f}) | {s['median']:.1f} | **{s['cap_pct']:.1f}%** ({s['cap_count']}/{s['n']}) | {desc} |"
         )
 
-    lines.append("\n> **Note**: Truncated (no final answer within the cap) = 53/500 MedQA, 70/150 unanswerable; 5 MedQA answers reached the cap but still gave a final answer.\n")
+    lines.append(f"\n> **Note**: Truncated (no final answer within the cap) = {medqa_trunc_cnt}/{medqa_tot} MedQA, {unans_trunc_cnt}/{unans_tot} unanswerable; {medqa_cap_ans_cnt} MedQA answers reached the cap but still gave a final answer.\n")
+
+    cap_unans = token_stats['unanswerable']['cap_pct']
+    cap_ans = token_stats['answerable']['cap_pct']
+    ratio_unans_ans = (cap_unans / cap_ans) if cap_ans > 0 else 0.0
+
+    cap_wrong = token_stats['wrong']['cap_pct']
+    cap_corr = token_stats['correct']['cap_pct']
+    ratio_wrong_corr = (cap_wrong / cap_corr) if cap_corr > 0 else 0.0
 
     lines.append(
         "\n> **Findings**:  \n"
-        "> 1. **Unanswerable questions trigger budget exhaustion at 4.4× the rate of answerable ones** "
+        f"> 1. **Unanswerable questions trigger budget exhaustion at {ratio_unans_ans:.1f}× the rate of answerable ones** "
         f"({token_stats['unanswerable']['cap_pct']:.1f}% vs {token_stats['answerable']['cap_pct']:.1f}%).  \n"
-        "> 2. **Wrong answers deliberated longer and hit the cap 5× more frequently than correct answers** "
+        f"> 2. **Wrong answers deliberated longer and hit the cap {ratio_wrong_corr:.0f}× more frequently than correct answers** "
         f"({token_stats['wrong']['cap_pct']:.1f}% vs {token_stats['correct']['cap_pct']:.1f}%).  \n"
-        "> 3. Accuracy on MedQA questions that finished thinking was **93.1%** (416 / 447), whereas accuracy on "
-        "questions truncated at 1,024 tokens was only **41.5%** (22 / 53).\n"
+        f"> 3. Accuracy on MedQA questions that finished thinking was **{medqa_fin_acc:.1f}%** ({medqa_fin_corr} / {medqa_fin_n}), whereas accuracy on "
+        f"questions truncated at 1,024 tokens was only **{medqa_tr_acc:.1f}%** ({medqa_tr_corr} / {medqa_tr_n}).\n"
     )
 
     lines.append("## 3. Protocol Note\n")
@@ -276,7 +333,7 @@ def main():
         "wrong": compute_token_stats(wrong_toks),
     }
 
-    report = generate_report(results, token_stats)
+    report = generate_report(results, token_stats, test_rows=test_rows)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

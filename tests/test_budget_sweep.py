@@ -506,6 +506,76 @@ class TestBudgetSweepAnalysisEndToEnd(unittest.TestCase):
             self.assertTrue(os.path.exists(out_svg))
             self.assertIn("- **Consistency Check:**", content)
 
+    def test_report_text_changes_when_input_row_mutated(self):
+        """Mutating one input row in the synthetic budget sweep changes the generated report text."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            qwen_rows = []
+            medpsy_rows = []
+            for i in range(100):
+                q = {
+                    "id": f"q_{i:03d}",
+                    "question": f"Question {i}?",
+                    "options": {"A": "Opt A", "B": "Opt B", "C": "Opt C", "D": "Opt D"},
+                    "answer": "A",
+                    "split": "validation",
+                    "dataset": "medqa",
+                }
+                qwen_rows.append(
+                    build_sweep_row(
+                        q=q,
+                        raw_output="Answer: A",
+                        parsed_pred="A",
+                        parsed=True,
+                        correct=True,
+                        n_gen_tokens=500,
+                        finished_naturally=True,
+                        sec_q=1.0,
+                        model_name="qwen3-4b-thinking-2507",
+                    )
+                )
+                medpsy_rows.append(
+                    build_sweep_row(
+                        q=q,
+                        raw_output="Answer: A",
+                        parsed_pred="A",
+                        parsed=True,
+                        correct=True,
+                        n_gen_tokens=400,
+                        finished_naturally=True,
+                        sec_q=0.5,
+                        model_name="medpsy-4b",
+                    )
+                )
+
+            p_qwen = os.path.join(tmpdir, "qwen3-4b-thinking-2507.jsonl")
+            p_medpsy = os.path.join(tmpdir, "medpsy-4b.jsonl")
+            append_jsonl(p_qwen, qwen_rows)
+            append_jsonl(p_medpsy, medpsy_rows)
+
+            out_md = os.path.join(tmpdir, "report.md")
+            out_png = os.path.join(tmpdir, "plot.png")
+            out_svg = os.path.join(tmpdir, "plot.svg")
+
+            run_analysis(tmpdir, out_md, out_png, out_svg)
+            with open(out_md, "r", encoding="utf-8") as f:
+                text_before = f.read()
+
+            # Mutate one row: flip correct flag of row 0 in medpsy
+            medpsy_rows_mutated = [r for r in medpsy_rows]
+            medpsy_rows_mutated[0]["correct"] = False
+            with open(p_medpsy, "w", encoding="utf-8") as f:
+                for r in medpsy_rows_mutated:
+                    f.write(json.dumps(r) + "\n")
+
+            run_analysis(tmpdir, out_md, out_png, out_svg)
+            with open(out_md, "r", encoding="utf-8") as f:
+                text_after = f.read()
+
+            self.assertNotEqual(text_before, text_after)
+            self.assertIn("100.0%", text_before)
+            self.assertIn("99.0%", text_after)
+
+
 
 if __name__ == "__main__":
     unittest.main()

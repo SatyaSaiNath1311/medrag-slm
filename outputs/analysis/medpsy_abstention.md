@@ -34,8 +34,8 @@ Analysis of tokens generated inside `<think>...</think>` and answer blocks (cap 
 
 
 > **Findings**:  
-> 1. **Unanswerable questions trigger budget exhaustion at 4.4× the rate of answerable ones** (46.7% vs 11.6%).  
-> 2. **Wrong answers deliberated longer and hit the cap 5× more frequently than correct answers** (53.2% vs 5.7%).  
+> 1. **Unanswerable questions trigger budget exhaustion at 4.0× the rate of answerable ones** (46.7% vs 11.6%).  
+> 2. **Wrong answers deliberated longer and hit the cap 9× more frequently than correct answers** (53.2% vs 5.7%).  
 > 3. Accuracy on MedQA questions that finished thinking was **93.1%** (416 / 447), whereas accuracy on questions truncated at 1,024 tokens was only **41.5%** (22 / 53).
 
 ## 3. Protocol Note

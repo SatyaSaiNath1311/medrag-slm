@@ -10,9 +10,13 @@ Tests:
      Qwen3-4B-Thinking-2507, MedGemma-1.5-4B-it) using mocked outputs without loading model weights.
 """
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 import numpy as np
 
+from src.analysis_pair_a_medqa import run_analysis as run_pair_a_analysis
 from src.analysis_pairs import (
     bootstrap_ci,
     cochran_mantel_haenszel,
@@ -25,6 +29,7 @@ from src.llm import (
     parse_answer,
     parse_citations,
 )
+
 
 
 class TestMatchedPairStatistics(unittest.TestCase):
@@ -195,6 +200,50 @@ class TestModelParsingSmoke(unittest.TestCase):
         is_truncated = (parsed is None) and (gen_tokens >= 1024)
         self.assertTrue(is_truncated)
 
+
+class TestPairAMedQASynthetic(unittest.TestCase):
+    """End-to-end synthetic tests for Pair A MedQA report generator."""
+
+    def test_report_text_changes_when_input_row_mutated(self):
+        """Mutating one input row changes the generated Pair A markdown report."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            p_m = repo / "outputs" / "v3" / "medpsy-1.7b" / "C1" / "medpsy-1.7b.jsonl"
+            p_q = repo / "outputs" / "v3" / "qwen3-1.7b-thinking" / "C1" / "qwen3-1.7b-thinking.jsonl"
+            p_m.parent.mkdir(parents=True, exist_ok=True)
+            p_q.parent.mkdir(parents=True, exist_ok=True)
+
+            rows_m = [
+                {"id": "q1", "split": "test", "dataset": "medqa", "parsed": True, "truncated": False, "correct": True},
+                {"id": "q2", "split": "test", "dataset": "medqa", "parsed": True, "truncated": False, "correct": True},
+            ]
+            rows_q = [
+                {"id": "q1", "split": "test", "dataset": "medqa", "parsed": True, "truncated": False, "correct": False},
+                {"id": "q2", "split": "test", "dataset": "medqa", "parsed": True, "truncated": False, "correct": False},
+            ]
+            with open(p_m, "w", encoding="utf-8") as f:
+                for r in rows_m:
+                    f.write(json.dumps(r) + "\n")
+            with open(p_q, "w", encoding="utf-8") as f:
+                for r in rows_q:
+                    f.write(json.dumps(r) + "\n")
+
+            out_md = repo / "outputs" / "analysis" / "pair_a_medqa.md"
+            run_pair_a_analysis(repo_root=repo, out_path=out_md, expected_n=2)
+            text_before = out_md.read_text(encoding="utf-8")
+            self.assertIn("strict 2/2 = 1.000", text_before)
+
+            # Mutate row 0 in medpsy
+            rows_m[0]["correct"] = False
+            with open(p_m, "w", encoding="utf-8") as f:
+                for r in rows_m:
+                    f.write(json.dumps(r) + "\n")
+
+            run_pair_a_analysis(repo_root=repo, out_path=out_md, expected_n=2)
+            text_after = out_md.read_text(encoding="utf-8")
+
+            self.assertNotEqual(text_before, text_after)
+            self.assertIn("strict 1/2 = 0.500", text_after)
 
 
 if __name__ == "__main__":
