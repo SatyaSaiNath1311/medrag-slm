@@ -732,12 +732,13 @@ def build_prompt_sens_row(
       - 'pred'
       - 'parsed'
       - 'correct'
-      - 'truncated' (at the 16-token cap, truncated=True iff no EOS was emitted)
+      - 'truncated' (for direct-answer 16-token C1: truncated=True iff no parseable answer letter)
 
     Additional schema keys:
       - 'variant' ('V1', 'V2', 'V3')
       - 'n_generated_tokens'
       - 'finished_naturally'
+      - 'hit_cap_without_eos'
       - 'seconds'
       - 'raw_output'
       - 'model'
@@ -749,9 +750,10 @@ def build_prompt_sens_row(
     row["pred"] = parsed_pred
     row["parsed"] = parsed
     row["correct"] = correct
-    row["truncated"] = not finished_naturally
+    row["truncated"] = not parsed
     row["n_generated_tokens"] = n_gen_tokens
     row["finished_naturally"] = finished_naturally
+    row["hit_cap_without_eos"] = not finished_naturally
     row["seconds"] = sec_q
     row["condition"] = "C1"
     row["model"] = model_name

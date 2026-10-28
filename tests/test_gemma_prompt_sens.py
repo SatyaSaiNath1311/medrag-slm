@@ -33,6 +33,7 @@ from src.analysis_gemma_prompt_sensitivity import (
     exact_mcnemar_test,
     format_p_val,
     holm_bonferroni,
+    is_strict_correct,
     load_and_validate_gemma_sweeps,
     paired_bootstrap_ci,
     run_analysis,
@@ -61,7 +62,7 @@ class TestGemmaPromptSensRowValidity(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_build_row_finished_passes_assertion(self):
-        """Finished row has truncated=False and passes assert_appended_row_valid."""
+        """Finished row with parsed letter has truncated=False and passes assert_appended_row_valid."""
         q = {
             "id": "medqa_val_001",
             "question": "A 45-year-old male presents with acute chest pain...",
@@ -83,17 +84,52 @@ class TestGemmaPromptSensRowValidity(unittest.TestCase):
             model_name="gemma3-4b",
         )
         self.assertEqual(row["truncated"], False)
+        self.assertEqual(row["parsed"], True)
         self.assertEqual(row["finished_naturally"], True)
+        self.assertEqual(row["hit_cap_without_eos"], False)
         self.assertEqual(row["variant"], "V1")
         self.assertEqual(row["condition"], "C1")
+        self.assertTrue(is_strict_correct(row))
 
         append_jsonl(self.temp_file, [row])
         assert_appended_row_valid(self.temp_file, expected_id="medqa_val_001")
 
-    def test_build_row_truncated_passes_assertion(self):
-        """Truncated row has truncated=True and passes assert_appended_row_valid."""
+    def test_build_row_parsed_no_eos_has_truncated_false(self):
+        """A row with a parsed letter and no EOS (hit cap) must have truncated=False and hit_cap_without_eos=True."""
         q = {
             "id": "medqa_val_002",
+            "question": "A 21-year-old male presents for fatigue...",
+            "options": {"A": "Chikungunya", "B": "Dengue fever", "C": "EBV", "D": "Hepatitis A"},
+            "answer": "A",
+            "split": "validation",
+            "dataset": "medqa",
+        }
+        row = build_prompt_sens_row(
+            q=q,
+            variant="V1",
+            raw_output="Answer: A\n\nExplanation: Chikungunya is transmitted by mosquitoes...",
+            parsed_pred="A",
+            parsed=True,
+            correct=True,
+            n_gen_tokens=16,
+            finished_naturally=False,
+            sec_q=0.35,
+            model_name="gemma3-4b",
+        )
+        self.assertEqual(row["truncated"], False)
+        self.assertEqual(row["parsed"], True)
+        self.assertEqual(row["finished_naturally"], False)
+        self.assertEqual(row["hit_cap_without_eos"], True)
+        self.assertEqual(row["n_generated_tokens"], 16)
+        self.assertTrue(is_strict_correct(row))
+
+        append_jsonl(self.temp_file, [row])
+        assert_appended_row_valid(self.temp_file, expected_id="medqa_val_002")
+
+    def test_build_row_unparsed_has_truncated_true(self):
+        """A row with no parseable letter must have truncated=True and is_strict_correct=False."""
+        q = {
+            "id": "medqa_val_003",
             "question": "A 60-year-old female presents with shortness of breath...",
             "options": {"A": "Asthma", "B": "COPD", "C": "Pneumonia", "D": "Embolism"},
             "answer": "B",
@@ -103,7 +139,7 @@ class TestGemmaPromptSensRowValidity(unittest.TestCase):
         row = build_prompt_sens_row(
             q=q,
             variant="V2",
-            raw_output="The differential diagnosis is extensive and includes",
+            raw_output="The differential diagnosis is extensive and includes many factors",
             parsed_pred=None,
             parsed=False,
             correct=False,
@@ -113,11 +149,45 @@ class TestGemmaPromptSensRowValidity(unittest.TestCase):
             model_name="medgemma-1.5-4b-it",
         )
         self.assertEqual(row["truncated"], True)
+        self.assertEqual(row["parsed"], False)
         self.assertEqual(row["finished_naturally"], False)
+        self.assertEqual(row["hit_cap_without_eos"], True)
         self.assertEqual(row["variant"], "V2")
+        self.assertFalse(is_strict_correct(row))
 
         append_jsonl(self.temp_file, [row])
-        assert_appended_row_valid(self.temp_file, expected_id="medqa_val_002")
+        assert_appended_row_valid(self.temp_file, expected_id="medqa_val_003")
+
+    def test_build_row_unparsed_with_eos_has_truncated_true(self):
+        """An unparsed row has truncated=True even if EOS was emitted (no answer extracted)."""
+        q = {
+            "id": "medqa_val_004",
+            "question": "A patient asks for advice...",
+            "options": {"A": "Yes", "B": "No"},
+            "answer": "A",
+            "split": "validation",
+            "dataset": "medqa",
+        }
+        row = build_prompt_sens_row(
+            q=q,
+            variant="V3",
+            raw_output="Unsure.",
+            parsed_pred=None,
+            parsed=False,
+            correct=False,
+            n_gen_tokens=3,
+            finished_naturally=True,
+            sec_q=0.10,
+            model_name="gemma3-4b",
+        )
+        self.assertEqual(row["truncated"], True)
+        self.assertEqual(row["parsed"], False)
+        self.assertEqual(row["finished_naturally"], True)
+        self.assertEqual(row["hit_cap_without_eos"], False)
+        self.assertFalse(is_strict_correct(row))
+
+        append_jsonl(self.temp_file, [row])
+        assert_appended_row_valid(self.temp_file, expected_id="medqa_val_004")
 
 
 class TestGemmaStabilityCriterion(unittest.TestCase):
@@ -332,8 +402,17 @@ class TestEndToEndAnalysis(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def _create_synthetic_dataset(self, n: int, gemma_correct_fn, medgemma_correct_fn) -> Path:
-        sweep_dir = self.work_dir / f"sweep_n_{n}"
+    def _create_synthetic_dataset(
+        self,
+        n: int,
+        gemma_correct_fn,
+        medgemma_correct_fn,
+        sweep_name: str = "",
+        finished_naturally: bool = True,
+        n_gen_tokens: int = 4,
+    ) -> Path:
+        dir_name = sweep_name if sweep_name else f"sweep_n_{n}"
+        sweep_dir = self.work_dir / dir_name
         sweep_dir.mkdir(parents=True, exist_ok=True)
 
         gemma_rows = []
@@ -358,8 +437,9 @@ class TestEndToEndAnalysis(unittest.TestCase):
                     "parsed": True,
                     "correct": g_corr,
                     "truncated": False,
-                    "n_generated_tokens": 4,
-                    "finished_naturally": True,
+                    "n_generated_tokens": n_gen_tokens,
+                    "finished_naturally": finished_naturally,
+                    "hit_cap_without_eos": not finished_naturally,
                     "seconds": 0.2,
                 }
                 m_row = {
@@ -374,8 +454,9 @@ class TestEndToEndAnalysis(unittest.TestCase):
                     "parsed": True,
                     "correct": m_corr,
                     "truncated": False,
-                    "n_generated_tokens": 4,
-                    "finished_naturally": True,
+                    "n_generated_tokens": n_gen_tokens,
+                    "finished_naturally": finished_naturally,
+                    "hit_cap_without_eos": not finished_naturally,
                     "seconds": 0.2,
                 }
                 gemma_rows.append(g_row)
@@ -521,6 +602,50 @@ class TestEndToEndAnalysis(unittest.TestCase):
         report_text = out_report.read_text(encoding="utf-8")
         self.assertIn("FLAGGED: V2", report_text)
         self.assertIn("DESCRIPTIVE, selected subset", report_text)
+
+    def test_run_analysis_no_eos_rows_give_nonzero_strict_acc(self):
+        """End-to-end analysis on rows that hit 16 tokens without EOS gives non-zero strict accuracy."""
+        # 3 questions, models hit 16-token cap without EOS (finished_naturally=False, hit_cap_without_eos=True)
+        # but have parsed answers and correct labels per Amendment 1
+        sweep_dir = self._create_synthetic_dataset(
+            n=3,
+            gemma_correct_fn=lambda v, i: (i == 0),      # 1/3 correct
+            medgemma_correct_fn=lambda v, i: (i <= 1),   # 2/3 correct
+            sweep_name="sweep_no_eos_n3",
+            finished_naturally=False,
+            n_gen_tokens=16,
+        )
+        out_report = self.work_dir / "no_eos_report.md"
+        out_png = self.work_dir / "no_eos_plot.png"
+        out_svg = self.work_dir / "no_eos_plot.svg"
+
+        res = run_analysis(
+            sweep_dir=sweep_dir,
+            out_report=out_report,
+            out_png=out_png,
+            out_svg=out_svg,
+            expected_n=200,
+        )
+        self.assertEqual(res["n_rows"], 3)
+        self.assertTrue(res["is_smoke"])
+
+        for v in ["V1", "V2", "V3"]:
+            g_acc = res["variants"][v]["generic"]["strict_acc"]
+            m_acc = res["variants"][v]["medical"]["strict_acc"]
+            self.assertGreater(g_acc, 0.0)
+            self.assertGreater(m_acc, 0.0)
+            self.assertAlmostEqual(g_acc, 1.0 / 3.0, places=4)
+            self.assertAlmostEqual(m_acc, 2.0 / 3.0, places=4)
+            self.assertEqual(g_acc, 1 / 3)
+            self.assertEqual(m_acc, 2 / 3)
+            # Truncation rate is 0.0 because all rows are parsed
+            self.assertEqual(res["variants"][v]["generic"]["trunc_rate"], 0.0)
+            self.assertEqual(res["variants"][v]["medical"]["trunc_rate"], 0.0)
+
+        report_text = out_report.read_text(encoding="utf-8")
+        self.assertIn("33.33%", report_text)
+        self.assertIn("66.67%", report_text)
+
 
 
 class TestStatisticalHelpers(unittest.TestCase):

@@ -201,7 +201,19 @@ def check_prompt_sens(sweep_dir: str, expected_n: int = 200) -> bool:
             f"missing keys rows={missing_keys_count}",
         )
 
-    # 12. No HF token leaks in any output files
+    # 12. Truncation consistency check: truncated == (not parsed) per Amendment 1
+    for m in MODELS:
+        inconsistent_trunc = [
+            r.get("id") for r in model_rows[m]
+            if r.get("truncated") != (not r.get("parsed"))
+        ]
+        report(
+            f"Truncation consistency (truncated == not parsed) for {m}",
+            len(inconsistent_trunc) == 0,
+            f"inconsistent rows={len(inconsistent_trunc)}",
+        )
+
+    # 13. No HF token leaks in any output files
     hf_token_pattern = re.compile(r"hf_[A-Za-z0-9]{20,}")
     for m in MODELS:
         leaks = [

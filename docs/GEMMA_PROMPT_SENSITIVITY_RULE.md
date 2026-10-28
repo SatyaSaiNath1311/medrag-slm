@@ -135,3 +135,11 @@ This document is frozen upon commit prior to running the sensitivity check. In-p
 
 ### Amendments
 *(None. Pre-registered document).*
+
+#### Amendment 1 (2026-10-28)
+- **Context & Finding**: Sections 2.2 and 3 initially defined truncation as "no EOS within 16 tokens" (`finished_naturally == False` implies `truncated == True`). During an initial $N=3$ smoke run on Kaggle (kernel v63), all 9 generated responses (3 questions $\times$ 3 variants $\times$ 2 models) produced `truncated=True` and `finished_naturally=False` despite `parsed=True` and correct answers. With `max_new_tokens=16` and the `"Answer:"` prefill, both models emit the answer letter on token 1 and continue writing explanatory text until hitting the 16-token cap.
+- **Convention Conflict**: In the repo's established C1 direct-answer baseline outputs (`outputs/kaggle_qa/...` and `outputs/v3/gemma3-4b/C1/gemma3-4b.jsonl`), all rows have `truncated=0` / `truncated=False`. The established convention for this 16-token direct-answer task is that a response is considered "truncated" only if no answer letter could be parsed. Under the initial definition, strict accuracy would be 0% for both models across every variant.
+- **Redefinition of Truncation**: Truncation for this experiment is formally redefined to match the repo's established C1 convention: a response is considered truncated (`truncated == True`) if and only if no parseable answer letter was produced (`truncated = not parsed`). Under this definition, strict correctness remains $\mathbf{1}(\neg\text{truncated} \land \text{parsed} \land \text{correct})$, which correctly evaluates to 1 when a valid answer letter is parsed and matches the gold label.
+- **Diagnostic Logging**: The raw generation indicators `finished_naturally` (whether EOS was emitted before token 16) and `hit_cap_without_eos` (`not finished_naturally`) are preserved and logged in every row as diagnostics only; they do not penalize strict accuracy.
+- **Integrity**: This amendment was adopted after diagnosing the $N=3$ smoke run protocol defect and before any full-$N$ ($N=200$) data existed. No evaluation result was consulted.
+

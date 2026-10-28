@@ -55,6 +55,14 @@ VARIANT_LABELS = {
 }
 
 
+def is_strict_correct(row: Dict[str, Any]) -> bool:
+    """Strict accuracy: not truncated AND parsed AND correct."""
+    is_trunc = bool(row.get("truncated", False))
+    is_prsd = bool(row.get("parsed", True))
+    is_corr = bool(row.get("correct", False))
+    return (not is_trunc) and is_prsd and is_corr
+
+
 # ── Statistical Helpers ─────────────────────────────────────────────────────────
 
 def wilson_score_ci(k: int, n: int, confidence: float = 0.95) -> Tuple[float, float]:
@@ -516,8 +524,8 @@ def run_analysis(
         g_list = [g_dict[qid] for qid in base_ids]
         m_list = [m_dict[qid] for qid in base_ids]
 
-        g_corr = np.array([1 if r.get("correct") else 0 for r in g_list], dtype=int)
-        m_corr = np.array([1 if r.get("correct") else 0 for r in m_list], dtype=int)
+        g_corr = np.array([1 if is_strict_correct(r) else 0 for r in g_list], dtype=int)
+        m_corr = np.array([1 if is_strict_correct(r) else 0 for r in m_list], dtype=int)
 
         g_strict_k = int(np.sum(g_corr))
         m_strict_k = int(np.sum(m_corr))
