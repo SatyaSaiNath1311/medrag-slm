@@ -3191,14 +3191,30 @@ if V3_GEMMA_PROMPT_SENS:
     )
     os.makedirs(_sens_out, exist_ok=True)
     print(
-        f"\nStarting V3_GEMMA_PROMPT_SENS: models={_sens_models}, N={V3_GEMMA_SENS_N}, "
+        f"\nStarting V3_GEMMA_PROMPT_SENS (SEQUENTIAL): models={_sens_models}, N={V3_GEMMA_SENS_N}, "
         f"max_hours={V3_GEMMA_SENS_MAX_HOURS}, variants=['V1', 'V2', 'V3']",
         flush=True,
     )
 
-    procs = []
     t0_sens = time.time()
+    exit_codes = {}
+
+    # Sequential execution: gemma3-4b first, then medgemma-1.5-4b-it.
+    # No CUDA_VISIBLE_DEVICES pinning: both GPUs visible so device_map="auto" shards float32 model across T4s.
     for i, smodel in enumerate(_sens_models):
+        elapsed_so_far = (time.time() - t0_sens) / 3600.0
+        remaining_total = max(0.05, V3_GEMMA_SENS_MAX_HOURS - elapsed_so_far)
+        if i == 0:
+            model_budget = min(V3_GEMMA_SENS_MAX_HOURS / 2.0, remaining_total)
+        else:
+            model_budget = remaining_total
+
+        print(
+            f"\n[{i+1}/{len(_sens_models)}] Launching {smodel} sequentially "
+            f"(budget: {model_budget:.2f}h, total elapsed: {elapsed_so_far:.2f}h)...",
+            flush=True,
+        )
+
         cmd_s = [
             sys.executable, "-m", "src.qa_pipeline_v3",
             "--config", "configs/base.yaml",
@@ -3207,7 +3223,7 @@ if V3_GEMMA_PROMPT_SENS:
             "--split", "validation",
             "--gemma-prompt-sens",
             "--sens-n", str(V3_GEMMA_SENS_N),
-            "--sens-max-hours", str(V3_GEMMA_SENS_MAX_HOURS),
+            "--sens-max-hours", f"{model_budget:.4f}",
             "--out", _sens_out,
         ]
         if CHECK_ONLY:
@@ -3215,17 +3231,18 @@ if V3_GEMMA_PROMPT_SENS:
         if TINY:
             cmd_s += ["--tiny"]
 
-        extra_env = {"CUDA_VISIBLE_DEVICES": str(i)}
+        # Ensure CUDA_VISIBLE_DEVICES is NOT pinned to a single GPU
+        sub_env = os.environ.copy()
+        if "CUDA_VISIBLE_DEVICES" in sub_env:
+            del sub_env["CUDA_VISIBLE_DEVICES"]
         if "HF_TOKEN" in os.environ:
-            extra_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
-        procs.append((f"{smodel} (GPU {i})", run_bg(cmd_s, extra_env=extra_env)))
+            sub_env["HF_TOKEN"] = os.environ["HF_TOKEN"]
 
-    print(f"\nWaiting for {len(procs)} parallel prompt-sensitivity subprocess(es)...", flush=True)
-    exit_codes = {}
-    for label, proc in procs:
-        rc = proc.wait()
-        exit_codes[label] = rc
-        print(f"  {label} finished with exit code {rc}", flush=True)
+        print(">>", " ".join(cmd_s), flush=True)
+        res = subprocess.run(cmd_s, env=sub_env)
+        rc = res.returncode
+        exit_codes[smodel] = rc
+        print(f"  {smodel} finished with exit code {rc}", flush=True)
 
     elapsed_hours = (time.time() - t0_sens) / 3600.0
     any_failed = any(rc != 0 for rc in exit_codes.values())

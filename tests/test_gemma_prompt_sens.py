@@ -270,6 +270,57 @@ class TestRunnerDefaultsAST(unittest.TestCase):
         self.assertIn("V3_GEMMA_SENS_MAX_HOURS", assigned_constants)
         self.assertEqual(assigned_constants["V3_GEMMA_SENS_MAX_HOURS"], 3.0)
 
+    def test_runner_gemma_block_no_cuda_visible_devices(self):
+        """Runner's Gemma block must not set CUDA_VISIBLE_DEVICES (both GPUs must be visible for float32 sharding)."""
+        runner_path = REPO_ROOT / "kaggle_runner" / "runner.py"
+        self.assertTrue(runner_path.exists(), f"runner.py not found at {runner_path}")
+
+        source = runner_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename="runner.py")
+
+        gemma_if_node = None
+        for node in tree.body:
+            if isinstance(node, ast.If):
+                if isinstance(node.test, ast.Name) and node.test.id == "V3_GEMMA_PROMPT_SENS":
+                    gemma_if_node = node
+                    break
+
+        self.assertIsNotNone(gemma_if_node, "V3_GEMMA_PROMPT_SENS block not found in runner.py")
+
+        block_lines = source.splitlines()[gemma_if_node.lineno - 1 : gemma_if_node.end_lineno]
+        for line in block_lines:
+            if "CUDA_VISIBLE_DEVICES" in line:
+                # Must only be deletion or defensive stripping, not assignment/setting
+                self.assertTrue(
+                    ("del " in line) or ("in sub_env" in line) or ("in extra_env" in line) or ("#" in line),
+                    f"Forbidden setting of CUDA_VISIBLE_DEVICES found in Gemma block: {line}",
+                )
+
+    def test_runner_gemma_sequential_launch_order(self):
+        """Sequential launch order must be gemma3-4b first, then medgemma-1.5-4b-it."""
+        runner_path = REPO_ROOT / "kaggle_runner" / "runner.py"
+        source = runner_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename="runner.py")
+
+        gemma_if_node = None
+        for node in tree.body:
+            if isinstance(node, ast.If):
+                if isinstance(node.test, ast.Name) and node.test.id == "V3_GEMMA_PROMPT_SENS":
+                    gemma_if_node = node
+                    break
+
+        self.assertIsNotNone(gemma_if_node, "V3_GEMMA_PROMPT_SENS block not found in runner.py")
+
+        sens_models = None
+        for stmt in gemma_if_node.body:
+            if isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name) and target.id == "_sens_models":
+                        if isinstance(stmt.value, ast.List):
+                            sens_models = [elt.value for elt in stmt.value.elts if isinstance(elt, ast.Constant)]
+
+        self.assertEqual(sens_models, ["gemma3-4b", "medgemma-1.5-4b-it"])
+
 
 class TestEndToEndAnalysis(unittest.TestCase):
     """Test end-to-end run_analysis on synthetic datasets for N=3 (smoke) and N=200 (full)."""
