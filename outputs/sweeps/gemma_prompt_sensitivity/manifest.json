@@ -1,0 +1,30 @@
+{
+  "git_commit_hash": "0d3bf316a6780664760ce291fa945de2b06b2798",
+  "rule_file_sha256": "f0a6806cfa9c6454b6babc333045aa4bf409493ea4f1f038515de7ab324bd8b7",
+  "prompt_template_hashes": {
+    "V1": "a932a135e38e26fae1fd28411b863dbc7ac7d57dbfdd392162f765c91391c60e",
+    "V2": "4fe3e08ee35794f9553435895f3b75b764521538e6ca92ce96b66b6265449cb1",
+    "V3": "8e95470b7ae998d737cc4aad563b08c8d382706c96b7007d7f06af8b27c58b07"
+  },
+  "generation_config": {
+    "max_new_tokens": 16,
+    "do_sample": false
+  },
+  "torch_version": "2.10.0+cu128",
+  "transformers_version": "4.49.0",
+  "dtype": "float32",
+  "N": 200,
+  "variants": [
+    "V1",
+    "V2",
+    "V3"
+  ],
+  "seed": 42,
+  "completed": true,
+  "hours_used": 0.3668,
+  "models": [
+    "gemma3-4b",
+    "medgemma-1.5-4b-it"
+  ],
+  "timestamp": "2026-10-28T07:26:12Z"
+}
