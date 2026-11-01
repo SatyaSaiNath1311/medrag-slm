@@ -86,13 +86,16 @@ from src.llm import (
 # -----------------------------------------------------------------------------
 # Model Configurations
 # -----------------------------------------------------------------------------
+CHAT_MAX_NEW_TOKENS_REASONING = 2048
+DEFAULT_MODEL = "medpsy-4b"
+
 MODEL_CONFIGS: Dict[str, Dict[str, Any]] = {
     "medpsy-4b": {
         "name": "medpsy-4b",
         "id": "qvac/MedPsy-4B",
         "dtype": "float16" if torch.cuda.is_available() else "float32",
         "reasoning": True,
-        "max_new_tokens_reasoning": 1024,
+        "max_new_tokens_reasoning": CHAT_MAX_NEW_TOKENS_REASONING,
     },
     "qwen3-1.7b": {
         "name": "qwen3-1.7b",
@@ -101,8 +104,6 @@ MODEL_CONFIGS: Dict[str, Dict[str, Any]] = {
         "reasoning": False,
     },
 }
-
-DEFAULT_MODEL = "medpsy-4b"
 
 from kaggle_chat.red_flags import (
     EMERGENCY_PREFIX,
@@ -133,7 +134,7 @@ def evaluate_abstention(
     3. Top rerank score falls below the validation 20th percentile threshold
     """
     if truncated:
-        return True, "Generation truncated (thinking budget of 1024 tokens exhausted)"
+        return True, f"Generation truncated (thinking budget of {CHAT_MAX_NEW_TOKENS_REASONING} tokens exhausted)"
 
     if "INSUFFICIENT INFORMATION" in model_output.upper():
         return True, "Model identified insufficient evidence ('INSUFFICIENT INFORMATION')"
@@ -547,7 +548,7 @@ def chat_pipeline(
         letters = sorted(options.keys())
         if is_reasoning_model:
             r_prompt = reasoning_rag_prompt(q_dict, top_passages, max_chars=1200)
-            res = llm.generate_reasoning([r_prompt], [letters], max_new_tokens=1024)[0]
+            res = llm.generate_reasoning([r_prompt], [letters], max_new_tokens=CHAT_MAX_NEW_TOKENS_REASONING)[0]
             truncated = bool(res.get("truncated", False))
             raw_model_output = res.get("raw_output", "")
             parsed_answer = res.get("_pred") or parse_answer(raw_model_output, options)
@@ -576,7 +577,7 @@ def chat_pipeline(
 
             from transformers import GenerationConfig
             gcfg = GenerationConfig(
-                max_new_tokens=1024,
+                max_new_tokens=CHAT_MAX_NEW_TOKENS_REASONING,
                 do_sample=False,
                 eos_token_id=sorted(llm.eos),
                 pad_token_id=llm.pad_id,
@@ -593,7 +594,7 @@ def chat_pipeline(
             raw_model_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
 
             # Truncation: exhausted the 1024 budget
-            truncated = (cut == len(all_gen_ids) and cut >= 1024)
+            truncated = (cut == len(all_gen_ids) and cut >= CHAT_MAX_NEW_TOKENS_REASONING)
         else:
             # Qwen3-1.7B fast generation
             msgs = [{"role": "user", "content": hw_prompt}]
