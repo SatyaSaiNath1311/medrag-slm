@@ -4,7 +4,7 @@ Interactive clinical dialogue tailored for community health workers, powered by:
 - Hybrid BM25 + dense MedCPT FAISS retrieval (top-20)
 - MedCPT cross-encoder reranker (top-5)
 - Authoritative medical textbook corpus (Harrison, Katzung, Schwartz, Nelson, etc.)
-- MedPsy-4B reasoning model (default, 1024 thinking tokens) & Qwen3-1.7B (fast)
+- MedPsy-4B reasoning model (default, 2048 thinking tokens) & Qwen3-1.7B (fast)
 - Red-flag emergency screening (immediate 108 referral for acute danger signs)
 - Multi-tier abstention safety (truncated thinking budget, INSUFFICIENT INFORMATION, rerank threshold)
 - Option-guided MCQ mode (evaluated benchmark) & community health-worker guidance mode
@@ -129,7 +129,7 @@ def evaluate_abstention(
     """Determine whether to abstain based on safety and confidence criteria.
 
     Abstains if ANY:
-    1. Generation truncated (thinking budget of 1024 tokens exhausted)
+    1. Generation truncated (thinking budget of 2048 tokens exhausted)
     2. Output explicitly contains 'INSUFFICIENT INFORMATION'
     3. Top rerank score falls below the validation 20th percentile threshold
     """
@@ -616,7 +616,7 @@ def chat_pipeline(
             gen_ids = all_gen_ids[:cut]
             raw_model_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
 
-            # Truncation: exhausted the 1024 budget
+            # Truncation: exhausted the generation budget
             truncated = (cut == len(all_gen_ids) and cut >= CHAT_MAX_NEW_TOKENS_REASONING)
         else:
             # Qwen3-1.7B fast generation
