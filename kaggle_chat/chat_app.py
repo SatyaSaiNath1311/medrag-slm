@@ -475,6 +475,72 @@ def generate_mcq_answer(llm, q_dict, top_passages, letters, use_reasoning):
 
 
 # -----------------------------------------------------------------------------
+# Plain-Question Generation Helper
+# -----------------------------------------------------------------------------
+def generate_plain_answer(llm, user_q, top_passages, qtype, use_reasoning):
+    """Build the health-worker prompt, generate, and return (raw_output, truncated, generation_seconds)."""
+    t0 = time.perf_counter()
+
+    ev_lines = []
+    for i, p in enumerate(top_passages, 1):
+        src_name = p.get("title", p.get("source", f"Textbook {i}"))
+        snippet = p.get("text", "")[:1000]
+        ev_lines.append(f"[{i}] ({src_name})\n{snippet}")
+    ev_text = "\n\n".join(ev_lines)
+
+    hw_prompt = build_hw_prompt(qtype, ev_text, user_q)
+
+    if use_reasoning:
+        # MedPsy-4B reasoning generation
+        wrapped = llm.wrap_reasoning(hw_prompt)
+        enc = llm.tok([wrapped], return_tensors="pt", padding=True, add_special_tokens=False)
+        first_dev = next(llm.model.parameters()).device
+        enc = {k: v.to(first_dev) for k, v in enc.items()}
+
+        from transformers import GenerationConfig
+        gcfg = GenerationConfig(
+            max_new_tokens=CHAT_MAX_NEW_TOKENS_REASONING,
+            do_sample=False,
+            eos_token_id=sorted(llm.eos),
+            pad_token_id=llm.pad_id,
+            return_dict_in_generate=True,
+        )
+        with torch.inference_mode():
+            out = llm.model.generate(**enc, generation_config=gcfg)
+
+        seqs = out.sequences if hasattr(out, "sequences") else out
+        prompt_len = enc["input_ids"].shape[1]
+        all_gen_ids = seqs[0, prompt_len:].tolist()
+        cut = next((i for i, t in enumerate(all_gen_ids) if t in llm.eos), len(all_gen_ids))
+        gen_ids = all_gen_ids[:cut]
+        raw_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
+
+        # Truncation: exhausted the generation budget
+        truncated = (cut == len(all_gen_ids) and cut >= CHAT_MAX_NEW_TOKENS_REASONING)
+    else:
+        # Qwen3-1.7B fast generation
+        msgs = [{"role": "user", "content": hw_prompt}]
+        prompt_text = llm.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        enc = llm.tok([prompt_text], return_tensors="pt")
+        first_dev = next(llm.model.parameters()).device
+        enc = {k: v.to(first_dev) for k, v in enc.items()}
+
+        with torch.inference_mode():
+            out_tokens = llm.model.generate(
+                **enc,
+                max_new_tokens=350,
+                do_sample=False,
+                pad_token_id=llm.pad_id,
+                eos_token_id=sorted(llm.eos),
+            )
+        gen_ids = out_tokens[0, enc["input_ids"].shape[1]:].tolist()
+        raw_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
+        truncated = False
+
+    return raw_output, truncated, time.perf_counter() - t0
+
+
+# -----------------------------------------------------------------------------
 # Core Chatbot Pipeline (Streaming Generator)
 # -----------------------------------------------------------------------------
 def normalize_history(history: Any) -> List[Dict[str, str]]:
@@ -582,61 +648,9 @@ def chat_pipeline(
         )
     else:
         # Community Health Worker Plain Question Mode
-        ev_lines = []
-        for i, p in enumerate(top_passages, 1):
-            src_name = p.get("title", p.get("source", f"Textbook {i}"))
-            snippet = p.get("text", "")[:1000]
-            ev_lines.append(f"[{i}] ({src_name})\n{snippet}")
-        ev_text = "\n\n".join(ev_lines)
-
-        hw_prompt = build_hw_prompt(qtype, ev_text, user_q)
-
-        if is_reasoning_model:
-            # MedPsy-4B reasoning generation
-            wrapped = llm.wrap_reasoning(hw_prompt)
-            enc = llm.tok([wrapped], return_tensors="pt", padding=True, add_special_tokens=False)
-            first_dev = next(llm.model.parameters()).device
-            enc = {k: v.to(first_dev) for k, v in enc.items()}
-
-            from transformers import GenerationConfig
-            gcfg = GenerationConfig(
-                max_new_tokens=CHAT_MAX_NEW_TOKENS_REASONING,
-                do_sample=False,
-                eos_token_id=sorted(llm.eos),
-                pad_token_id=llm.pad_id,
-                return_dict_in_generate=True,
-            )
-            with torch.inference_mode():
-                out = llm.model.generate(**enc, generation_config=gcfg)
-
-            seqs = out.sequences if hasattr(out, "sequences") else out
-            prompt_len = enc["input_ids"].shape[1]
-            all_gen_ids = seqs[0, prompt_len:].tolist()
-            cut = next((i for i, t in enumerate(all_gen_ids) if t in llm.eos), len(all_gen_ids))
-            gen_ids = all_gen_ids[:cut]
-            raw_model_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
-
-            # Truncation: exhausted the generation budget
-            truncated = (cut == len(all_gen_ids) and cut >= CHAT_MAX_NEW_TOKENS_REASONING)
-        else:
-            # Qwen3-1.7B fast generation
-            msgs = [{"role": "user", "content": hw_prompt}]
-            prompt_text = llm.tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, enable_thinking=False)
-            enc = llm.tok([prompt_text], return_tensors="pt")
-            first_dev = next(llm.model.parameters()).device
-            enc = {k: v.to(first_dev) for k, v in enc.items()}
-
-            with torch.inference_mode():
-                out_tokens = llm.model.generate(
-                    **enc,
-                    max_new_tokens=350,
-                    do_sample=False,
-                    pad_token_id=llm.pad_id,
-                    eos_token_id=sorted(llm.eos),
-                )
-            gen_ids = out_tokens[0, enc["input_ids"].shape[1]:].tolist()
-            raw_model_output = llm.tok.decode(gen_ids, skip_special_tokens=True).strip()
-            truncated = False
+        raw_model_output, truncated, _ = generate_plain_answer(
+            llm, user_q, top_passages, qtype, use_reasoning=is_reasoning_model
+        )
 
     gen_sec = time.perf_counter() - t_gen_start
     total_sec = time.perf_counter() - t_total_start
