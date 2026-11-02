@@ -453,6 +453,28 @@ def retrieve_evidence(q_dict, is_mcq):
 
 
 # -----------------------------------------------------------------------------
+# MCQ Generation Helper
+# -----------------------------------------------------------------------------
+def generate_mcq_answer(llm, q_dict, top_passages, letters, use_reasoning):
+    """Build the MCQ prompt, generate, and return (raw_output, truncated, parsed_answer, generation_seconds)."""
+    t0 = time.perf_counter()
+    options = q_dict["options"]
+    if use_reasoning:
+        r_prompt = reasoning_rag_prompt(q_dict, top_passages, max_chars=1200)
+        res = llm.generate_reasoning([r_prompt], [letters], max_new_tokens=CHAT_MAX_NEW_TOKENS_REASONING)[0]
+        truncated = bool(res.get("truncated", False))
+        raw_output = res.get("raw_output", "")
+        parsed = res.get("_pred") or parse_answer(raw_output, options)
+    else:
+        r_prompt = rag_prompt(q_dict, top_passages, max_chars=1200)
+        res = llm.generate_safe([r_prompt], [letters], max_new_tokens=40)[0]
+        truncated = False
+        raw_output = res.get("raw_output", "")
+        parsed = parse_answer(raw_output, options)
+    return raw_output, truncated, parsed, time.perf_counter() - t0
+
+
+# -----------------------------------------------------------------------------
 # Core Chatbot Pipeline (Streaming Generator)
 # -----------------------------------------------------------------------------
 def normalize_history(history: Any) -> List[Dict[str, str]]:
@@ -555,17 +577,9 @@ def chat_pipeline(
     if is_mcq:
         # Multiple-Choice Exam Question Mode
         letters = sorted(options.keys())
-        if is_reasoning_model:
-            r_prompt = reasoning_rag_prompt(q_dict, top_passages, max_chars=1200)
-            res = llm.generate_reasoning([r_prompt], [letters], max_new_tokens=CHAT_MAX_NEW_TOKENS_REASONING)[0]
-            truncated = bool(res.get("truncated", False))
-            raw_model_output = res.get("raw_output", "")
-            parsed_answer = res.get("_pred") or parse_answer(raw_model_output, options)
-        else:
-            r_prompt = rag_prompt(q_dict, top_passages, max_chars=1200)
-            res = llm.generate_safe([r_prompt], [letters], max_new_tokens=40)[0]
-            raw_model_output = res.get("raw_output", "")
-            parsed_answer = parse_answer(raw_model_output, options)
+        raw_model_output, truncated, parsed_answer, _ = generate_mcq_answer(
+            llm, q_dict, top_passages, letters, use_reasoning=is_reasoning_model
+        )
     else:
         # Community Health Worker Plain Question Mode
         ev_lines = []
