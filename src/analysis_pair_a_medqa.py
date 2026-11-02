@@ -30,19 +30,20 @@ def paired(a, b):
     x = sum(1 for u, v in zip(a, b) if u and not v); y = sum(1 for u, v in zip(a, b) if v and not u)
     lo, hi = boot(lambda s: sum(a[j] - b[j] for j in s) / n, n)
     return sum(a)/n - sum(b)/n, lo, hi, x, y, mcn(x, y)
-def run_analysis(repo_root=".", out_path="outputs/analysis/pair_a_medqa.md", expected_n=500):
+def run_analysis(repo_root=".", out_path="outputs/analysis/pair_a_medqa.md", expected_n=500, dataset="medqa", conditions=("C1","C2")):
     repo_root = Path(repo_root)
     def load(m, c):
         p = repo_root / f"outputs/v3/{m}/{c}/{m}.jsonl"
         if not p.exists():
             return None
-        rows = {r["id"]: r for r in (json.loads(l) for l in open(p) if l.strip())}
-        assert all(r.get("split") == "test" and r.get("dataset") == "medqa" for r in rows.values()), str(p)
+        rows = {r["id"]: r for r in (json.loads(l) for l in open(p) if l.strip()) if r["dataset"] == dataset}
+        assert all(r.get("split") == "test" for r in rows.values()), str(p)
         return rows
 
-    D = {c: (load(M, c), load(Q, c)) for c in ("C1", "C2")}
+    D = {c: (load(M, c), load(Q, c)) for c in conditions}
     D = {c: v for c, v in D.items() if v[0] is not None and v[1] is not None}
-    L = ["# Pair A, MedQA test, 1,024-token cap (generic = qwen3-1.7b-thinking, domain = medpsy-1.7b)",
+    ds_label = "PubMedQA" if dataset == "pubmedqa" else "MedQA"
+    L = [f"# Pair A, {ds_label} test, 1,024-token cap (generic = qwen3-1.7b-thinking, domain = medpsy-1.7b)",
          "Strict = parsed and not truncated and correct (PRIMARY). Fallback = stored correct, incl. forced letters after truncation (SECONDARY). Truncation is analysed as its own outcome.", ""]
     fam = []
     for c, (m, q) in D.items():
@@ -87,6 +88,8 @@ def run_analysis(repo_root=".", out_path="outputs/analysis/pair_a_medqa.md", exp
 def main():
     report = run_analysis()
     print(report)
+    report2 = run_analysis(out_path="outputs/analysis/pair_a_pubmedqa.md", dataset="pubmedqa", conditions=("C1","C2","C3"))
+    print(report2)
 
 
 if __name__ == "__main__":
