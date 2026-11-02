@@ -442,6 +442,17 @@ def retrieve_top_passages(query: str, top_k: int = 5) -> Tuple[List[Dict[str, An
 
 
 # -----------------------------------------------------------------------------
+# Evidence Retrieval Helper
+# -----------------------------------------------------------------------------
+def retrieve_evidence(q_dict, is_mcq):
+    """Build the query, run retrieval, and return (top_passages, top_rerank_score, retrieval_seconds)."""
+    search_query = build_query(q_dict, include_options=is_mcq)
+    top_passages, retrieval_sec = retrieve_top_passages(search_query, top_k=5)
+    top_rerank_score = top_passages[0]["rerank_score"] if top_passages else -999.0
+    return top_passages, top_rerank_score, retrieval_sec
+
+
+# -----------------------------------------------------------------------------
 # Core Chatbot Pipeline (Streaming Generator)
 # -----------------------------------------------------------------------------
 def normalize_history(history: Any) -> List[Dict[str, str]]:
@@ -529,9 +540,7 @@ def chat_pipeline(
     rerank_p20 = retr.get("rerank_p20", 1.85)
 
     q_dict = {"question": user_q, "options": options}
-    search_query = build_query(q_dict, include_options=is_mcq)
-    top_passages, retrieval_sec = retrieve_top_passages(search_query, top_k=5)
-    top_rerank_score = top_passages[0]["rerank_score"] if top_passages else -999.0
+    top_passages, top_rerank_score, retrieval_sec = retrieve_evidence(q_dict, is_mcq)
 
     # 3. Model Inference
     t_gen_start = time.perf_counter()
