@@ -56,6 +56,14 @@ CONDITION_DATASETS = {
 
 # ── Statistical primitives ───────────────────────────────────────────────────
 
+NOT_RUN_NOTES = {
+    ("qwen3-4b-thinking-2507", "pubmedqa"): (
+        "Not run (GPU budget). Validation pilot N=10 per condition, 2026-11-03: "
+        "28/30 truncated at the 1,024-token cap, consistent with the MedQA arm; "
+        "full runs estimated ~30 h."
+    ),
+}
+
 def mcnemar_exact(b, c):
     """Exact two-sided McNemar binomial test on discordant pairs (b, c).
     
@@ -603,9 +611,10 @@ def run_analysis(config_path="configs/base.yaml", root_dir="."):
                 ])
                 continue
             if not ctrl_items:
+                _note = NOT_RUN_NOTES.get((thinking_control, d), f"PENDING ({thinking_control} {d} missing)")
                 ctrl_rows.append([
                     "Pair B Control", f"{thinking_control} vs {med_m_b}", c, d, "-",
-                    "-", "-", "-", "-", "-", "-", "-", f"PENDING ({thinking_control} {d} missing)"
+                    "-", "-", "-", "-", "-", "-", "-", _note
                 ])
                 continue
             if not med_items:
