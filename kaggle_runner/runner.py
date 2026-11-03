@@ -83,12 +83,12 @@ QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=
 # One model per push. Set V3_RUN=True, choose model and conditions, then push.
 # Pilot (V3_PILOT=True) runs the stratified N=50 val subset first; full run after.
 # Output path: outputs/v3/<model>/<condition>/<model>.jsonl
-V3_RUN = True
+V3_RUN = False
 V3_MODEL = "medpsy-4b"
 V3_CONDITIONS = "C5"
 V3_PILOT = False
 V3_PILOT_N = 10
-V3_CONFIRM_TEST = True
+V3_CONFIRM_TEST = False
 V3_DATASETS = "medqa"
 V3_PARALLEL_MODELS = ""
 
