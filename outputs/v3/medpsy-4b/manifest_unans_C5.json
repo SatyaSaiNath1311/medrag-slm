@@ -1,0 +1,20 @@
+{
+  "v3_model": "medpsy-4b",
+  "hf_repo_id": "qvac/MedPsy-4B",
+  "model_type": "causal_lm",
+  "dtype": "float16",
+  "chat_template": "tokenizer_default",
+  "reasoning": true,
+  "thinking_cap": 1024,
+  "seed": 42,
+  "split": "test",
+  "pilot": false,
+  "pilot_n": null,
+  "conditions": [
+    "C5"
+  ],
+  "datasets": [
+    "medqa"
+  ],
+  "timestamp": "2026-11-03T08:30:26Z"
+}
