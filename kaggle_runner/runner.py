@@ -86,9 +86,9 @@ QWEN3_4B_THINKING_MEDQA = False   # Run qwen3-4b-thinking-2507 on MedQA test (N=
 V3_RUN = True
 V3_MODEL = "medpsy-4b"
 V3_CONDITIONS = "C5"
-V3_PILOT = True
+V3_PILOT = False
 V3_PILOT_N = 10
-V3_CONFIRM_TEST = False
+V3_CONFIRM_TEST = True
 V3_DATASETS = "medqa"
 V3_PARALLEL_MODELS = ""
 
