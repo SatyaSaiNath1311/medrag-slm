@@ -11,7 +11,20 @@ import sys
 import time
 import traceback
 
-sys.path.insert(0, "/kaggle/working/medrag-slm")
+# On Kaggle only live_test.py is uploaded, so clone the repo for the rest of the package.
+REPO = "/tmp/medrag-slm"
+if os.path.exists("/kaggle/working"):
+    import subprocess
+    subprocess.run(["rm", "-rf", REPO], check=False)
+    subprocess.run(
+        ["git", "clone", "--depth", "1",
+         "https://github.com/SatyaSaiNath1311/medrag-slm.git", REPO],
+        check=True,
+    )
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r",
+                    os.path.join(REPO, "requirements.txt")], check=False)
+    os.chdir(REPO)
+    sys.path.insert(0, REPO)
 sys.path.insert(0, ".")
 
 import torch
