@@ -229,10 +229,10 @@ def build_consolidated_data(repo_root: Path = REPO_ROOT, is_synthetic: bool = Fa
         if not p.exists():
             raise FileNotFoundError(f"Missing Pair A output: {p}")
 
-    m_c1_rows = {r["id"]: r for r in read_jsonl(p_a_m_c1)}
-    q_c1_rows = {r["id"]: r for r in read_jsonl(p_a_q_c1)}
-    m_c2_rows = {r["id"]: r for r in read_jsonl(p_a_m_c2)}
-    q_c2_rows = {r["id"]: r for r in read_jsonl(p_a_q_c2)}
+    m_c1_rows = {r["id"]: r for r in read_jsonl(p_a_m_c1) if r.get("dataset") == "medqa"}
+    q_c1_rows = {r["id"]: r for r in read_jsonl(p_a_q_c1) if r.get("dataset") == "medqa"}
+    m_c2_rows = {r["id"]: r for r in read_jsonl(p_a_m_c2) if r.get("dataset") == "medqa"}
+    q_c2_rows = {r["id"]: r for r in read_jsonl(p_a_q_c2) if r.get("dataset") == "medqa"}
 
     # Intersect question IDs for MedQA (N=500 on frozen test)
     a_medqa_ids = sorted(set(m_c1_rows.keys()) & set(q_c1_rows.keys()) & set(m_c2_rows.keys()) & set(q_c2_rows.keys()))

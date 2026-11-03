@@ -238,12 +238,12 @@ class TestFinalResultsMainEndToEnd(unittest.TestCase):
 
         # 1. Pair A: C1, C2 (MedQA, IDs q1, q2)
         q_m_c1 = [
-            {"id": "q1", "parsed": True, "truncated": False, "correct": True},
-            {"id": "q2", "parsed": True, "truncated": False, "correct": False},
+            {"id": "q1", "dataset": "medqa", "parsed": True, "truncated": False, "correct": True},
+            {"id": "q2", "dataset": "medqa", "parsed": True, "truncated": False, "correct": False},
         ]
         q_g_c1 = [
-            {"id": "q1", "parsed": True, "truncated": False, "correct": False},
-            {"id": "q2", "parsed": True, "truncated": False, "correct": False},
+            {"id": "q1", "dataset": "medqa", "parsed": True, "truncated": False, "correct": False},
+            {"id": "q2", "dataset": "medqa", "parsed": True, "truncated": False, "correct": False},
         ]
         self._write_jsonl(self.repo / "outputs" / "v3" / "medpsy-1.7b" / "C1" / "medpsy-1.7b.jsonl", q_m_c1)
         self._write_jsonl(self.repo / "outputs" / "v3" / "qwen3-1.7b-thinking" / "C1" / "qwen3-1.7b-thinking.jsonl", q_g_c1)
