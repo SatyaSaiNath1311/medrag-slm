@@ -15,11 +15,15 @@ Self-test:     python3 kaggle_chat/chat_ui.py --selftest   (no Gradio needed)
 from __future__ import annotations
 
 import html
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass, field
 from typing import List
+
+# "mock" = MockBackend (default, no GPU), "live" = MedRAGBackend (real model)
+BACKEND_MODE = os.environ.get("MEDRAG_BACKEND", "mock")
 
 APP_TITLE = "Health Worker Assistant"
 APP_SUBTITLE = "Answers with references for community health workers. It will say so when it is unsure."
@@ -313,6 +317,16 @@ class MockBackend:
         yield Reply("answered", text, self._refs(), label)
 
 
+def build_backend():
+    """Return the right backend based on BACKEND_MODE."""
+    if BACKEND_MODE == "mock":
+        return MockBackend()
+    if BACKEND_MODE == "live":
+        from kaggle_chat.live_backend import MedRAGBackend
+        return MedRAGBackend()
+    raise ValueError(f"Unknown MEDRAG_BACKEND value: {BACKEND_MODE!r}")
+
+
 # ---------------------------------------------------------------- Gradio app
 QUICK_START = [
     ("Child with fever", "A 4-year-old child has had fever for 3 days. What should I check?"),
@@ -396,6 +410,6 @@ if __name__ == "__main__":
     if "--selftest" in sys.argv:
         _selftest()
     else:
-        ui = build_ui(MockBackend())
+        ui = build_ui(build_backend())
         ui.queue()
         ui.launch(server_name="127.0.0.1", inbrowser=True)
