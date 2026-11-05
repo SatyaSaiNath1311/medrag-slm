@@ -29,7 +29,6 @@ if os.path.exists("/kaggle/working"):
     )
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r",
                     os.path.join(REPO, "requirements.txt")], check=False)
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "gradio"], check=False)
     os.chdir(REPO)
     sys.path.insert(0, REPO)
 sys.path.insert(0, ".")
@@ -38,8 +37,6 @@ sys.path.insert(0, ".")
 REPO_ROOT = Path(REPO) if os.path.exists("/kaggle/working") else Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from kaggle_chat.chat_ui import Reply
 
 SEP = "=" * 70
 TRUNCATION_REASON_MARKER = "Generation truncated"
@@ -148,13 +145,13 @@ def main():
             yielded = []
             for item in backend.stream(question, []):
                 yielded.append(item)
-                if not isinstance(item, Reply):
+                if isinstance(item, str):
                     print(f"           progress: {item}")
             elapsed = time.perf_counter() - t_start
             row["elapsed"] = elapsed
 
-            if not yielded or not isinstance(yielded[-1], Reply):
-                print(f"  [{case_name}] ERROR: final stream item is not a Reply")
+            if not yielded or isinstance(yielded[-1], str) or not hasattr(yielded[-1], "status"):
+                print(f"  [{case_name}] ERROR: final stream item is not a reply object")
                 row["error"] = True
                 row["status"] = "error"
             else:
