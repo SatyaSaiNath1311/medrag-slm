@@ -25,7 +25,7 @@ if os.path.exists("/kaggle/working"):
     import subprocess
     subprocess.run(["rm", "-rf", REPO], check=False)
     subprocess.run(
-        ["git", "clone", "--depth", "1",
+        ["git", "clone", "--depth", "1", "--branch", "probe/citation-format",
          "https://github.com/SatyaSaiNath1311/medrag-slm.git", REPO],
         check=True,
     )
@@ -44,45 +44,20 @@ SEP = "=" * 70
 
 # ---------------------------------------------------------------- questions
 QUESTIONS = [
-    # Symptoms (~6)
+    # Symptoms
     "A 35-year-old man has had a persistent dry cough and mild fever for four days. What could it be?",
-    "A 50-year-old woman complains of mild knee pain and stiffness every morning for two weeks. What could be the cause?",
-    "An adult patient presents with burning sensation during urination and low back pain for two days. What might this indicate?",
-    "A 28-year-old male has mild abdominal cramps and loose watery stool since yesterday. What are likely causes?",
-    "A farmer has a localized itchy red rash with small bumps on the forearms after working in the fields. What should be checked?",
-    "A 40-year-old woman complains of dizziness and feeling faint when standing up quickly. What are possible causes?",
 
-    # Treatment / care (~6)
+    # Treatment / care
     "How should a health worker manage mild dehydration from diarrhoea in an adult at home?",
-    "What first aid steps should be taken for a minor superficial burn on the arm from hot water?",
-    "How to manage a clean minor kitchen cut on the finger to prevent infection?",
-    "How to manage mild heat exhaustion in an adult who worked outdoors in the sun?",
-    "How to treat and manage dry irritated skin in an elderly person?",
-    "What home care steps can help reduce morning nausea in an adult patient with mild viral illness?",
 
-    # Medicine safety (~6)
+    # Medicine safety
     "Can a 45-year-old adult take paracetamol and ibuprofen together for joint pain?",
-    "What are the common side effects of amoxicillin that a patient should know about?",
-    "Is it safe for an adult patient with hypertension to take metformin for newly diagnosed type 2 diabetes?",
-    "A patient missed their morning blood pressure tablet. Can they take a double dose in the evening?",
-    "Can an elderly patient take oral rehydration salts ORS if they have mild heart failure?",
-    "What precautions should be taken when giving iron and folic acid tablets to a patient with gastritis?",
 
-    # Pregnancy / child health (~6)
+    # Pregnancy / child health
     "A pregnant woman in her second trimester has mild leg swelling after standing. What should be checked?",
-    "What foods should a pregnant woman eat to improve nutrition and prevent anaemia?",
-    "How often should a healthy 6-month-old infant be breastfed during the day?",
-    "A mother asks when complementary solid foods should be started for her 6-month-old child.",
-    "A 4-year-old child has had a mild runny nose and sneezing for two days without fever. What should the mother watch for?",
-    "What advice should be given to a new mother about umbilical cord care for her healthy newborn baby?",
 
-    # General information (~6)
+    # General information
     "What is hypertension and how does high blood pressure affect long-term health?",
-    "What is scabies and how does it spread among household members in a village?",
-    "What is cataract and how does it gradually impair vision in older adults?",
-    "What is viral conjunctivitis and what hygiene habits prevent transmission?",
-    "What is iron deficiency anaemia and what are the main contributing factors?",
-    "What is oral rehydration therapy and why is clean water essential for mixing the solution?",
 ]
 
 
