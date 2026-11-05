@@ -17,8 +17,25 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+# On Kaggle only live_test.py is uploaded, so clone the repo for the rest of the package.
+REPO = "/tmp/medrag-slm"
+if os.path.exists("/kaggle/working"):
+    import subprocess
+    subprocess.run(["rm", "-rf", REPO], check=False)
+    subprocess.run(
+        ["git", "clone", "--depth", "1",
+         "https://github.com/SatyaSaiNath1311/medrag-slm.git", REPO],
+        check=True,
+    )
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r",
+                    os.path.join(REPO, "requirements.txt")], check=False)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "gradio"], check=False)
+    os.chdir(REPO)
+    sys.path.insert(0, REPO)
+sys.path.insert(0, ".")
+
 # Make kaggle_chat and src importable when run as a script.
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(REPO) if os.path.exists("/kaggle/working") else Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

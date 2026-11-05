@@ -1,7 +1,7 @@
 {
   "id": "satyasainath1311/medrag-slm-chat",
   "title": "medrag-slm-chat",
-  "code_file": "live_test.py",
+  "code_file": "live_backend_test.py",
   "language": "python",
   "kernel_type": "script",
   "is_private": true,
