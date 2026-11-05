@@ -69,26 +69,33 @@ def _wait_for_port(proc: subprocess.Popen, log_path: Path) -> None:
     sys.exit(1)
 
 
-def _parse_tunnel_url(proc: subprocess.Popen) -> str:
-    """Read cloudflared stderr until the trycloudflare URL appears."""
+def _parse_tunnel_url(log_path: Path, proc: subprocess.Popen) -> str:
+    """Tail the cloudflared log file until the trycloudflare URL appears."""
     pattern = re.compile(r"(https://[a-zA-Z0-9\-]+\.trycloudflare\.com)")
-    deadline = time.monotonic() + 60
-    assert proc.stderr is not None
-    while time.monotonic() < deadline:
-        line = proc.stderr.readline()
-        if not line:
-            if proc.poll() is not None:
-                break
-            time.sleep(0.2)
-            continue
-        text = line.decode("utf-8", errors="replace").strip()
-        if text:
-            print(f"  [cloudflared] {text}")
-        m = pattern.search(text)
-        if m:
-            return m.group(1)
+    deadline = time.monotonic() + 120
+    with open(log_path, "r") as fh:
+        while time.monotonic() < deadline:
+            line = fh.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.5)
+                continue
+            text = line.strip()
+            if text:
+                print(f"  [cloudflared] {text}")
+            m = pattern.search(text)
+            if m:
+                return m.group(1)
+    # Timeout or process died — dump the tail of the log for diagnostics.
     print("[launch_ui] ERROR: could not parse tunnel URL from cloudflared output")
-    sys.exit(1)
+    try:
+        lines = log_path.read_text().splitlines()
+        for line in lines[-20:]:
+            print(line)
+    except FileNotFoundError:
+        print("  (cloudflared log not found)")
+    sys.exit(3)
 
 
 def main() -> None:
@@ -127,13 +134,17 @@ def main() -> None:
     _wait_for_port(ui_proc, log_path)
 
     # ---- start cloudflared tunnel ----
+    date_stamp = log_path.stem.replace("chat_ui_", "")      # YYYY-MM-DD
+    cf_log_path = log_dir / f"cloudflared_{date_stamp}.log"
+    cf_log_fh = open(cf_log_path, "ab")
     print(f"[launch_ui] starting cloudflared tunnel …")
+    print(f"[launch_ui] cloudflared log → {cf_log_path}")
     cf_proc = subprocess.Popen(
         ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{PORT}"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stdout=cf_log_fh,
+        stderr=subprocess.STDOUT,
     )
-    url = _parse_tunnel_url(cf_proc)
+    url = _parse_tunnel_url(cf_log_path, cf_proc)
     print(SEP)
     print(f"PUBLIC URL: {url}")
     print(SEP)
@@ -162,6 +173,7 @@ def main() -> None:
                 proc.wait()
                 print(f"  {label}: killed")
     log_fh.close()
+    cf_log_fh.close()
     print("[launch_ui] done")
 
 
