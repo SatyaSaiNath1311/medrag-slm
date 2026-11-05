@@ -100,6 +100,24 @@ class _Tee:
         self._stream.flush()
         self._log.flush()
 
+    def isatty(self):
+        return False
+
+    def fileno(self):
+        return self._stream.fileno()
+
+    def writable(self):
+        return True
+
+    def readable(self):
+        return False
+
+    def seekable(self):
+        return False
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
 
 def main():
     # ---- log setup ----
