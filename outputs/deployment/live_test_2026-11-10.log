@@ -1,0 +1,154 @@
+Cloning into '/tmp/medrag-slm'...
+remote: Enumerating objects: 493, done.
+remote: Counting objects: 100% (493/493), done.
+remote: Compressing objects: 100% (393/393), done.
+remote: Total 493 (delta 106), reused 343 (delta 70), pack-reused 0 (from 0)
+Receiving objects: 100% (493/493), 17.80 MiB | 19.27 MiB/s, done.
+Resolving deltas: 100% (106/106), done.
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+gradio-client 2.7.2 requires huggingface-hub<3.0,>=1.16.0, but you have huggingface-hub 1.11.0 which is incompatible.
+gradio 6.30.0 requires huggingface-hub<3.0,>=1.16.0, but you have huggingface-hub 1.11.0 which is incompatible.
+gradio 6.30.0 requires pillow<13.0,>=8.0, but you have pillow 13.0.0 which is incompatible.
+diffusers 0.42.0 requires huggingface-hub<3.0,>=1.32.0, but you have huggingface-hub 1.11.0 which is incompatible.
+======================================================================
+MedRAG-SLM LIVE DEPLOYMENT TEST
+======================================================================
+Model: medpsy-4b
+Token cap: 2048
+CUDA devices: 2
+LLM device: cuda:0 | Encoder device: cuda:1
+
+[Model] Loading SLM 'medpsy-4b' on cuda:0...
+  source: hf qvac/MedPsy-4B
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights: 100%|█| 399/399 [00:05<00:00, 77.92it/s, Materializing param=mo
+The tied weights mapping and config for this model specifies to tie model.embed_tokens.weight to lm_head.weight, but both are present in the checkpoints, so we will NOT tie them. You should update the config with `tie_word_embeddings=False` to silence this warning
+[Model] 'medpsy-4b' loaded in 14.2s!
+
+[Memory] After loading LLM 'medpsy-4b' on cuda:0:
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 0.0 MB | torch.cuda.mem_get_info = free 14804.8 MB / total 14911.7 MB (used: 106.9 MB)
+
+[Init] Initializing retrieval components and clinical index...
+  Using phase3 directory: /kaggle/input/notebooks/satyasainath1311/medrag-build/work/phase3
+  Loading textbook chunks from chunks.jsonl...
+  Loaded 124,077 textbook chunks.
+[Memory] After loading textbook chunks (CPU):
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 0.0 MB | torch.cuda.mem_get_info = free 14804.8 MB / total 14911.7 MB (used: 106.9 MB)
+  Loading FAISS index on CPU from dense.faiss...
+  Loaded FAISS CPU index with 124,077 vectors.
+[Memory] After loading FAISS index (CPU):
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 0.0 MB | torch.cuda.mem_get_info = free 14804.8 MB / total 14911.7 MB (used: 106.9 MB)
+  Loading BM25 index from bm25...
+[Memory] After loading BM25 index (CPU):
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 0.0 MB | torch.cuda.mem_get_info = free 14804.8 MB / total 14911.7 MB (used: 106.9 MB)
+  Loading MedCPT query encoder on cuda:1...
+Loading weights: 100%|█| 199/199 [00:00<00:00, 1761.19it/s, Materializing param=
+[Memory] After loading query encoder on cuda:1:
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 208.8 MB | torch.cuda.mem_get_info = free 14306.8 MB / total 14911.7 MB (used: 604.9 MB)
+  Loading MedCPT cross-encoder reranker on cuda:1...
+Loading weights: 100%|█| 201/201 [00:00<00:00, 3801.69it/s, Materializing param=
+[Memory] After loading cross-encoder on cuda:1:
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 417.7 MB | torch.cuda.mem_get_info = free 14104.8 MB / total 14911.7 MB (used: 806.9 MB)
+  Reading validation evidence from /kaggle/input/notebooks/satyasainath1311/medrag-build/work/phase7/evidence.jsonl...
+  Computed validation rerank threshold (P20): -0.38 (from 450 questions)
+[Init] Retrieval components successfully cached in 5.0s!
+
+[Memory] After completing retrieval system init:
+  cuda:0: torch.cuda.memory_allocated = 8414.1 MB | torch.cuda.mem_get_info = free 6372.8 MB / total 14911.7 MB (used: 8538.9 MB)
+  cuda:1: torch.cuda.memory_allocated = 417.7 MB | torch.cuda.mem_get_info = free 14104.8 MB / total 14911.7 MB (used: 806.9 MB)
+rerank_p20 in use: -0.38  (1.85 means the hard-coded fallback was used)
+Loaded 3 MCQ questions
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+The following generation flags are not valid and may be ignored: ['temperature', 'top_p', 'top_k']. Set `TRANSFORMERS_VERBOSITY=info` for more details.
+  [MCQ1 warmup] retrieval 0.6s | generation 71.2s | total 71.8s
+           truncated=False rerank_top=7.07 parsed=A
+           abstained=False reason=None
+           answer: The patient presents with fever, rash, and prominent arthralgia following travel to an endemic area, which is classic for chikungunya.  Answer: A Evidence: [2]
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [MCQ1 steady] retrieval 0.2s | generation 70.7s | total 71.0s
+           truncated=False rerank_top=7.07 parsed=A
+           abstained=False reason=None
+           answer: The patient presents with fever, rash, and prominent arthralgia following travel to an endemic area, which is classic for chikungunya.  Answer: A Evidence: [2]
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [MCQ2 warmup] retrieval 0.2s | generation 39.5s | total 39.8s
+           truncated=False rerank_top=6.77 parsed=A
+           abstained=False reason=None
+           answer: The patient presents with severe hypertension, hypokalemia, and metabolic alkalosis, which are classic features of primary aldosteronism.  Answer: A Evidence: [2]
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [MCQ2 steady] retrieval 0.2s | generation 39.6s | total 39.8s
+           truncated=False rerank_top=6.77 parsed=A
+           abstained=False reason=None
+           answer: The patient presents with severe hypertension, hypokalemia, and metabolic alkalosis, which are classic features of primary aldosteronism.  Answer: A Evidence: [2]
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [MCQ3 warmup] retrieval 0.2s | generation 51.1s | total 51.3s
+           truncated=False rerank_top=8.84 parsed=A
+           abstained=False reason=None
+           answer: The patient's history of in utero diethylstilbestrol (DES) exposure, along with postcoital bleeding and a polypoid vaginal mass, strongly suggests clear cell adenocarcinoma, which is classically assoc
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [MCQ3 steady] retrieval 0.2s | generation 51.1s | total 51.3s
+           truncated=False rerank_top=8.84 parsed=A
+           abstained=False reason=None
+           answer: The patient's history of in utero diethylstilbestrol (DES) exposure, along with postcoital bleeding and a polypoid vaginal mass, strongly suggests clear cell adenocarcinoma, which is classically assoc
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [PLAIN1 warmup] retrieval 0.1s | generation 139.5s | total 139.7s
+           truncated=False rerank_top=8.23 parsed=None
+           abstained=False reason=None
+           answer: **Possible causes** - Influenza  **What to check** - Temperature - Breathing rate - Signs of dehydration  **First steps** - Rest and fluids - Monitor symptoms  **Refer urgently if** - Difficulty breat
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [PLAIN1 steady] retrieval 0.1s | generation 139.5s | total 139.7s
+           truncated=False rerank_top=8.23 parsed=None
+           abstained=False reason=None
+           answer: **Possible causes** - Influenza  **What to check** - Temperature - Breathing rate - Signs of dehydration  **First steps** - Rest and fluids - Monitor symptoms  **Refer urgently if** - Difficulty breat
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [PLAIN2 warmup] retrieval 0.1s | generation 16.5s | total 16.6s
+           truncated=False rerank_top=7.98 parsed=None
+           abstained=True reason=Model identified insufficient evidence ('INSUFFICIENT INFORMATION')
+           answer: INSUFFICIENT INFORMATION
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [PLAIN2 steady] retrieval 0.1s | generation 16.5s | total 16.6s
+           truncated=False rerank_top=7.98 parsed=None
+           abstained=True reason=Model identified insufficient evidence ('INSUFFICIENT INFORMATION')
+           answer: INSUFFICIENT INFORMATION
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [PLAIN3 warmup] retrieval 0.1s | generation 74.8s | total 75.0s
+           truncated=False rerank_top=-0.91 parsed=None
+           abstained=True reason=Retrieved passage relevance score (-0.91) is below the 20th percentile validation threshold (-0.38)
+           answer: **In short** Community health workers can manage common chronic illnesses like diabetes and high blood pressure with basic training, focusing on prevention and early action.   **Key points**   - Chron
+  encoding query: 1/1 (0s)
+  reranking candidates: 20/20 (0s)
+  [PLAIN3 steady] retrieval 0.1s | generation 74.8s | total 75.0s
+           truncated=False rerank_top=-0.91 parsed=None
+           abstained=True reason=Retrieved passage relevance score (-0.91) is below the 20th percentile validation threshold (-0.38)
+           answer: **In short** Community health workers can manage common chronic illnesses like diabetes and high blood pressure with basic training, focusing on prevention and early action.   **Key points**   - Chron
+
+======================================================================
+PEAK VRAM
+  cuda:0  10.92 GiB
+  cuda:1  0.66 GiB
+
+STEADY-STATE SECONDS PER QUESTION
+  MCQ1: 71.0s
+  MCQ2: 39.8s
+  MCQ3: 51.3s
+  PLAIN1: 139.7s
+  PLAIN2: 16.6s
+  PLAIN3: 75.0s
+  max: 139.7s
+======================================================================
